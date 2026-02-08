@@ -4,23 +4,32 @@ This directory contains custom Lua scripts for darktable automation.
 
 ## Project Structure
 
-- `auto_crop.lua` - Main darktable plugin for exporting and processing selected images
-- `process_images.py` - Python script for processing exported images (planned integration)
+- `auto_crop.lua` - Performs automatic cropping out of film holder edges at DSLR scanned film frames.
 
 ## Current Functionality
 
 ### AutoCrop Plugin (`auto_crop.lua`)
 
-Exports selected images from darktable to a temporary folder as JPEG files at 10% of original size, then optionally processes them with a Python script.
+Exports selected images from darktable to a temporary folder as JPEG files at smaller size, then finds film holeder edges in them with a Python script.
+The script outputs location of these edges as crop percentages. The calling lua script reads these parameters back and applies them to a virtual copy of each
+image, as crop parameters. It performs the last step as creating or editing an XMP file for a virtual copy and then instructs darktable to refresh its database
+from the modified xmp file.
 
-**Key Features:**
-- Exports selected images to temp directory: `%TEMP%\darktable_autocrop_[timestamp]`
-- Reduces image size to 10% of original dimensions
-- Exports as JPEG format
-- GUI action and keyboard shortcut support
-- Progress reporting in darktable console
+## Python usage rules
+
+- As darktable Lua API has very limited functionality, for tasks requiring actual image analysis we use Python and libs OpenCV.
+- Python is used from a conda virtual env.
+- New Python dependencies should be added via `environment.yml` file.
 
 ## Darktable Lua API Patterns
+
+### Darktable Lua API
+Is described here: https://docs.darktable.org/lua/stable/
+
+### Logging
+- Darktable has two 'channels' for printing logs messages: UI (via `dt.print()`) and log file (`dt.print_log()`)
+- For logging to UI, use `dt.print()`. UI should have just important user-level info
+- All debugging info should go to log file, not UI. And for this, do not use `dt.print_log()` directly. Instead, there is higher-level api for logging where we can control base logging level and filter. Example of invocation: `dlog.msg(dlog.info, "export_detect_and_apply", "About to call apply_crop_to_image")`. Here first argument means level, second - context, third - actual msg
 
 ### Image Export Workflow
 
@@ -48,7 +57,6 @@ local success = format:write_image(image, filename, false)
 - `write_image(image, filename, allow_upscale)` - third parameter controls upscaling
 - Image dimensions available via `image.width` and `image.height` properties
 - Format object properties (`max_width`, `max_height`) control output size
-- Use `dt.print()` for console output messages
 
 ## Common Gotchas
 
@@ -128,22 +136,18 @@ script_data.destroy = destroy
 ```
 
 ## TODOs
-
-- [ ] Integrate Python script execution after export
-- [ ] Add error handling for Python script failures
-- [ ] Make export size configurable (currently hardcoded to 10%)
-- [ ] Add quality settings for JPEG export
-- [ ] Consider adding other export formats (PNG, TIFF)
-- [ ] Test with large batch exports
+- [ ] Fix bug with unreliable crop parameters application. Sometimes parent image breaks (i.e. its history is cleared, it seems that we modify wrong image)
+- [ ] Create another action for working directly on source image rather than on virtual copies
+- [ ] Ensure no Windows-specific things are present. We should use platform independent invocation methods
 
 ## Testing
 
 To test changes:
 1. Save the Lua script
-2. Restart darktable or reload scripts via Lua console
+2. Reload scripts via Lua console (press on/off)
 3. Select images in lighttable
 4. Run via GUI action or keyboard shortcut
-5. Check console output for progress/errors
+5. Check UI/log output for progress/errors. In Windows, log is in %USERPROFILE%\Documents\Darktable\darktable-log.txt 
 6. Verify exported files in temp directory
 
 ## Dependencies
@@ -152,4 +156,5 @@ To test changes:
 - `lib/dtutils` - darktable utility library
 - `lib/dtutils.file` - file operations
 - `lib/dtutils.system` - system command execution
-- Python 3.x (for future processing integration)
+- Python 3.x
+

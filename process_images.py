@@ -10,6 +10,7 @@ Usage: process_images.py <image_path> [image_path2 ...]
 import sys
 import os
 import time
+import json
 from pathlib import Path
 import cv2
 import numpy as np
@@ -479,6 +480,27 @@ def detect_content_bounds(image_path, save_visualization=False):
         'visualization_path': visualization_path
     }, None
 
+def write_crop_results_json(results, output_path):
+    """
+    Write crop detection results to JSON file for Lua consumption.
+
+    Args:
+        results: List of result dictionaries
+        output_path: Path where JSON file should be written
+    """
+    json_data = {
+        "version": "1.0",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "results": results
+    }
+
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, indent=2)
+        print(f"\nJSON results written to: {output_path}")
+    except Exception as e:
+        print(f"Error writing JSON file: {e}")
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: process_images.py <image_path> [image_path2 ...]")
@@ -510,9 +532,13 @@ def main():
         print(f"Processing {len(image_files)} images")
     print("-" * 60)
 
-    # Process each image
+    # Collect results for JSON output
+    all_results = []
     success_count = 0
     error_count = 0
+
+    # Determine output directory from first image path
+    output_dir = image_files[0].parent if image_files else Path.cwd()
 
     for idx, img_file in enumerate(image_files, 1):
         if len(image_files) > 1:
@@ -528,6 +554,13 @@ def main():
         if error:
             print(f"Error: {error}")
             error_count += 1
+
+            # Add error result to JSON
+            all_results.append({
+                "filename": img_file.name,
+                "status": "error",
+                "error": error
+            })
         else:
             print(f"Image dimensions: {result['image_size'][0]}x{result['image_size'][1]} px")
             print(f"Content region: x={result['detected_region'][0]}, y={result['detected_region'][1]}, "
@@ -543,12 +576,35 @@ def main():
 
             success_count += 1
 
+            # Add success result to JSON (filename without extension for Lua matching)
+            filename_base = img_file.stem  # filename without extension
+            all_results.append({
+                "filename": filename_base,
+                "status": "success",
+                "crop": {
+                    "left": round(result['crop_left'], 2),
+                    "top": round(result['crop_top'], 2),
+                    "right": round(result['crop_right'], 2),
+                    "bottom": round(result['crop_bottom'], 2)
+                },
+                "confidence": {
+                    "left": round(result['confidence_left'], 2),
+                    "top": round(result['confidence_top'], 2),
+                    "right": round(result['confidence_right'], 2),
+                    "bottom": round(result['confidence_bottom'], 2)
+                }
+            })
+
     # Summary
     print("\n" + "=" * 60)
     if len(image_files) > 1:
         print(f"Processing complete: {success_count} succeeded, {error_count} failed")
     else:
         print("Processing complete")
+
+    # Write JSON results file
+    json_output_path = output_dir / "crop_results.json"
+    write_crop_results_json(all_results, json_output_path)
 
     # Exit with error code if any files failed
     if error_count > 0:
