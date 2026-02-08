@@ -1,0 +1,11 @@
+name: autocrop
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pillow
+  - numpy
+  - pip:
+    - opencv-python
