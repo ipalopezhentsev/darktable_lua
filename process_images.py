@@ -138,9 +138,11 @@ def _extend_past_dark_border(profile, boundary_idx, dimension):
     if len(sub) < 5:
         return boundary_idx
 
+    dark_min = float(np.min(sub))
     grad = np.gradient(sub)
 
     # Look for a significant rise (gradient > 3) followed by stabilization (< 1)
+    # The stable point must also be significantly brighter than the dark zone minimum
     rising = False
     for i in range(len(grad)):
         if grad[i] > 3.0:
@@ -152,7 +154,7 @@ def _extend_past_dark_border(profile, boundary_idx, dimension):
                 if abs(grad[j]) > 1.5:
                     stable = False
                     break
-            if stable:
+            if stable and sub[i] > dark_min + 20:
                 return dark_zone_start + i
 
     return boundary_idx
@@ -341,9 +343,13 @@ def detect_content_bounds(image_path, save_visualization=False):
                 # Calculate brightness difference between margin and content
                 margin_content_diff = abs(edge_brightness - interior_brightness)
 
-                # If there's no significant brightness difference, no margin exists
+                # If there's no significant brightness difference, check for dark
+                # rebate before giving up (white+dark borders can average to ~content)
                 if margin_content_diff < 8:
-                    return 0, 1.0  # High confidence - no margin detected
+                    dark_result = _extend_past_dark_border(profile, 0, width)
+                    if dark_result > 0:
+                        return dark_result, 0.7
+                    return 0, 1.0  # No margin detected
 
                 # Use a threshold based on the actual brightness difference
                 # Look for where brightness becomes similar to content
@@ -433,7 +439,10 @@ def detect_content_bounds(image_path, save_visualization=False):
                 margin_content_diff = abs(edge_brightness - interior_brightness)
 
                 if margin_content_diff < 8:
-                    return width - 1, 1.0  # High confidence - no margin detected
+                    dark_result = _extend_past_dark_border(profile, 0, width)
+                    if dark_result > 0:
+                        return width - dark_result, 0.7
+                    return width - 1, 1.0  # No margin detected
 
                 threshold = margin_content_diff * 0.6
 
@@ -526,7 +535,10 @@ def detect_content_bounds(image_path, save_visualization=False):
                 margin_content_diff = abs(edge_brightness - interior_brightness)
 
                 if margin_content_diff < 8:
-                    return 0, 1.0  # High confidence - no margin detected
+                    dark_result = _extend_past_dark_border(profile, 0, height)
+                    if dark_result > 0:
+                        return dark_result, 0.7
+                    return 0, 1.0  # No margin detected
 
                 threshold = margin_content_diff * 0.6
 
@@ -613,7 +625,10 @@ def detect_content_bounds(image_path, save_visualization=False):
                 margin_content_diff = abs(edge_brightness - interior_brightness)
 
                 if margin_content_diff < 8:
-                    return height - 1, 1.0  # High confidence - no margin detected
+                    dark_result = _extend_past_dark_border(profile, 0, height)
+                    if dark_result > 0:
+                        return height - dark_result, 0.7
+                    return height - 1, 1.0  # No margin detected
 
                 threshold = margin_content_diff * 0.6
 
