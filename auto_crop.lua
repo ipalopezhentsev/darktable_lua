@@ -245,8 +245,9 @@ local function apply_crop_in_place(image, crop_data)
 end
 
 -- Shared helper: export images and run Python edge detection
+-- save_visualization: if true, Python saves images with crop overlay (debug mode)
 -- Returns: crop_results, filename_to_image, export_dir (or nil on failure)
-local function export_and_detect(images)
+local function export_and_detect(images, save_visualization)
   -- Create temp folder
   local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
   local export_dir = temp_dir .. "/darktable_autocrop_" .. os.time()
@@ -316,8 +317,9 @@ local function export_and_detect(images)
 
   local log_file = export_dir .. "/processing.log"
 
-  local command = string.format('cmd /c conda run -n autocrop python "%s"%s > "%s" 2>&1',
-                                 python_script, file_args, log_file)
+  local vis_flag = save_visualization and "" or " --no-vis"
+  local command = string.format('cmd /c conda run -n autocrop python "%s"%s%s > "%s" 2>&1',
+                                 python_script, vis_flag, file_args, log_file)
 
   local result = dsys.external_command(command)
 
@@ -351,7 +353,7 @@ local function export_and_find_edges_debug()
     return
   end
 
-  export_and_detect(images)
+  export_and_detect(images, true)
   -- Debug mode: just export and detect, results are in the temp folder
 end
 
@@ -367,7 +369,7 @@ local function export_detect_and_apply_inplace()
     return
   end
 
-  local crop_results, filename_to_image, export_dir = export_and_detect(images)
+  local crop_results, filename_to_image, export_dir = export_and_detect(images, false)
   if not crop_results then
     return
   end

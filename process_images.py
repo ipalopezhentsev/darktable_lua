@@ -503,7 +503,9 @@ def main():
         print("\nThis script processes one or more images exported by the darktable AutoCrop plugin.")
         sys.exit(1)
 
-    image_paths = sys.argv[1:]
+    # Check for --no-vis flag
+    save_visualization = "--no-vis" not in sys.argv
+    image_paths = [a for a in sys.argv[1:] if a != "--no-vis"]
     image_extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'}
 
     # Validate all files first
@@ -545,7 +547,7 @@ def main():
         print(f"Size: {img_file.stat().st_size:,} bytes")
 
         # Detect margins and calculate crop percentages
-        result, error = detect_content_bounds(img_file, save_visualization=True)
+        result, error = detect_content_bounds(img_file, save_visualization=save_visualization)
 
         if error:
             print(f"Error: {error}")

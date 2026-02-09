@@ -106,6 +106,7 @@ local safe_name = df.sanitize_filename(base_name)
 ## Known Bugs / TODOs
 
 - [ ] Remove Windows-specific invocations (`cmd /c conda run ...`), use platform-independent methods
+- [x] Visualization images only created in debug action (--no-vis flag)
 - [ ] Remove temp dir after creating in-place copies
 - [x] Replace external `dkjson.lua` with simple line format (no JSON dependency)
 - [ ] Now rate of "slight errors" (where one edge is detected "significantly" wrong compared to human choice) is about 25%, try to improve
