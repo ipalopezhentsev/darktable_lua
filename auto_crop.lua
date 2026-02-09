@@ -417,6 +417,15 @@ local function export_detect_and_apply_inplace()
 
   dt.print(string.format(_("Auto Crop In-Place Complete: %d applied, %d failed"),
     stats.applied, stats.failed))
+
+  -- Clean up temp dir if no errors (keep on failure for inspection)
+  if stats.failed == 0 then
+    dsys.external_command(string.format('cmd /c rmdir /s /q "%s"', export_dir))
+    dlog.msg(dlog.info, "export_detect_and_apply_inplace", "Removed temp dir: " .. export_dir)
+  else
+    dlog.msg(dlog.info, "export_detect_and_apply_inplace",
+      "Keeping temp dir for inspection due to errors: " .. export_dir)
+  end
 end
 
 local function destroy()
