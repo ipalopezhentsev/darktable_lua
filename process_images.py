@@ -336,7 +336,9 @@ def detect_content_bounds(image_path, save_visualization=False):
                     texture_profile.append(float(np.std(blurred[:, x])))
 
                 # Get edge and interior reference brightness
-                edge_brightness = np.mean(profile[:15])
+                # Use outermost 5 columns for edge reference — avoids averaging
+                # in dark rebate zones that can start ~5-10px from edge
+                edge_brightness = np.mean(profile[:5])
                 start_x = int(width * 0.2)
                 interior_brightness = blurred[:, start_x:start_x+30].mean()
 
@@ -431,7 +433,7 @@ def detect_content_bounds(image_path, save_visualization=False):
                     profile.append(col_mean)
                     texture_profile.append(float(np.std(blurred[:, x])))
 
-                edge_brightness = np.mean(profile[:15])
+                edge_brightness = np.mean(profile[:5])
                 start_x = int(width * 0.8)
                 interior_brightness = blurred[:, start_x-30:start_x].mean()
 
@@ -527,7 +529,7 @@ def detect_content_bounds(image_path, save_visualization=False):
                     profile.append(row_mean)
                     texture_profile.append(float(np.std(blurred[y, :])))
 
-                edge_brightness = np.mean(profile[:15])
+                edge_brightness = np.mean(profile[:5])
                 start_y = int(height * 0.2)
                 interior_brightness = blurred[start_y:start_y+30, :].mean()
 
@@ -617,7 +619,7 @@ def detect_content_bounds(image_path, save_visualization=False):
                     profile.append(row_mean)
                     texture_profile.append(float(np.std(blurred[y, :])))
 
-                edge_brightness = np.mean(profile[:15])
+                edge_brightness = np.mean(profile[:5])
                 start_y = int(height * 0.8)
                 interior_brightness = blurred[start_y-30:start_y, :].mean()
 
