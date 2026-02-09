@@ -19,8 +19,8 @@ local dd = require "lib/dtutils.debug"
 local gettext = dt.gettext.gettext
 
 -- Load dkjson from the same directory as this script
-local dkjson_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
-package.path = package.path .. ";" .. dkjson_dir .. "?.lua"
+local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
+package.path = package.path .. ";" .. script_dir .. "?.lua"
 local dkjson = require "dkjson"
 
 -- Set up logging
@@ -82,24 +82,6 @@ local function parse_crop_results(json_file_path)
   return results.results
 end
 
--- Get or create virtual copy for an image
-local function get_or_create_virtual_copy(image)
-  -- For now, always create a new virtual copy
-  -- TODO: Check for existing virtual copies using correct API
-  dlog.msg(dlog.info, _("  Creating virtual copy..."))
-
-  -- Log original image details before duplication
-  dlog.msg(dlog.info, "get_or_create_virtual_copy", string.format("Original image: %s, id=%d", image.filename, image.id))
-
-  --we don't need history as we'll create our own xmp from source because if we call duplicate_with_history then dt will create xmp in background and there are random race conditions with our edits
-  local virtual_copy = image:duplicate()
-
-  -- Log virtual copy details after duplication
-  dlog.msg(dlog.info, "get_or_create_virtual_copy", string.format("Virtual copy created: id=%d", virtual_copy.id))
-
-  return virtual_copy, false  -- return image and flag indicating it was created
-end
-
 -- Helper: Encode a 32-bit float as little-endian hex string
 local function float_to_le_hex(value)
     local packed = string.pack("<f", value)
@@ -140,27 +122,43 @@ local function create_crop_module_xml(num, params_hex)
     num, params_hex)
 end
 
--- Apply crop to an image by modifying its XMP sidecar file
-local function apply_crop_to_image(image, crop_data, source_image)
-  dlog.msg(dlog.info, "apply_crop_to_image", string.format("Called with L=%.2f T=%.2f R=%.2f B=%.2f",
+-- Helper: Generate a random hex string of given length
+local function generate_random_hex(length)
+  local hex = ""
+  for i = 1, length do
+    hex = hex .. string.format("%x", math.random(0, 15))
+  end
+  return hex
+end
+
+-- Helper: Generate darktable-format timestamp (microseconds since 0001-01-01)
+local function generate_darktable_timestamp()
+  return (os.time() + 62135596800) * 1000000
+end
+
+-- Apply crop to source image in-place by modifying its own XMP sidecar file
+-- Also updates change_timestamp and history_current_hash to force preview regeneration
+local function apply_crop_in_place(image, crop_data)
+  dlog.msg(dlog.info, "apply_crop_in_place", string.format("Called with L=%.2f T=%.2f R=%.2f B=%.2f",
     crop_data.left, crop_data.top, crop_data.right, crop_data.bottom))
 
   local success, error_msg = pcall(function()
-    -- Get the XMP sidecar file path
-    local image_path = tostring(image)  -- Full path to image file
     local xmp_path = image.sidecar
 
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Image path: %s", image_path))
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Path of XMP copy: %s", xmp_path))
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("XMP copy exists: %s", df.check_if_file_exists(xmp_path) and "yes" or "no"))
+    dlog.msg(dlog.info, "apply_crop_in_place", string.format("Image: %s, id=%d, sidecar: %s",
+      image.filename, image.id, xmp_path or "nil"))
+
+    if not xmp_path then
+      error("No sidecar path for image: " .. image.filename)
+    end
 
     -- Convert crop percentages to fractions
     local left_fraction = crop_data.left / 100.0
     local top_fraction = crop_data.top / 100.0
-    local right_edge = (100.0 - crop_data.right) / 100.0  -- Edge position, not margin
-    local bottom_edge = (100.0 - crop_data.bottom) / 100.0  -- Edge position, not margin
+    local right_edge = (100.0 - crop_data.right) / 100.0
+    local bottom_edge = (100.0 - crop_data.bottom) / 100.0
 
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Fractions: L=%.6f T=%.6f R=%.6f B=%.6f",
+    dlog.msg(dlog.info, "apply_crop_in_place", string.format("Fractions: L=%.6f T=%.6f R=%.6f B=%.6f",
       left_fraction, top_fraction, right_edge, bottom_edge))
 
     -- Encode as hex params (4 floats + 8 bytes zeros)
@@ -168,93 +166,182 @@ local function apply_crop_to_image(image, crop_data, source_image)
                        float_to_le_hex(top_fraction) ..
                        float_to_le_hex(right_edge) ..
                        float_to_le_hex(bottom_edge) ..
-                       "0000000000000000"  -- 8 bytes of zeros
+                       "0000000000000000"
 
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Crop params hex: %s", params_hex))
-
-    -- Check if the XMP file of the copy currently exists (before we modify it)
-    local xmp_existed_before = df.check_if_file_exists(xmp_path)
-
-    -- Use darktable API to find source XMP for original file
-    local xmp_content
-    local source_xmp_path = source_image.sidecar
-
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Image info: duplicate_index=%d, path=%s, filename=%s",
-      image.duplicate_index, image.path, image.filename))
-
-    -- Read source XMP if found via sidecar reference or search
-    if source_xmp_path then
-      local file = io.open(source_xmp_path, "r")
-      if not file then
-        error("Failed to open source XMP file for reading: " .. source_xmp_path)
-      end
-      xmp_content = file:read("*all")
-      file:close()
-      dlog.msg(dlog.info, "apply_crop_to_image", "Read source XMP to preserve history")
-    else
-      error("Cannot find XMP of base image: " .. (source_xmp_path or "Empty source xmp path!!!"))
+    -- Read existing XMP
+    local file = io.open(xmp_path, "r")
+    if not file then
+      error("Failed to open XMP file for reading: " .. xmp_path)
     end
+    local xmp_content = file:read("*all")
+    file:close()
 
-    -- Find the highest history item number in the XMP
+    -- Find max history num and compute new values
     local max_history_num = find_max_history_num(xmp_content)
     local new_history_num = max_history_num + 1
     local new_history_end = new_history_num + 1
 
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Max history num: %d, adding crop at num=%d", max_history_num, new_history_num))
+    dlog.msg(dlog.info, "apply_crop_in_place", string.format("Max history num: %d, adding crop at num=%d", max_history_num, new_history_num))
 
-    -- Create the crop module entry
+    -- Create and insert crop module entry
     local crop_module_xml = create_crop_module_xml(new_history_num, params_hex)
 
-    -- Find the end of the history sequence (before </rdf:Seq>)
     local before_seq_end = xmp_content:find("</rdf:Seq>%s*</darktable:history>")
-
     if not before_seq_end then
       error("Could not find history sequence end tag in XMP")
     end
 
-    -- Insert crop module before </rdf:Seq>
     local new_xmp = xmp_content:sub(1, before_seq_end - 1) .. "\n" ..
                     crop_module_xml .. "\n" ..
                     xmp_content:sub(before_seq_end)
 
-    -- Update history_end attribute
+    -- Update history_end
     new_xmp = new_xmp:gsub('darktable:history_end="%d+"',
                            string.format('darktable:history_end="%d"', new_history_end))
 
-    -- Write XMP file
-    local file = io.open(xmp_path, "w")
+    -- Update change_timestamp to force darktable to detect a change
+    local timestamp = generate_darktable_timestamp()
+    local new_xmp_ts, count_ts = new_xmp:gsub(
+      'darktable:change_timestamp="%-?%d+"',
+      string.format('darktable:change_timestamp="%d"', timestamp))
+    if count_ts == 0 then
+      dlog.msg(dlog.warn, "apply_crop_in_place", "darktable:change_timestamp not found in XMP, skipping update")
+    else
+      new_xmp = new_xmp_ts
+    end
+
+    -- Update history_current_hash with random value to force preview regeneration
+    local new_hash = generate_random_hex(32)
+    local new_xmp_hash, count_hash = new_xmp:gsub(
+      'darktable:history_current_hash="[%x]+"',
+      string.format('darktable:history_current_hash="%s"', new_hash))
+    if count_hash == 0 then
+      dlog.msg(dlog.warn, "apply_crop_in_place", "darktable:history_current_hash not found in XMP, skipping update")
+    else
+      new_xmp = new_xmp_hash
+    end
+
+    -- Write modified XMP back to the same file
+    file = io.open(xmp_path, "w")
     if not file then
       error("Failed to open XMP file for writing: " .. xmp_path)
     end
     file:write(new_xmp)
     file:close()
 
-    -- if xmp_existed_before then
-    --   dlog.msg(dlog.info, "apply_crop_to_image", "Modified existing XMP file")
-    -- else
-      dlog.msg(dlog.info, "apply_crop_to_image", "Created new XMP file with crop")
-    -- end
-
-    dlog.msg(dlog.info, string.format(_("  Applied crop via XMP: L=%.2f%% T=%.2f%% R=%.2f%% B=%.2f%%"),
-      crop_data.left, crop_data.top, crop_data.right, crop_data.bottom))
-
-    --image:drop_cache()
-    --dlog.msg(dlog.info, "apply_crop_to_image", "Dropped cache to regenerate thumbnail")
+    dlog.msg(dlog.info, "apply_crop_in_place", string.format("Written XMP with crop, timestamp=%d, hash=%s", timestamp, new_hash))
 
     -- Reload the XMP sidecar to apply changes immediately
-    dlog.msg(dlog.info, "apply_crop_to_image", string.format("Calling image:apply_sidecar(%s) to reload XMP", xmp_path))
+    dlog.msg(dlog.info, "apply_crop_in_place", string.format("Calling image:apply_sidecar(%s) to reload XMP", xmp_path))
     image:apply_sidecar(xmp_path)
-    dlog.msg(dlog.info, "apply_crop_to_image", "XMP reloaded successfully")
-    
-    dt.print(_("  Crop applied and loaded - check darkroom view to see the result"))
+    dlog.msg(dlog.info, "apply_crop_in_place", "XMP reloaded successfully")
+
+    dt.print(_("  Crop applied in-place - check darkroom view to see the result"))
   end)
 
   if not success then
-    dlog.msg(dlog.error, "apply_crop_to_image", string.format("Failed: %s", tostring(error_msg)))
+    dlog.msg(dlog.error, "apply_crop_in_place", string.format("Failed: %s", tostring(error_msg)))
     return false, error_msg or "Unknown error"
   end
 
   return true, nil
+end
+
+-- Shared helper: export images and run Python edge detection
+-- Returns: crop_results, filename_to_image, export_dir (or nil on failure)
+local function export_and_detect(images)
+  -- Create temp folder
+  local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+  local export_dir = temp_dir .. "/darktable_autocrop_" .. os.time()
+
+  if not df.mkdir(export_dir) then
+    dt.print(_("Failed to create temp directory: " .. export_dir))
+    return nil, nil, nil
+  end
+
+  dt.print(string.format(_("Exporting %d images to %s"), #images, export_dir))
+
+  -- Create JPEG format
+  local format = dt.new_format("jpeg")
+
+  -- Export each selected image and build filename mapping
+  local exported_files = {}
+  local filename_to_image = {}
+  local target_height = 1000
+
+  for i, image in ipairs(images) do
+    local scale = target_height / image.height
+    local width = math.floor(image.width * scale)
+    local height = target_height
+
+    format.max_width = width
+    format.max_height = height
+
+    -- Generate filename (remove extension and sanitize)
+    local base_name = image.filename:match("(.+)%..+$") or image.filename
+    local safe_name = df.sanitize_filename(base_name)
+    local filename = export_dir .. "/" .. safe_name .. ".jpg"
+
+    -- Export the image with progress indicator
+    dt.print(string.format(_("Exporting (%d/%d): %s (%dx%d)"), i, #images, image.filename, width, height))
+    local success = format:write_image(image, filename, false)
+
+    if success then
+      table.insert(exported_files, filename)
+      filename_to_image[safe_name] = image
+      dt.print(string.format(_("  Exported: %s"), filename))
+    else
+      dt.print(string.format(_("  Failed to export: %s"), image.filename))
+    end
+  end
+
+  dt.print(string.format(_("Export complete: %d of %d images exported"), #exported_files, #images))
+
+  if #exported_files == 0 then
+    dt.print(_("No files exported, aborting"))
+    return nil, nil, nil
+  end
+
+  -- Call Python script with all exported files at once
+  local python_script = script_dir .. "process_images.py"
+
+  if not df.check_if_file_exists(python_script) then
+    dt.print(string.format(_("Python script not found: %s"), python_script))
+    return nil, nil, nil
+  end
+
+  dt.print(string.format(_("Processing %d exported image(s) with Python script..."), #exported_files))
+
+  local file_args = ""
+  for i, image_file in ipairs(exported_files) do
+    file_args = file_args .. ' "' .. image_file .. '"'
+  end
+
+  local log_file = export_dir .. "/processing.log"
+
+  local command = string.format('cmd /c conda run -n autocrop python "%s"%s > "%s" 2>&1',
+                                 python_script, file_args, log_file)
+
+  local result = dsys.external_command(command)
+
+  if result ~= 0 then
+    dt.print(string.format(_("Python processing failed with code: %d. Check log: %s"), result, log_file))
+    return nil, nil, nil
+  end
+
+  dt.print(string.format(_("Python processing completed successfully. Log: %s"), log_file))
+
+  -- Parse JSON results
+  local json_file = export_dir .. "/crop_results.json"
+  dt.print(_("Parsing crop results..."))
+
+  local crop_results = parse_crop_results(json_file)
+  if not crop_results then
+    dt.print(_("Failed to parse crop results, aborting"))
+    return nil, nil, nil
+  end
+
+  return crop_results, filename_to_image, export_dir
 end
 
 -- Main export and process function (debug version - no crop application)
@@ -267,91 +354,15 @@ local function export_and_find_edges_debug()
     return
   end
 
-  -- Create temp folder
-  local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
-  local export_dir = temp_dir .. "/darktable_autocrop_" .. os.time()
-
-  if not df.mkdir(export_dir) then
-    dt.print(_("Failed to create temp directory: " .. export_dir))
-    return
-  end
-
-  dt.print(string.format(_("Exporting %d images to %s"), #images, export_dir))
-
-  -- Create JPEG format
-  local format = dt.new_format("jpeg")
-
-  -- Export each selected image
-  local exported_files = {}
-  local target_height = 1000
-  for i, image in ipairs(images) do
-    local scale = target_height / image.height
-    local width = math.floor(image.width * scale)
-    local height = target_height
-
-    format.max_width = width
-    format.max_height = height
-
-    -- Generate filename (remove extension and sanitize)
-    local base_name = image.filename:match("(.+)%..+$") or image.filename
-    local safe_name = df.sanitize_filename(base_name)
-    local filename = export_dir .. "/" .. safe_name .. ".jpg"
-
-    -- Export the image with progress indicator
-    dt.print(string.format(_("Exporting (%d/%d): %s (%dx%d)"), i, #images, image.filename, width, height))
-    local success = format:write_image(image, filename, false)
-
-    if success then
-      table.insert(exported_files, filename)
-      dt.print(string.format(_("  Exported: %s"), filename))
-    else
-      dt.print(string.format(_("  Failed to export: %s"), image.filename))
-    end
-  end
-
-  dt.print(string.format(_("Export complete: %d of %d images exported"), #exported_files, #images))
-
-  -- Call Python script with all exported files at once
-  if #exported_files > 0 then
-    -- Get the script directory (where this Lua file is located)
-    local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
-    local python_script = script_dir .. "process_images.py"
-
-    -- Check if Python script exists
-    if df.check_if_file_exists(python_script) then
-      dt.print(string.format(_("Processing %d exported image(s) with Python script..."), #exported_files))
-
-      -- Build command with all file paths
-      local file_args = ""
-      for _, image_file in ipairs(exported_files) do
-        file_args = file_args .. ' "' .. image_file .. '"'
-      end
-
-      -- Set up log file path
-      local log_file = export_dir .. "/processing.log"
-
-      -- Call Python script once with all files
-      -- Using 'conda run' to execute within the autocrop environment
-      local command = string.format('cmd /c conda run -n autocrop python "%s"%s > "%s" 2>&1',
-                                     python_script, file_args, log_file)
-
-      local result = dsys.external_command(command)
-
-      if result == 0 then
-        dt.print(string.format(_("Python processing completed successfully. Log: %s"), log_file))
-      else
-        dt.print(string.format(_("Python processing failed with code: %d. Check log: %s"), result, log_file))
-      end
-    else
-      dt.print(string.format(_("Python script not found: %s"), python_script))
-    end
-  end
+  export_and_detect(images)
+  -- Debug mode: just export and detect, results are in the temp folder
 end
 
--- Export, detect, and apply crops to virtual copies
-local function export_detect_and_apply()
-  --by default log level will be warn in event handlers...  
-  dlog.log_level(dlog.info)  -- Enable info level and above
+-- Export, detect, and apply crops directly to source images (no virtual copies)
+local function export_detect_and_apply_inplace()
+  dlog.log_level(dlog.info)
+  math.randomseed(os.time() + os.clock() * 1000)
+
   local images = dt.gui.selection()
 
   if #images == 0 then
@@ -359,106 +370,14 @@ local function export_detect_and_apply()
     return
   end
 
-  -- Create temp folder
-  local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
-  local export_dir = temp_dir .. "/darktable_autocrop_" .. os.time()
-
-  if not df.mkdir(export_dir) then
-    dt.print(_("Failed to create temp directory: " .. export_dir))
-    return
-  end
-
-  dt.print(string.format(_("Exporting %d images to %s"), #images, export_dir))
-
-  -- Create JPEG format
-  local format = dt.new_format("jpeg")
-
-  -- Export each selected image and build filename mapping
-  local exported_files = {}
-  local filename_to_image = {}  -- Map exported filename to original image object
-  local target_height = 1000
-
-  for i, image in ipairs(images) do
-    local scale = target_height / image.height
-    local width = math.floor(image.width * scale)
-    local height = target_height
-
-    format.max_width = width
-    format.max_height = height
-
-    -- Generate filename (remove extension and sanitize)
-    local base_name = image.filename:match("(.+)%..+$") or image.filename
-    local safe_name = df.sanitize_filename(base_name)
-    local filename = export_dir .. "/" .. safe_name .. ".jpg"
-
-    -- Export the image with progress indicator
-    dt.print(string.format(_("Exporting (%d/%d): %s (%dx%d)"), i, #images, image.filename, width, height))
-    local success = format:write_image(image, filename, false)
-
-    if success then
-      table.insert(exported_files, filename)
-      filename_to_image[safe_name] = image  -- Store mapping
-      dt.print(string.format(_("  Exported: %s"), filename))
-    else
-      dt.print(string.format(_("  Failed to export: %s"), image.filename))
-    end
-  end
-
-  dt.print(string.format(_("Export complete: %d of %d images exported"), #exported_files, #images))
-
-  -- Call Python script with all exported files at once
-  if #exported_files == 0 then
-    dt.print(_("No files exported, aborting"))
-    return
-  end
-
-  -- Get the script directory (where this Lua file is located)
-  local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
-  local python_script = script_dir .. "process_images.py"
-
-  -- Check if Python script exists
-  if not df.check_if_file_exists(python_script) then
-    dt.print(string.format(_("Python script not found: %s"), python_script))
-    return
-  end
-
-  dt.print(string.format(_("Processing %d exported image(s) with Python script..."), #exported_files))
-
-  -- Build command with all file paths
-  local file_args = ""
-  for _, image_file in ipairs(exported_files) do
-    file_args = file_args .. ' "' .. image_file .. '"'
-  end
-
-  -- Set up log file path
-  local log_file = export_dir .. "/processing.log"
-
-  -- Call Python script once with all files
-  local command = string.format('cmd /c conda run -n autocrop python "%s"%s > "%s" 2>&1',
-                                 python_script, file_args, log_file)
-
-  local result = dsys.external_command(command)
-
-  if result ~= 0 then
-    dt.print(string.format(_("Python processing failed with code: %d. Check log: %s"), result, log_file))
-    return
-  end
-
-  dt.print(string.format(_("Python processing completed successfully. Log: %s"), log_file))
-
-  -- Parse JSON results
-  local json_file = export_dir .. "/crop_results.json"
-  dt.print(_("Parsing crop results..."))
-
-  local crop_results = parse_crop_results(json_file)
+  local crop_results, filename_to_image, export_dir = export_and_detect(images)
   if not crop_results then
-    dt.print(_("Failed to parse crop results, aborting crop application"))
     return
   end
 
-  -- Apply crops to virtual copies
-  dlog.msg(dlog.info, "export_detect_and_apply", string.format(_("Applying crops to %d images (creating virtual copies)..."), #crop_results))
-  dlog.msg(dlog.info, "export_detect_and_apply", string.format("crop_results table has %d entries", #crop_results))
+  -- Apply crops in-place (no virtual copies)
+  dlog.msg(dlog.info, "export_detect_and_apply_inplace",
+    string.format("Applying crops to %d images (in-place, no virtual copies)...", #crop_results))
 
   local stats = {
     applied = 0,
@@ -466,30 +385,23 @@ local function export_detect_and_apply()
   }
 
   for idx, result_data in ipairs(crop_results) do
-    dlog.msg(dlog.info, "export_detect_and_apply", string.format("Processing result %d, status=%s", idx, result_data.status or "nil"))
+    dlog.msg(dlog.info, "export_detect_and_apply_inplace",
+      string.format("Processing result %d, status=%s", idx, result_data.status or "nil"))
+
     if result_data.status == "success" then
-      dlog.msg(dlog.info, "export_detect_and_apply", string.format("Looking up filename: %s", result_data.filename or "nil"))
       local original_image = filename_to_image[result_data.filename]
-      dlog.msg(dlog.info, "export_detect_and_apply", string.format("Found image: %s", original_image and "yes" or "no"))
 
       if original_image then
-        dt.print(string.format(_("Processing %s..."), original_image.filename))
-        dlog.msg(dlog.info, "export_detect_and_apply", "Sidecar of original image: " .. (original_image.sidecar or "EMPTY!!!"))
+        dt.print(string.format(_("Processing %s (in-place)..."), original_image.filename))
 
-        -- Get or create virtual copy
-        local virtual_copy, was_reused = get_or_create_virtual_copy(original_image)
-
-        -- Apply crop to virtual copy
-        dlog.msg(dlog.info, "export_detect_and_apply", "About to call apply_crop_to_image")
-        local success, error_msg = apply_crop_to_image(virtual_copy, result_data.crop, original_image)
-        dlog.msg(dlog.info, "export_detect_and_apply", string.format("apply_crop_to_image returned: success=%s, error=%s",
-          tostring(success), tostring(error_msg or "none")))
+        local success, error_msg = apply_crop_in_place(original_image, result_data.crop)
 
         if success then
           stats.applied = stats.applied + 1
-          dlog.msg(dlog.info, "export_detect_and_apply", string.format(_("  Applied crop: L=%.2f%% T=%.2f%% R=%.2f%% B=%.2f%%"),
-            result_data.crop.left, result_data.crop.top,
-            result_data.crop.right, result_data.crop.bottom))
+          dlog.msg(dlog.info, "export_detect_and_apply_inplace",
+            string.format("Applied in-place crop: L=%.2f%% T=%.2f%% R=%.2f%% B=%.2f%%",
+              result_data.crop.left, result_data.crop.top,
+              result_data.crop.right, result_data.crop.bottom))
         else
           stats.failed = stats.failed + 1
           dt.print(string.format(_("  *** FAILED to apply crop: %s ***"), error_msg or "Unknown error"))
@@ -504,16 +416,15 @@ local function export_detect_and_apply()
     end
   end
 
-  -- Display summary
-  dt.print(string.format(_("Auto Crop Complete: %d applied, %d failed"),
+  dt.print(string.format(_("Auto Crop In-Place Complete: %d applied, %d failed"),
     stats.applied, stats.failed))
 end
 
 local function destroy()
     dt.gui.libs.image.destroy_action("AutoCrop_Debug")
-    dt.gui.libs.image.destroy_action("AutoCrop")
+    dt.gui.libs.image.destroy_action("AutoCrop_InPlace")
     dt.destroy_event("AutoCrop_Debug", "shortcut")
-    dt.destroy_event("AutoCrop", "shortcut")
+    dt.destroy_event("AutoCrop_InPlace", "shortcut")
 end
 
 -- GUI registration for debug action (export and detect only, no crop application)
@@ -524,14 +435,6 @@ dt.gui.libs.image.register_action(
     _("Export and detect margins only - for debugging")
 )
 
--- GUI registration for apply action (export, detect, and apply crops to virtual copies)
-dt.gui.libs.image.register_action(
-    "AutoCrop",
-    _("Auto crop and apply"),
-    function() export_detect_and_apply() end,
-    _("Export, detect, and apply crop margins to virtual copies")
-)
-
 -- Shortcut registration for debug action
 dt.register_event(
     "AutoCrop_Debug",
@@ -540,12 +443,20 @@ dt.register_event(
     "AutoCrop_Debug"
 )
 
--- Shortcut registration for apply action
+-- GUI registration for in-place action (no virtual copies)
+dt.gui.libs.image.register_action(
+    "AutoCrop_InPlace",
+    _("Auto crop in-place (no virtual copy)"),
+    function() export_detect_and_apply_inplace() end,
+    _("Export, detect, and apply crop margins directly to selected images")
+)
+
+-- Shortcut registration for in-place action
 dt.register_event(
-    "AutoCrop",
+    "AutoCrop_InPlace",
     "shortcut",
-    function(event, shortcut) export_detect_and_apply() end,
-    "AutoCrop"
+    function(event, shortcut) export_detect_and_apply_inplace() end,
+    "AutoCrop_InPlace"
 )
 
 script_data.destroy = destroy

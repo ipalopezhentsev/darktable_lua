@@ -1,160 +1,119 @@
-# Darktable Lua Automation Scripts
+# CLAUDE.md
 
-This directory contains custom Lua scripts for darktable automation.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Structure
+## What This Is
 
-- `auto_crop.lua` - Performs automatic cropping out of film holder edges at DSLR scanned film frames.
+Darktable Lua plugin for automatic cropping of DSLR-scanned film frames. Detects film holder edges and applies crop parameters to remove them.
 
-## Current Functionality
+## Architecture
 
-### AutoCrop Plugin (`auto_crop.lua`)
+Two-component system: **Lua plugin** (runs inside darktable) calls a **Python script** (runs externally) for image analysis.
 
-Exports selected images from darktable to a temporary folder as JPEG files at smaller size, then finds film holeder edges in them with a Python script.
-The script outputs location of these edges as crop percentages. The calling lua script reads these parameters back and applies them to a virtual copy of each
-image, as crop parameters. It performs the last step as creating or editing an XMP file for a virtual copy and then instructs darktable to refresh its database
-from the modified xmp file.
+### Data Flow
 
-## Python usage rules
+1. `auto_crop.lua` exports selected images as downscaled JPEGs to a temp folder (`%TEMP%/darktable_autocrop_<timestamp>/`)
+2. Lua calls `process_images.py` via `conda run -n autocrop` with file paths as arguments
+3. Python detects margins using brightness profile analysis (OpenCV), writes results to `crop_results.json` in the same temp folder
+4. Lua reads JSON results (via bundled `dkjson.lua`), modifies each source image's XMP sidecar to inject a crop history entry with the detected parameters, and updates `change_timestamp`/`history_current_hash` to force preview regeneration
+5. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 
-- As darktable Lua API has very limited functionality, for tasks requiring actual image analysis we use Python and libs OpenCV.
-- Python is used from a conda virtual env.
-- New Python dependencies should be added via `environment.yml` file.
+### Key Design Decisions
 
-## Darktable Lua API Patterns
+- Crop params are written directly as binary hex into XMP (`darktable:params` field) - 4 little-endian floats for L/T/R/B + 8 zero bytes
+- Python outputs crop as percentages from each edge; Lua converts to fractions where R/B are edge positions (1 - margin)
+- `darktable:change_timestamp` (microseconds since 0001-01-01) and `darktable:history_current_hash` (random hex) are updated in XMP to force darktable to regenerate previews
 
-### Darktable Lua API
-Is described here: https://docs.darktable.org/lua/stable/
+### Registered Actions
+
+- **AutoCrop_Debug** (`export_and_find_edges_debug`) - export and detect only, no crop application. For testing edge detection.
+- **AutoCrop_InPlace** (`export_detect_and_apply_inplace`) - full pipeline: export, detect, apply crop directly to source image's XMP (no virtual copies). Updates `darktable:change_timestamp` and `darktable:history_current_hash` to force preview regeneration.
+
+## Python Environment
+
+- Uses conda environment named `autocrop` (defined in `environment.yml`)
+- Setup: `conda env create -f environment.yml`
+- Update: `conda env update -f environment.yml --prune`
+- Dependencies: Python 3.11, OpenCV, NumPy, Pillow
+- Standalone test: `conda run -n autocrop python process_images.py <image.jpg>`
+
+## Python Usage Rules
+
+- Darktable Lua API is very limited; use Python with OpenCV for any actual image analysis
+- New Python dependencies must be added via `environment.yml`
+
+## Darktable Lua API
+
+Docs: https://docs.darktable.org/lua/stable/
 
 ### Logging
-- Darktable has two 'channels' for printing logs messages: UI (via `dt.print()`) and log file (`dt.print_log()`)
-- For logging to UI, use `dt.print()`. UI should have just important user-level info
-- All debugging info should go to log file, not UI. And for this, do not use `dt.print_log()` directly. Instead, there is higher-level api for logging where we can control base logging level and filter. Example of invocation: `dlog.msg(dlog.info, "export_detect_and_apply", "About to call apply_crop_to_image")`. Here first argument means level, second - context, third - actual msg
 
-### Image Export Workflow
+- `dt.print()` for UI messages (user-facing info only)
+- For debug/log file output, use `dlog.msg(level, context, message)` — NOT `dt.print_log()` directly
+  - Example: `dlog.msg(dlog.info, "export_detect_and_apply", "About to call apply_crop_to_image")`
+- Log level must be re-set in event handlers: `dlog.log_level(dlog.info)` at the top of each handler
+
+### Image Export Pattern
 
 ```lua
--- 1. Get selected images
 local images = dt.gui.selection()
-
--- 2. Create export format
 local format = dt.new_format("jpeg")
-
--- 3. Set dimensions
 format.max_width = width
 format.max_height = height
-
--- 4. Export image
-local success = format:write_image(image, filename, false)
+local success = format:write_image(image, filename, false)  -- 3rd param: allow_upscale
 ```
 
-**API Documentation:**
-- `dt.new_format()`: https://docs.darktable.org/lua/stable/lua.api.manual/darktable/darktable.new_format/
-- `dt_imageio_module_format_t`: https://docs.darktable.org/lua/stable/lua.api.manual/types/dt_imageio_module_format_t/
+### Plugin Registration Pattern
 
-### Important Details
-
-- `write_image(image, filename, allow_upscale)` - third parameter controls upscaling
-- Image dimensions available via `image.width` and `image.height` properties
-- Format object properties (`max_width`, `max_height`) control output size
-
-## Common Gotchas
-
-### Variable Shadowing with `_`
-
-**Problem:** The `_()` function is commonly used for gettext localization. Using `_` as a loop variable will shadow this function and cause runtime errors.
-
+Register GUI action + keyboard shortcut; clean up both in `destroy()`:
 ```lua
--- WRONG - shadows the _() gettext function
-for _, image in ipairs(images) do
-  dt.print(_("Some message"))  -- ERROR: attempt to call a number
-end
+dt.gui.libs.image.register_action("Name", _("Description"), function() ... end, _("Tooltip"))
+dt.register_event("Name", "shortcut", function(event, shortcut) ... end, "Name")
 
--- CORRECT - use a different variable name
-for i, image in ipairs(images) do
-  dt.print(_("Some message"))  -- Works correctly
-end
-```
-
-### Directory Creation
-
-Use `df.mkdir()` directly, not wrapped in `df.check_if_bin_exists()`:
-
-```lua
-local df = require "lib/dtutils.file"
-
--- CORRECT
-if not df.mkdir(export_dir) then
-  dt.print("Failed to create directory")
-  return
-end
-```
-
-### Filename Handling
-
-Strip file extensions and sanitize names before export:
-
-```lua
-local base_name = image.filename:match("(.+)%..+$") or image.filename
-local safe_name = df.sanitize_filename(base_name)
-local filename = export_dir .. "/" .. safe_name .. ".jpg"
-```
-
-## Plugin Registration
-
-### GUI Action Registration
-
-```lua
-dt.gui.libs.image.register_action(
-    "ActionName",
-    _("Display description"),
-    function() your_function() end,
-    _("Tooltip text")
-)
-```
-
-### Keyboard Shortcut Registration
-
-```lua
-dt.register_event(
-    "EventName",
-    "shortcut",
-    function(event, shortcut) your_function() end,
-    "ShortcutName"
-)
-```
-
-### Cleanup on Unload
-
-```lua
 local function destroy()
-    dt.gui.libs.image.destroy_action("ActionName")
-    dt.destroy_event("EventName", "shortcut")
+    dt.gui.libs.image.destroy_action("Name")
+    dt.destroy_event("Name", "shortcut")
 end
-
 script_data.destroy = destroy
 ```
 
-## TODOs
-- [ ] Fix bug with unreliable crop parameters application. Sometimes parent image breaks (i.e. its history is cleared, it seems that we modify wrong image)
-- [ ] Create another action for working directly on source image rather than on virtual copies
-- [ ] Ensure no Windows-specific things are present. We should use platform independent invocation methods
+## Common Gotchas
+
+### Never use `_` as a loop variable
+The `_()` function is gettext localization. Using `_` as a discard variable in `for` loops shadows it and causes runtime errors. Use `i` instead:
+```lua
+for i, image in ipairs(images) do  -- NOT: for _, image in ipairs(images) do
+```
+
+### Directory creation
+Use `df.mkdir()` directly, never wrapped in `df.check_if_bin_exists()`.
+
+### Filename handling
+Always strip extension and sanitize before export:
+```lua
+local base_name = image.filename:match("(.+)%..+$") or image.filename
+local safe_name = df.sanitize_filename(base_name)
+```
 
 ## Testing
 
-To test changes:
-1. Save the Lua script
-2. Reload scripts via Lua console (press on/off)
-3. Select images in lighttable
-4. Run via GUI action or keyboard shortcut
-5. Check UI/log output for progress/errors. In Windows, log is in %USERPROFILE%\Documents\Darktable\darktable-log.txt 
-6. Verify exported files in temp directory
+1. Save Lua script
+2. Reload in darktable via Lua console (toggle on/off)
+3. Select images in lighttable, run via GUI action or shortcut
+4. Check log: `%USERPROFILE%\Documents\Darktable\darktable-log.txt` (Windows)
+5. Check exported files and `crop_results.json` in the temp directory
+
+## Known Bugs / TODOs
+
+- [ ] Remove Windows-specific invocations (`cmd /c conda run ...`), use platform-independent methods
+- [ ] Remove temp dir after creating in-place copies
+- [ ] Try to replace external `dkjson.lua` with some simpler in-place variant.
+- [ ] Now rate of "slight errors" (where one edge is detected "significantly" wrong compared to human choice) is about 25%, try to improve
 
 ## Dependencies
 
-- darktable 4.x or later (API version 7.0.0+)
-- `lib/dtutils` - darktable utility library
-- `lib/dtutils.file` - file operations
-- `lib/dtutils.system` - system command execution
-- Python 3.x
+- darktable 4.x+ (API 7.0.0+)
+- `lib/dtutils`, `lib/dtutils.file`, `lib/dtutils.system`, `lib/dtutils.log`, `lib/dtutils.debug` (darktable utility libs, not in this repo)
+- `dkjson.lua` (bundled JSON parser)
+- Python 3.11 via conda `autocrop` environment
 
