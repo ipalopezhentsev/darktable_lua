@@ -18,10 +18,8 @@ local dlog = require "lib/dtutils.log"
 local dd = require "lib/dtutils.debug"
 local gettext = dt.gettext.gettext
 
--- Load dkjson from the same directory as this script
+-- Script directory (for finding process_images.py)
 local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
-package.path = package.path .. ";" .. script_dir .. "?.lua"
-local dkjson = require "dkjson"
 
 -- Set up logging
 --NOTE in event handlers it won't apply and needs to be set up again!
@@ -49,37 +47,36 @@ script_data.destroy_method = nil
 script_data.restart = nil
 script_data.show = nil
 
--- Parse JSON crop results file
-local function parse_crop_results(json_file_path)
-  if not df.check_if_file_exists(json_file_path) then
-    dlog.msg(dlog.error, _(string.format("JSON results file not found: %s", json_file_path)))
-    return nil
-  end
-
-  -- Read JSON file
-  local file = io.open(json_file_path, "r")
+-- Parse crop results file (simple line format: OK|filename|L=x|T=x|R=x|B=x or ERR|filename|message)
+local function parse_crop_results(results_file_path)
+  local file = io.open(results_file_path, "r")
   if not file then
-    dlog.msg(dlog.error, _(string.format("Failed to open JSON file: %s", json_file_path)))
+    dlog.msg(dlog.error, "parse_crop_results", "Failed to open results file: " .. results_file_path)
     return nil
   end
 
-  local json_content = file:read("*all")
+  local results = {}
+  for line in file:lines() do
+    local status, rest = line:match("^(%u+)|(.+)$")
+    if status == "OK" then
+      local filename, l, t, r, b = rest:match("^([^|]+)|L=([%d%.]+)|T=([%d%.]+)|R=([%d%.]+)|B=([%d%.]+)$")
+      if filename then
+        results[#results + 1] = {
+          status = "success",
+          filename = filename,
+          crop = { left = tonumber(l), top = tonumber(t), right = tonumber(r), bottom = tonumber(b) }
+        }
+      end
+    elseif status == "ERR" then
+      local filename, error_msg = rest:match("^([^|]+)|(.+)$")
+      if filename then
+        results[#results + 1] = { status = "error", filename = filename, error = error_msg }
+      end
+    end
+  end
+
   file:close()
-
-  -- Parse JSON
-  local success, results = pcall(dkjson.decode, json_content)
-  if not success then
-    dlog.msg(dlog.error, _(string.format("Failed to parse JSON: %s", results)))
-    return nil
-  end
-
-  -- Validate structure
-  if not results or not results.results then
-    dlog.msg(dlog.error, _("Invalid JSON structure: missing results array"))
-    return nil
-  end
-
-  return results.results
+  return results
 end
 
 -- Helper: Encode a 32-bit float as little-endian hex string
@@ -331,11 +328,11 @@ local function export_and_detect(images)
 
   dt.print(string.format(_("Python processing completed successfully. Log: %s"), log_file))
 
-  -- Parse JSON results
-  local json_file = export_dir .. "/crop_results.json"
+  -- Parse crop results
+  local results_file = export_dir .. "/crop_results.txt"
   dt.print(_("Parsing crop results..."))
 
-  local crop_results = parse_crop_results(json_file)
+  local crop_results = parse_crop_results(results_file)
   if not crop_results then
     dt.print(_("Failed to parse crop results, aborting"))
     return nil, nil, nil

@@ -9,8 +9,6 @@ Usage: process_images.py <image_path> [image_path2 ...]
 
 import sys
 import os
-import time
-import json
 from pathlib import Path
 import cv2
 import numpy as np
@@ -480,26 +478,24 @@ def detect_content_bounds(image_path, save_visualization=False):
         'visualization_path': visualization_path
     }, None
 
-def write_crop_results_json(results, output_path):
+def write_crop_results(results, output_path):
     """
-    Write crop detection results to JSON file for Lua consumption.
+    Write crop detection results in simple line format for Lua consumption.
 
-    Args:
-        results: List of result dictionaries
-        output_path: Path where JSON file should be written
+    Format: OK|filename|L=1.23|T=2.34|R=3.45|B=4.56
+            ERR|filename|error message
     """
-    json_data = {
-        "version": "1.0",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "results": results
-    }
-
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(json_data, f, indent=2)
-        print(f"\nJSON results written to: {output_path}")
+            for r in results:
+                if r["status"] == "success":
+                    c = r["crop"]
+                    f.write(f'OK|{r["filename"]}|L={c["left"]:.2f}|T={c["top"]:.2f}|R={c["right"]:.2f}|B={c["bottom"]:.2f}\n')
+                else:
+                    f.write(f'ERR|{r["filename"]}|{r.get("error", "Unknown error")}\n')
+        print(f"\nCrop results written to: {output_path}")
     except Exception as e:
-        print(f"Error writing JSON file: {e}")
+        print(f"Error writing results file: {e}")
 
 def main():
     if len(sys.argv) < 2:
@@ -602,9 +598,9 @@ def main():
     else:
         print("Processing complete")
 
-    # Write JSON results file
-    json_output_path = output_dir / "crop_results.json"
-    write_crop_results_json(all_results, json_output_path)
+    # Write crop results file
+    results_output_path = output_dir / "crop_results.txt"
+    write_crop_results(all_results, results_output_path)
 
     # Exit with error code if any files failed
     if error_count > 0:

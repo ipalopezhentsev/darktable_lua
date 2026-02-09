@@ -14,8 +14,8 @@ Two-component system: **Lua plugin** (runs inside darktable) calls a **Python sc
 
 1. `auto_crop.lua` exports selected images as downscaled JPEGs to a temp folder (`%TEMP%/darktable_autocrop_<timestamp>/`)
 2. Lua calls `process_images.py` via `conda run -n autocrop` with file paths as arguments
-3. Python detects margins using brightness profile analysis (OpenCV), writes results to `crop_results.json` in the same temp folder
-4. Lua reads JSON results (via bundled `dkjson.lua`), modifies each source image's XMP sidecar to inject a crop history entry with the detected parameters, and updates `change_timestamp`/`history_current_hash` to force preview regeneration
+3. Python detects margins using brightness profile analysis (OpenCV), writes results to `crop_results.txt` in a simple line format (`OK|filename|L=x|T=x|R=x|B=x`)
+4. Lua parses results, modifies each source image's XMP sidecar to inject a crop history entry with the detected parameters, and updates `change_timestamp`/`history_current_hash` to force preview regeneration
 5. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 
 ### Key Design Decisions
@@ -101,19 +101,18 @@ local safe_name = df.sanitize_filename(base_name)
 2. Reload in darktable via Lua console (toggle on/off)
 3. Select images in lighttable, run via GUI action or shortcut
 4. Check log: `%USERPROFILE%\Documents\Darktable\darktable-log.txt` (Windows)
-5. Check exported files and `crop_results.json` in the temp directory
+5. Check exported files and `crop_results.txt` in the temp directory
 
 ## Known Bugs / TODOs
 
 - [ ] Remove Windows-specific invocations (`cmd /c conda run ...`), use platform-independent methods
 - [ ] Remove temp dir after creating in-place copies
-- [ ] Try to replace external `dkjson.lua` with some simpler in-place variant.
+- [x] Replace external `dkjson.lua` with simple line format (no JSON dependency)
 - [ ] Now rate of "slight errors" (where one edge is detected "significantly" wrong compared to human choice) is about 25%, try to improve
 
 ## Dependencies
 
 - darktable 4.x+ (API 7.0.0+)
 - `lib/dtutils`, `lib/dtutils.file`, `lib/dtutils.system`, `lib/dtutils.log`, `lib/dtutils.debug` (darktable utility libs, not in this repo)
-- `dkjson.lua` (bundled JSON parser)
 - Python 3.11 via conda `autocrop` environment
 
