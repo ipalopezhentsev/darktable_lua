@@ -20,6 +20,218 @@ BASE_TIGHTENING_PERCENT = 0.3
 # Final tightening = BASE + (1.0 - confidence) * ADDITIONAL
 ADDITIONAL_TIGHTENING_PERCENT = 1.5
 
+def _find_gradient_boundary(profile, min_pos=3, sustain=2):
+    """Find first sustained significant brightness gradient spike in a 1D profile.
+
+    The margin-to-content transition creates a physical edge with a sharp
+    brightness change. This function detects that edge by looking for the
+    first place where the brightness gradient is significantly above the
+    baseline margin gradient.
+
+    Args:
+        profile: brightness values from edge inward
+        min_pos: minimum position to consider (skip edge artifacts)
+        sustain: number of consecutive pixels required above threshold
+
+    Returns:
+        Position of the first sustained gradient spike, or None.
+    """
+    if len(profile) < min_pos + sustain + 3:
+        return None
+
+    arr = np.array(profile, dtype=np.float64)
+    gradient = np.abs(np.gradient(arr))
+
+    # Baseline from margin area (should be small for uniform margin)
+    baseline_end = min(10, len(gradient) // 4)
+    if baseline_end < 2:
+        return None
+    baseline = np.median(gradient[:baseline_end])
+    threshold = max(1.0, 5 * baseline)
+
+    # Find first sustained gradient above threshold
+    consecutive = 0
+    for i in range(min_pos, len(gradient)):
+        if gradient[i] > threshold:
+            consecutive += 1
+            if consecutive >= sustain:
+                return i - sustain + 1
+        else:
+            consecutive = 0
+
+    return None
+
+
+def _find_texture_boundary(texture_profile, min_pos=3, sustain=2):
+    """Find where row/column std deviation consistently rises above margin baseline.
+
+    The film holder margin is very uniform (low std across each row/column),
+    while photo content has film grain and detail (higher std). This function
+    finds the transition point.
+
+    Args:
+        texture_profile: std deviation values from edge inward
+        min_pos: minimum position to consider
+        sustain: number of consecutive pixels required above threshold
+
+    Returns:
+        Position of the texture transition, or None.
+    """
+    if len(texture_profile) < min_pos + sustain + 3:
+        return None
+
+    arr = np.array(texture_profile, dtype=np.float64)
+
+    baseline_end = min(10, len(arr) // 4)
+    if baseline_end < 2:
+        return None
+    margin_texture = np.mean(arr[:baseline_end])
+    threshold = max(2.5, 3 * margin_texture + 1.0)
+
+    consecutive = 0
+    for i in range(min_pos, len(arr)):
+        if arr[i] > threshold:
+            consecutive += 1
+            if consecutive >= sustain:
+                return i - sustain + 1
+        else:
+            consecutive = 0
+
+    return None
+
+
+def _extend_past_dark_border(profile, boundary_idx, dimension):
+    """Extend margin boundary past a dark border (film rebate) if present.
+
+    Some film scans have: white outer border -> dark border -> photo content.
+    The brightness-based scan finds the white->dark transition but misses the
+    dark->content transition. This function detects the dark zone and finds
+    where the brightness rises and stabilizes (actual content start).
+
+    Args:
+        profile: brightness values from edge inward
+        boundary_idx: initial boundary position in profile coordinates
+        dimension: total dimension (width or height)
+
+    Returns:
+        Extended boundary position, or boundary_idx if no dark border found.
+    """
+    n = len(profile)
+    # Search up to 5% further inward from the boundary
+    search_end = min(boundary_idx + int(dimension * 0.05), n - 1)
+
+    if search_end <= boundary_idx + 10:
+        return boundary_idx
+
+    # Phase 1: Find dark zone (brightness drops below 80)
+    dark_zone_start = None
+    for i in range(boundary_idx, search_end):
+        if profile[i] < 80:
+            dark_zone_start = i
+            break
+
+    if dark_zone_start is None:
+        return boundary_idx
+
+    # Phase 2: From the dark zone, find where brightness rises and stabilizes
+    sub = np.array(profile[dark_zone_start:search_end], dtype=np.float64)
+    if len(sub) < 5:
+        return boundary_idx
+
+    grad = np.gradient(sub)
+
+    # Look for a significant rise (gradient > 3) followed by stabilization (< 1)
+    rising = False
+    for i in range(len(grad)):
+        if grad[i] > 3.0:
+            rising = True
+        if rising and grad[i] < 1.0:
+            # Confirm stabilization over next few pixels
+            stable = True
+            for j in range(i + 1, min(i + 3, len(grad))):
+                if abs(grad[j]) > 1.5:
+                    stable = False
+                    break
+            if stable:
+                return dark_zone_start + i
+
+    return boundary_idx
+
+
+def _check_overshoot(brightness_profile, texture_profile, current_margin_px, dimension):
+    """Check if brightness-based margin detection overshot into similar-brightness content.
+
+    When content adjacent to the margin has similar brightness (e.g., bright sky
+    next to a white film holder), the brightness-based scan can overshoot far into
+    the image. This function uses gradient and texture signals to detect and correct
+    such overshoot.
+
+    Args:
+        brightness_profile: average brightness from edge inward
+        texture_profile: std deviation from edge inward
+        current_margin_px: margin size in pixels from brightness-based detection
+        dimension: total dimension (width or height)
+
+    Returns:
+        (corrected_margin_px, was_corrected)
+    """
+    # Only check for overshoot when the brightness-based margin is suspiciously large.
+    # Normal film holder margins are 1-4%; overshoot into similar-brightness content
+    # typically produces margins > 5%.
+    margin_pct = (current_margin_px / dimension) * 100
+    if margin_pct < 5.0:
+        return current_margin_px, False
+
+    grad_pos = _find_gradient_boundary(brightness_profile)
+    tex_pos = _find_texture_boundary(texture_profile)
+
+    if grad_pos is None and tex_pos is None:
+        return current_margin_px, False
+
+    # Determine suggested margin from gradient/texture
+    if grad_pos is not None and tex_pos is not None:
+        agreement = abs(grad_pos - tex_pos)
+        if agreement < max(10, dimension * 0.01):
+            # Good agreement: use mean of both signals
+            suggested = int((grad_pos + tex_pos) / 2)
+            strong_signal = True
+        else:
+            # Poor agreement: use the larger (more conservative)
+            suggested = max(grad_pos, tex_pos)
+            strong_signal = False
+    elif grad_pos is not None:
+        suggested = grad_pos
+        strong_signal = False
+    else:
+        assert tex_pos is not None  # at least one is not None (checked above)
+        suggested = tex_pos
+        strong_signal = False
+
+    if suggested < 3:
+        return current_margin_px, False
+
+    # Verify the brightness actually changes at the suggested boundary.
+    # A real margin→content transition shows a clear brightness shift.
+    # A false boundary within the margin shows only minor fluctuation.
+    n = len(brightness_profile)
+    margin_avg = np.mean(brightness_profile[:max(suggested, 1)])
+    content_start = min(suggested, n - 1)
+    content_end = min(suggested + 20, n)
+    content_avg = np.mean(brightness_profile[content_start:content_end])
+    brightness_change = abs(float(margin_avg) - float(content_avg))
+    if brightness_change < 10:
+        return current_margin_px, False
+
+    ratio = current_margin_px / max(suggested, 1)
+
+    if ratio > 2.0 and strong_signal:
+        return suggested, True
+    elif ratio > 3.0:
+        return suggested, True
+
+    return current_margin_px, False
+
+
 def detect_content_bounds(image_path, save_visualization=False):
     """
     Detect the actual content boundaries by finding where margins end.
@@ -113,11 +325,13 @@ def detect_content_bounds(image_path, save_visualization=False):
             scan_depth = int(width * scan_depth_percent / 100)
 
             if direction == 'left':
-                # Create brightness profile by averaging across full height
+                # Create brightness and texture profiles by averaging across full height
                 profile = []
+                texture_profile = []
                 for x in range(scan_depth):
                     col_mean = blurred[:, x].mean()
                     profile.append(col_mean)
+                    texture_profile.append(float(np.std(blurred[:, x])))
 
                 # Get edge and interior reference brightness
                 edge_brightness = np.mean(profile[:15])
@@ -181,23 +395,35 @@ def detect_content_bounds(image_path, save_visualization=False):
                     result = min(result, int(width * 0.03))
                     sanity_applied = True
 
-                # Calculate uniformity of detected margin region
+                # Check for overshoot into similar-brightness content
+                corrected, was_corrected = _check_overshoot(
+                    profile, texture_profile, result, width)
+                if was_corrected:
+                    result = corrected
+                    sanity_applied = True
+
+                # Calculate uniformity of detected margin region (before dark border extension)
                 if result > 0:
                     margin_region = blurred[:, 0:result]
                     uniformity = calculate_uniformity(margin_region)
                 else:
                     uniformity = 1.0  # No margin = perfectly uniform
 
+                # Extend past dark border (film rebate) if present
+                result = _extend_past_dark_border(profile, result, width)
+
                 # Calculate confidence and return
                 confidence = calculate_confidence(margin_content_diff, agreement, max_agreement, sanity_applied, uniformity)
                 return result, confidence
 
             else:  # right
-                # Create brightness profile
+                # Create brightness and texture profiles (from right edge inward)
                 profile = []
+                texture_profile = []
                 for x in range(width - 1, width - scan_depth - 1, -1):
                     col_mean = blurred[:, x].mean()
                     profile.append(col_mean)
+                    texture_profile.append(float(np.std(blurred[:, x])))
 
                 edge_brightness = np.mean(profile[:15])
                 start_x = int(width * 0.8)
@@ -256,12 +482,25 @@ def detect_content_bounds(image_path, save_visualization=False):
                     result = max(result, width - int(width * 0.03))
                     sanity_applied = True
 
-                # Calculate uniformity of detected margin region
+                # Check for overshoot into similar-brightness content
+                margin_from_right = width - result
+                corrected, was_corrected = _check_overshoot(
+                    profile, texture_profile, margin_from_right, width)
+                if was_corrected:
+                    result = width - corrected
+                    sanity_applied = True
+
+                # Calculate uniformity of detected margin region (before dark border extension)
                 if result < width - 1:
                     margin_region = blurred[:, result:width]
                     uniformity = calculate_uniformity(margin_region)
                 else:
                     uniformity = 1.0  # No margin = perfectly uniform
+
+                # Extend past dark border (film rebate) if present
+                margin_from_right = width - result
+                extended = _extend_past_dark_border(profile, margin_from_right, width)
+                result = width - extended
 
                 # Calculate confidence and return
                 confidence = calculate_confidence(margin_content_diff, agreement, max_agreement, sanity_applied, uniformity)
@@ -271,11 +510,13 @@ def detect_content_bounds(image_path, save_visualization=False):
             scan_depth = int(height * scan_depth_percent / 100)
 
             if direction == 'top':
-                # Create brightness profile by averaging across full width
+                # Create brightness and texture profiles by averaging across full width
                 profile = []
+                texture_profile = []
                 for y in range(scan_depth):
                     row_mean = blurred[y, :].mean()
                     profile.append(row_mean)
+                    texture_profile.append(float(np.std(blurred[y, :])))
 
                 edge_brightness = np.mean(profile[:15])
                 start_y = int(height * 0.2)
@@ -334,23 +575,35 @@ def detect_content_bounds(image_path, save_visualization=False):
                     result = min(result, int(height * 0.03))
                     sanity_applied = True
 
-                # Calculate uniformity of detected margin region
+                # Check for overshoot into similar-brightness content
+                corrected, was_corrected = _check_overshoot(
+                    profile, texture_profile, result, height)
+                if was_corrected:
+                    result = corrected
+                    sanity_applied = True
+
+                # Calculate uniformity of detected margin region (before dark border extension)
                 if result > 0:
                     margin_region = blurred[0:result, :]
                     uniformity = calculate_uniformity(margin_region)
                 else:
                     uniformity = 1.0  # No margin = perfectly uniform
 
+                # Extend past dark border (film rebate) if present
+                result = _extend_past_dark_border(profile, result, height)
+
                 # Calculate confidence and return
                 confidence = calculate_confidence(margin_content_diff, agreement, max_agreement, sanity_applied, uniformity)
                 return result, confidence
 
             else:  # bottom
-                # Create brightness profile
+                # Create brightness and texture profiles (from bottom edge inward)
                 profile = []
+                texture_profile = []
                 for y in range(height - 1, height - scan_depth - 1, -1):
                     row_mean = blurred[y, :].mean()
                     profile.append(row_mean)
+                    texture_profile.append(float(np.std(blurred[y, :])))
 
                 edge_brightness = np.mean(profile[:15])
                 start_y = int(height * 0.8)
@@ -408,12 +661,25 @@ def detect_content_bounds(image_path, save_visualization=False):
                     result = max(result, height - int(height * 0.03))
                     sanity_applied = True
 
-                # Calculate uniformity of detected margin region
+                # Check for overshoot into similar-brightness content
+                margin_from_bottom = height - result
+                corrected, was_corrected = _check_overshoot(
+                    profile, texture_profile, margin_from_bottom, height)
+                if was_corrected:
+                    result = height - corrected
+                    sanity_applied = True
+
+                # Calculate uniformity of detected margin region (before dark border extension)
                 if result < height - 1:
                     margin_region = blurred[result:height, :]
                     uniformity = calculate_uniformity(margin_region)
                 else:
                     uniformity = 1.0  # No margin = perfectly uniform
+
+                # Extend past dark border (film rebate) if present
+                margin_from_bottom = height - result
+                extended = _extend_past_dark_border(profile, margin_from_bottom, height)
+                result = height - extended
 
                 # Calculate confidence and return
                 confidence = calculate_confidence(margin_content_diff, agreement, max_agreement, sanity_applied, uniformity)

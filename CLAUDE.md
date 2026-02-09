@@ -114,7 +114,7 @@ local safe_name = df.sanitize_filename(base_name)
 - [x] Visualization images only created in debug action (--no-vis flag)
 - [x] Remove temp dir after successful in-place crop (kept on errors for inspection)
 - [x] Replace external `dkjson.lua` with simple line format (no JSON dependency)
-- [ ] Now rate of "slight errors" (where one edge is detected "significantly" wrong compared to human choice) is about 25%, try to improve
+- [ ] Now rate of "slight errors" (where one edge is detected "significantly" wrong compared to human choice) is about 8%, try to improve
 
 ## Dependencies
 
