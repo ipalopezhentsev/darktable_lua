@@ -318,7 +318,7 @@ local function export_and_detect(images, save_visualization)
   local log_file = export_dir .. "/processing.log"
 
   local vis_flag = save_visualization and "" or " --no-vis"
-  local command = string.format('cmd /c conda run -n autocrop python "%s"%s%s > "%s" 2>&1',
+  local command = string.format('conda run -n autocrop python "%s"%s%s > "%s" 2>&1',
                                  python_script, vis_flag, file_args, log_file)
 
   local result = dsys.external_command(command)
@@ -420,7 +420,7 @@ local function export_detect_and_apply_inplace()
 
   -- Clean up temp dir if no errors (keep on failure for inspection)
   if stats.failed == 0 then
-    dsys.external_command(string.format('cmd /c rmdir /s /q "%s"', export_dir))
+    df.rmdir(export_dir)
     dlog.msg(dlog.info, "export_detect_and_apply_inplace", "Removed temp dir: " .. export_dir)
   else
     dlog.msg(dlog.info, "export_detect_and_apply_inplace",

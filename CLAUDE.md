@@ -42,6 +42,11 @@ Two-component system: **Lua plugin** (runs inside darktable) calls a **Python sc
 - Darktable Lua API is very limited; use Python with OpenCV for any actual image analysis
 - New Python dependencies must be added via `environment.yml`
 
+## Lua usage
+- Darktable has Lua 5.4. We do not care about Lua features unsupported by previous Lua versions
+- Darktable has helper commands for platform independence. We should favor using them, to make the script platform independent
+- In case we see we require slightly different calls for e.g. Windows vs Mac, we create if branches, if unable to find one common approach
+
 ## Darktable Lua API
 
 Docs: https://docs.darktable.org/lua/stable/
@@ -105,7 +110,7 @@ local safe_name = df.sanitize_filename(base_name)
 
 ## Known Bugs / TODOs
 
-- [ ] Remove Windows-specific invocations (`cmd /c conda run ...`), use platform-independent methods
+- [x] Cross-platform: removed `cmd /c` wrappers, use `dsys.external_command()` and `df.rmdir()` which handle Windows/Linux/macOS internally
 - [x] Visualization images only created in debug action (--no-vis flag)
 - [x] Remove temp dir after successful in-place crop (kept on errors for inspection)
 - [x] Replace external `dkjson.lua` with simple line format (no JSON dependency)
