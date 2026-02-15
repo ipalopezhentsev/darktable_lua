@@ -18,7 +18,7 @@ local dlog = require "lib/dtutils.log"
 local dd = require "lib/dtutils.debug"
 local gettext = dt.gettext.gettext
 
--- Script directory (for finding process_images.py)
+-- Script directory (for finding auto_crop.py)
 local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
 
 -- Set up logging
@@ -301,7 +301,7 @@ local function export_and_detect(images, save_visualization)
   end
 
   -- Call Python script with all exported files at once
-  local python_script = script_dir .. "process_images.py"
+  local python_script = script_dir .. "auto_crop.py"
 
   if not df.check_if_file_exists(python_script) then
     dt.print(string.format(_("Python script not found: %s"), python_script))

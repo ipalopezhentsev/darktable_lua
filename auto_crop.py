@@ -4,7 +4,7 @@ Auto Crop Image Processing Script
 Processes one or more images exported from darktable to detect white/light margins
 and calculate crop percentages.
 
-Usage: process_images.py <image_path> [image_path2 ...]
+Usage: auto_crop.py <image_path> [image_path2 ...]
 """
 
 import sys
@@ -782,7 +782,7 @@ def write_crop_results(results, output_path):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: process_images.py <image_path> [image_path2 ...]")
+        print("Usage: auto_crop.py <image_path> [image_path2 ...]")
         print("\nThis script processes one or more images exported by the darktable AutoCrop plugin.")
         sys.exit(1)
 
