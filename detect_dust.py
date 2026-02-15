@@ -28,15 +28,21 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Detection constants (conservative defaults)
 # ---------------------------------------------------------------------------
-LOCAL_BG_KERNEL = 101          # Gaussian blur kernel for local background
+LOCAL_BG_KERNEL = 201          # Gaussian blur kernel for local background
 NOISE_THRESHOLD_MULTIPLIER = 3.0  # spots must be this many std devs above background
 MIN_ABSOLUTE_THRESHOLD = 15.0  # minimum brightness difference regardless of noise
 MIN_SPOT_AREA = 4              # minimum pixels (reject single-pixel noise)
-MAX_SPOT_AREA = 200            # maximum pixels (~14x14 at full res)
+MAX_SPOT_AREA = 800            # maximum pixels (~16px radius at full res)
 MIN_ASPECT_RATIO = 0.5         # bounding box aspect ratio (reject elongated fibers)
 MIN_COMPACTNESS = 0.4          # area / bbox_area (reject irregular shapes)
+MIN_SOLIDITY = 0.7             # area / convex_hull_area (reject non-convex shapes like letters)
+MIN_CIRCULARITY = 0.4          # 4*pi*area/perimeter^2 (reject complex shapes like symbols)
+SHAPE_CHECK_MIN_AREA = 30      # only check solidity/circularity for spots larger than this
 TEXTURE_KERNEL = 31            # neighborhood size for local texture measurement
 MAX_LOCAL_TEXTURE = 15.0       # max local std dev — reject candidates in busy/textured areas
+MIN_CONTRAST_TEXTURE_RATIO = 8.0  # contrast/texture — reject spots hidden in grain
+MAX_BG_GRADIENT = 2.0          # max background gradient — reject edge halo artifacts
+MAX_EXCESS_SATURATION = 7      # max (spot_sat - surround_sat) — dust matches local color cast
 MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious ones
 
 # ---------------------------------------------------------------------------
@@ -79,6 +85,8 @@ def detect_dust_spots(image_path):
         return None, f"Failed to load image: {image_path}"
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]  # 0-255, used to reject colored features
     height, width = gray.shape
 
     # Local background: large Gaussian blur smooths out dust but preserves
@@ -88,6 +96,13 @@ def detect_dust_spots(image_path):
     # Difference: positive values = brighter than background (dust on inverted negatives)
     diff = gray.astype(np.float32) - local_bg.astype(np.float32)
 
+    # Background gradient: where the blurred background has a strong gradient,
+    # diff values are unreliable (edge halo artifacts from Gaussian smoothing)
+    bg_f = local_bg.astype(np.float32)
+    bg_grad_x = cv2.Sobel(bg_f, cv2.CV_32F, 1, 0, ksize=3)
+    bg_grad_y = cv2.Sobel(bg_f, cv2.CV_32F, 0, 1, ksize=3)
+    bg_gradient = np.sqrt(bg_grad_x ** 2 + bg_grad_y ** 2)
+
     # Local texture map: measures how "busy" each region is.
     # Dust sits on smooth areas (low std); image features are in textured areas (high std).
     gray_f = gray.astype(np.float32)
@@ -96,8 +111,8 @@ def detect_dust_spots(image_path):
     local_sq_mean = cv2.blur(gray_f ** 2, (k, k))
     local_std = np.sqrt(np.maximum(local_sq_mean - local_mean ** 2, 0))
 
-    # Threshold based on image noise level
-    noise_std = np.std(diff)
+    # Threshold based on image noise level (MAD = robust estimator, ignores dust outliers)
+    noise_std = float(np.median(np.abs(diff)) * 1.4826)
     threshold = max(MIN_ABSOLUTE_THRESHOLD, noise_std * NOISE_THRESHOLD_MULTIPLIER)
     print(f"  Noise std: {noise_std:.1f}, threshold: {threshold:.1f} "
           f"(min_abs={MIN_ABSOLUTE_THRESHOLD}, mult={NOISE_THRESHOLD_MULTIPLIER})")
@@ -113,15 +128,19 @@ def detect_dust_spots(image_path):
     print(f"  Connected components above threshold: {num_labels - 1}")
 
     spots = []
-    rejected = {"size": 0, "shape": 0, "contrast": 0, "texture": 0}
+    rejected = {"too_small": 0, "too_large": 0, "shape": 0, "contrast": 0,
+                "color": 0, "edge": 0, "texture": 0, "ratio": 0}
     for label_id in range(1, num_labels):  # skip background (0)
         area = stats[label_id, cv2.CC_STAT_AREA]
         w = stats[label_id, cv2.CC_STAT_WIDTH]
         h = stats[label_id, cv2.CC_STAT_HEIGHT]
 
         # Size filter
-        if area < MIN_SPOT_AREA or area > MAX_SPOT_AREA:
-            rejected["size"] += 1
+        if area < MIN_SPOT_AREA:
+            rejected["too_small"] += 1
+            continue
+        if area > MAX_SPOT_AREA:
+            rejected["too_large"] += 1
             continue
 
         # Circularity: bounding box aspect ratio
@@ -137,29 +156,98 @@ def detect_dust_spots(image_path):
             rejected["shape"] += 1
             continue
 
-        # Brightness contrast check
+        # For contrast, use the max diff within the component (not just centroid)
         cx, cy = centroids[label_id]
-        icx, icy = int(round(cx)), int(round(cy))
-        icx = max(0, min(icx, width - 1))
-        icy = max(0, min(icy, height - 1))
-        contrast = float(diff[icy, icx])
+        bx = stats[label_id, cv2.CC_STAT_LEFT]
+        by = stats[label_id, cv2.CC_STAT_TOP]
+        component_mask = labels[by:by+h, bx:bx+w] == label_id
+        component_diff = diff[by:by+h, bx:bx+w]
+        contrast = float(np.max(component_diff[component_mask]))
+
+        # Shape checks for larger spots: reject non-blob shapes (letters, symbols, arrows)
+        if area >= SHAPE_CHECK_MIN_AREA:
+            mask_u8 = component_mask.astype(np.uint8) * 255
+            contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                hull = cv2.convexHull(contours[0])
+                hull_area = cv2.contourArea(hull)
+                if hull_area > 0 and area / hull_area < MIN_SOLIDITY:
+                    rejected["shape"] += 1
+                    continue
+                perimeter = cv2.arcLength(contours[0], closed=True)
+                if perimeter > 0:
+                    circularity = 4 * math.pi * area / (perimeter * perimeter)
+                    if circularity < MIN_CIRCULARITY:
+                        rejected["shape"] += 1
+                        continue
         if contrast < threshold * 0.8:
             rejected["contrast"] += 1
             continue
 
+        # Reject edge halo artifacts: if the background has a strong gradient at this
+        # location, the diff is unreliable (caused by Gaussian smoothing near edges)
+        icx, icy = int(round(cx)), int(round(cy))
+        icx = max(0, min(icx, width - 1))
+        icy = max(0, min(icy, height - 1))
+        local_bg_grad = float(bg_gradient[icy, icx])
+        if local_bg_grad > MAX_BG_GRADIENT:
+            rejected["edge"] += 1
+            continue
+
+        # Texture: measure in the surrounding ring, not inside the spot.
+        # For large spots, the centroid is inside the bright area and inflates local_std.
+        # Instead, sample texture in a ring from radius_px*1.5 to radius_px*3 around centroid.
+        radius_px = math.sqrt(area / math.pi)
+        ring_inner = max(int(radius_px * 1.5), 2)
+        ring_outer = max(int(radius_px * 3), ring_inner + TEXTURE_KERNEL)
+        # Extract surrounding patch
+        y1 = max(0, icy - ring_outer)
+        y2 = min(height, icy + ring_outer + 1)
+        x1 = max(0, icx - ring_outer)
+        x2 = min(width, icx + ring_outer + 1)
+        patch_std = local_std[y1:y2, x1:x2]
+        # Build ring mask in patch coordinates
+        py, px = np.ogrid[y1-icy:y2-icy, x1-icx:x2-icx]
+        dist_sq = px*px + py*py
+        ring_mask = (dist_sq >= ring_inner**2) & (dist_sq <= ring_outer**2)
+        if ring_mask.any():
+            local_texture = float(np.median(patch_std[ring_mask]))
+        else:
+            local_texture = float(local_std[icy, icx])
+
         # Reject spots in textured/busy areas — these are image features, not dust
-        local_texture = float(local_std[icy, icx])
         if local_texture > MAX_LOCAL_TEXTURE:
             rejected["texture"] += 1
+            continue
+
+        # Reject spots hidden in grain — must stand out above local noise
+        if local_texture > 0 and contrast / local_texture < MIN_CONTRAST_TEXTURE_RATIO:
+            rejected["ratio"] += 1
+            continue
+
+        # Reject colored features: dust matches the local color cast (low excess saturation).
+        # Colored image features (leaves, symbols) are more saturated than their surroundings.
+        component_sat = saturation[by:by+h, bx:bx+w]
+        spot_sat = float(np.mean(component_sat[component_mask]))
+        patch_sat = saturation[y1:y2, x1:x2]
+        if ring_mask.any():
+            surround_sat = float(np.median(patch_sat[ring_mask]))
+        else:
+            surround_sat = spot_sat
+        excess_sat = spot_sat - surround_sat
+        if excess_sat > MAX_EXCESS_SATURATION:
+            rejected["color"] += 1
             continue
 
         spots.append({
             "cx": float(cx),
             "cy": float(cy),
-            "radius_px": math.sqrt(area / math.pi),
+            "radius_px": radius_px,
             "area": area,
             "contrast": contrast,
             "texture": local_texture,
+            "excess_sat": excess_sat,
         })
 
     print(f"  Rejected: {rejected} — accepted: {len(spots)}")
@@ -553,7 +641,8 @@ def main():
             print(
                 f"    Spot {i}: center=({spot['cx']:.1f}, {spot['cy']:.1f}) "
                 f"radius={spot['radius_px']:.1f}px area={spot['area']}px "
-                f"contrast={spot['contrast']:.1f} texture={spot['texture']:.1f}"
+                f"contrast={spot['contrast']:.1f} texture={spot['texture']:.1f} "
+                f"exSat={spot['excess_sat']:.1f}"
             )
 
         # Save visualization (before XMP generation so it always works)
