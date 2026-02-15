@@ -29,12 +29,14 @@ import numpy as np
 # Detection constants (conservative defaults)
 # ---------------------------------------------------------------------------
 LOCAL_BG_KERNEL = 101          # Gaussian blur kernel for local background
-NOISE_THRESHOLD_MULTIPLIER = 6.0  # spots must be this many std devs above background
-MIN_ABSOLUTE_THRESHOLD = 30.0  # minimum brightness difference regardless of noise
+NOISE_THRESHOLD_MULTIPLIER = 3.0  # spots must be this many std devs above background
+MIN_ABSOLUTE_THRESHOLD = 15.0  # minimum brightness difference regardless of noise
 MIN_SPOT_AREA = 4              # minimum pixels (reject single-pixel noise)
 MAX_SPOT_AREA = 200            # maximum pixels (~14x14 at full res)
 MIN_ASPECT_RATIO = 0.5         # bounding box aspect ratio (reject elongated fibers)
 MIN_COMPACTNESS = 0.4          # area / bbox_area (reject irregular shapes)
+TEXTURE_KERNEL = 31            # neighborhood size for local texture measurement
+MAX_LOCAL_TEXTURE = 15.0       # max local std dev — reject candidates in busy/textured areas
 MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious ones
 
 # ---------------------------------------------------------------------------
@@ -86,9 +88,21 @@ def detect_dust_spots(image_path):
     # Difference: positive values = brighter than background (dust on inverted negatives)
     diff = gray.astype(np.float32) - local_bg.astype(np.float32)
 
+    # Local texture map: measures how "busy" each region is.
+    # Dust sits on smooth areas (low std); image features are in textured areas (high std).
+    gray_f = gray.astype(np.float32)
+    k = TEXTURE_KERNEL
+    local_mean = cv2.blur(gray_f, (k, k))
+    local_sq_mean = cv2.blur(gray_f ** 2, (k, k))
+    local_std = np.sqrt(np.maximum(local_sq_mean - local_mean ** 2, 0))
+
     # Threshold based on image noise level
     noise_std = np.std(diff)
     threshold = max(MIN_ABSOLUTE_THRESHOLD, noise_std * NOISE_THRESHOLD_MULTIPLIER)
+    print(f"  Noise std: {noise_std:.1f}, threshold: {threshold:.1f} "
+          f"(min_abs={MIN_ABSOLUTE_THRESHOLD}, mult={NOISE_THRESHOLD_MULTIPLIER})")
+    print(f"  Local texture range: {local_std.min():.1f} - {local_std.max():.1f}, "
+          f"median={np.median(local_std):.1f}")
 
     binary = (diff > threshold).astype(np.uint8)
 
@@ -96,8 +110,10 @@ def detect_dust_spots(image_path):
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
         binary, connectivity=8
     )
+    print(f"  Connected components above threshold: {num_labels - 1}")
 
     spots = []
+    rejected = {"size": 0, "shape": 0, "contrast": 0, "texture": 0}
     for label_id in range(1, num_labels):  # skip background (0)
         area = stats[label_id, cv2.CC_STAT_AREA]
         w = stats[label_id, cv2.CC_STAT_WIDTH]
@@ -105,17 +121,20 @@ def detect_dust_spots(image_path):
 
         # Size filter
         if area < MIN_SPOT_AREA or area > MAX_SPOT_AREA:
+            rejected["size"] += 1
             continue
 
         # Circularity: bounding box aspect ratio
         aspect = min(w, h) / max(w, h) if max(w, h) > 0 else 0
         if aspect < MIN_ASPECT_RATIO:
+            rejected["shape"] += 1
             continue
 
         # Compactness: how much of the bounding box is filled
         bbox_area = w * h
         compactness = area / bbox_area if bbox_area > 0 else 0
         if compactness < MIN_COMPACTNESS:
+            rejected["shape"] += 1
             continue
 
         # Brightness contrast check
@@ -125,6 +144,13 @@ def detect_dust_spots(image_path):
         icy = max(0, min(icy, height - 1))
         contrast = float(diff[icy, icx])
         if contrast < threshold * 0.8:
+            rejected["contrast"] += 1
+            continue
+
+        # Reject spots in textured/busy areas — these are image features, not dust
+        local_texture = float(local_std[icy, icx])
+        if local_texture > MAX_LOCAL_TEXTURE:
+            rejected["texture"] += 1
             continue
 
         spots.append({
@@ -133,8 +159,10 @@ def detect_dust_spots(image_path):
             "radius_px": math.sqrt(area / math.pi),
             "area": area,
             "contrast": contrast,
+            "texture": local_texture,
         })
 
+    print(f"  Rejected: {rejected} — accepted: {len(spots)}")
     return spots, None
 
 
@@ -525,7 +553,7 @@ def main():
             print(
                 f"    Spot {i}: center=({spot['cx']:.1f}, {spot['cy']:.1f}) "
                 f"radius={spot['radius_px']:.1f}px area={spot['area']}px "
-                f"contrast={spot['contrast']:.1f}"
+                f"contrast={spot['contrast']:.1f} texture={spot['texture']:.1f}"
             )
 
         # Save visualization (before XMP generation so it always works)
