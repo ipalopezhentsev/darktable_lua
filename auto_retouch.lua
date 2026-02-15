@@ -78,6 +78,75 @@ local function generate_darktable_timestamp()
   return (os.time() + 62135596800) * 1000000
 end
 
+-- Decode 8-char little-endian hex string to float
+local function le_hex_to_float(hex_str)
+  local bytes = {}
+  for i = 1, #hex_str, 2 do
+    bytes[#bytes + 1] = string.char(tonumber(hex_str:sub(i, i + 1), 16))
+  end
+  return string.unpack("<f", table.concat(bytes))
+end
+
+-- Find the last enabled history entry for a given operation.
+-- Returns the params hex string, or nil if not found.
+-- Note: XMP entries span multiple lines, so we collapse newlines first.
+local function find_last_enabled_params(xmp_content, history_end, operation)
+  -- Collapse newlines so '.' matches everything within an entry
+  local flat = xmp_content:gsub("\n", " ")
+  local best_num = -1
+  local best_params = nil
+
+  for entry in flat:gmatch('<rdf:li%s.-/>') do
+    local num = tonumber(entry:match('darktable:num="(%d+)"'))
+    local op = entry:match('darktable:operation="([^"]+)"')
+    local enabled = entry:match('darktable:enabled="([^"]+)"')
+    local params = entry:match('darktable:params="([^"]+)"')
+
+    if op == operation and enabled == "1" and num and num <= history_end and num > best_num then
+      best_num = num
+      best_params = params
+    end
+  end
+
+  return best_params
+end
+
+local function parse_flip_param(xmp_content, history_end)
+  local params_hex = find_last_enabled_params(xmp_content, history_end, "flip")
+  if not params_hex or #params_hex < 8 then
+    return 0
+  end
+
+  -- Decode params: 4-byte LE int32
+  local flip_val = string.unpack("<i4",
+    string.char(tonumber(params_hex:sub(1, 2), 16)) ..
+    string.char(tonumber(params_hex:sub(3, 4), 16)) ..
+    string.char(tonumber(params_hex:sub(5, 6), 16)) ..
+    string.char(tonumber(params_hex:sub(7, 8), 16)))
+
+  -- Auto (-1) treated as 0 for now
+  if flip_val < 0 then
+    return 0
+  end
+  return flip_val
+end
+
+-- Parse the effective crop parameters from XMP content.
+-- Returns L, T, R, B floats. Default 0,0,1,1 if no crop.
+local function parse_crop_params(xmp_content, history_end)
+  local params_hex = find_last_enabled_params(xmp_content, history_end, "crop")
+  if not params_hex or #params_hex < 32 then
+    return 0.0, 0.0, 1.0, 1.0
+  end
+
+  local left = le_hex_to_float(params_hex:sub(1, 8))
+  local top = le_hex_to_float(params_hex:sub(9, 16))
+  local right = le_hex_to_float(params_hex:sub(17, 24))
+  local bottom = le_hex_to_float(params_hex:sub(25, 32))
+
+  return left, top, right, bottom
+end
+
 -- ===================================================================
 -- Parse dust detection results
 -- ===================================================================
@@ -378,6 +447,39 @@ local function export_and_detect(images, save_visualization)
   if #exported_files == 0 then
     dt.print(_("No files exported, aborting"))
     return nil, nil, nil
+  end
+
+  -- Write per-image transform params (flip/crop) for Python
+  local transform_file = export_dir .. "/transform_params.txt"
+  local tf = io.open(transform_file, "w")
+  if tf then
+    for safe_name, image in pairs(filename_to_image) do
+      local xmp_path = image.sidecar
+      local flip_val = 0
+      local cl, ct, cr, cb = 0.0, 0.0, 1.0, 1.0
+
+      if xmp_path then
+        local xf = io.open(xmp_path, "r")
+        if xf then
+          local xmp = xf:read("*all")
+          xf:close()
+          local history_end = tonumber(xmp:match('darktable:history_end="(%d+)"')) or 999
+          flip_val = parse_flip_param(xmp, history_end)
+          cl, ct, cr, cb = parse_crop_params(xmp, history_end)
+          dlog.msg(dlog.info, "export_and_detect",
+            string.format("Transform for %s: flip=%d crop=%.4f,%.4f,%.4f,%.4f",
+              safe_name, flip_val, cl, ct, cr, cb))
+        end
+      end
+
+      -- Force dots as decimal separators regardless of system locale
+      local function fmt_float(val)
+        return (string.format("%.6f", val):gsub(",", "."))
+      end
+      tf:write(string.format("%s|flip=%d|crop=%s,%s,%s,%s\n",
+        safe_name, flip_val, fmt_float(cl), fmt_float(ct), fmt_float(cr), fmt_float(cb)))
+    end
+    tf:close()
   end
 
   -- Call Python script

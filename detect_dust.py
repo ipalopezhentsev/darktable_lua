@@ -199,14 +199,37 @@ def make_brush_mask_points(cx, cy, border_radius):
     return bytes(points).hex()
 
 
-def make_brush_mask_src(cx, cy):
-    """Generate mask_src hex for a brush (heal source position)."""
-    src_x = cx + HEAL_SOURCE_OFFSET_X
-    src_y = cy + HEAL_SOURCE_OFFSET_Y
-    # Clamp to [0, 1]
-    src_x = max(0.0, min(1.0, src_x))
-    src_y = max(0.0, min(1.0, src_y))
-    return struct.pack("<ff", src_x, src_y).hex()
+def parse_transform_params(params_file):
+    """Read transform_params.txt written by Lua.
+
+    Returns dict: filename -> {"flip": int, "crop": (L, T, R, B)}.
+    """
+    transforms = {}
+    if not os.path.isfile(params_file):
+        return transforms
+
+    with open(params_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # Format: filename|flip=N|crop=L,T,R,B
+            parts = line.split("|")
+            if len(parts) < 3:
+                continue
+            filename = parts[0]
+            flip = 0
+            crop = (0.0, 0.0, 1.0, 1.0)
+            for part in parts[1:]:
+                if part.startswith("flip="):
+                    flip = int(part[5:])
+                elif part.startswith("crop="):
+                    vals = part[5:].split(",")
+                    if len(vals) == 4:
+                        crop = tuple(float(v) for v in vals)
+            transforms[filename] = {"flip": flip, "crop": crop}
+
+    return transforms
 
 
 def make_group_mask_points(brush_ids, group_id):
@@ -272,11 +295,36 @@ def make_blendop_params(group_mask_id):
     return dt_xmp_encode(bytes(raw))
 
 
-def generate_xmp_data_for_spots(spots, image_width, image_height):
+def _export_to_original(cx, cy, flip, crop):
+    """Transform coordinates from export space to original image space.
+
+    Pipeline order: original -> flip -> crop -> export.
+    Inverse: undo crop, then undo flip.
+    """
+    crop_l, crop_t, crop_r, crop_b = crop
+
+    # 1. Undo crop (export [0,1] -> pre-crop space)
+    cx = crop_l + cx * (crop_r - crop_l)
+    cy = crop_t + cy * (crop_b - crop_t)
+
+    # 2. Undo flip (pre-crop -> original space)
+    if flip == 1:    # vertical
+        cy = 1.0 - cy
+    elif flip == 2:  # horizontal
+        cx = 1.0 - cx
+
+    return cx, cy
+
+
+def generate_xmp_data_for_spots(spots, image_width, image_height,
+                                flip=0, crop=(0.0, 0.0, 1.0, 1.0)):
     """Generate all XMP-ready data for a list of detected spots.
 
     Returns dict with keys: brushes, group, retouch_params, blendop_params.
     Each brush: {mask_id, mask_points, mask_src, mask_nb}.
+
+    flip: 0=none, 1=vertical, 2=horizontal
+    crop: (left, top, right, bottom) in original image [0,1] space
     """
     id_gen = MaskIdGenerator()
 
@@ -284,13 +332,20 @@ def generate_xmp_data_for_spots(spots, image_width, image_height):
     brush_ids = []
 
     for spot in spots:
-        # Normalize coordinates to [0, 1]
+        # Normalize coordinates to [0, 1] in export space
         norm_cx = spot["cx"] / image_width
         norm_cy = spot["cy"] / image_height
+
+        # Transform to original image space (undo crop + flip)
+        norm_cx, norm_cy = _export_to_original(norm_cx, norm_cy, flip, crop)
 
         # Brush border proportional to detected spot radius, with minimum
         norm_radius = spot["radius_px"] / max(image_width, image_height)
         border = max(MIN_BRUSH_BORDER, norm_radius * 2.0)
+
+        # Heal source: offset from spot center in original space
+        src_x = max(0.0, min(1.0, norm_cx + HEAL_SOURCE_OFFSET_X))
+        src_y = max(0.0, min(1.0, norm_cy + HEAL_SOURCE_OFFSET_Y))
 
         mask_id = id_gen.next_id()
         brush_ids.append(mask_id)
@@ -298,7 +353,7 @@ def generate_xmp_data_for_spots(spots, image_width, image_height):
         brushes.append({
             "mask_id": mask_id,
             "mask_points": make_brush_mask_points(norm_cx, norm_cy, border),
-            "mask_src": make_brush_mask_src(norm_cx, norm_cy),
+            "mask_src": struct.pack("<ff", src_x, src_y).hex(),
             "mask_nb": 2,
         })
 
@@ -428,6 +483,15 @@ def main():
             sys.exit(1)
 
     output_dir = str(Path(image_paths[0]).parent)
+
+    # Load per-image transform params (flip/crop) written by Lua
+    transform_params_file = os.path.join(output_dir, "transform_params.txt")
+    transforms = parse_transform_params(transform_params_file)
+    if transforms:
+        print(f"Loaded transform params for {len(transforms)} image(s)")
+    else:
+        print("No transform_params.txt found, using identity transform")
+
     results = []
     any_errors = False
 
@@ -473,7 +537,10 @@ def main():
         # Generate XMP data
         xmp_data = None
         if spots:
-            xmp_data = generate_xmp_data_for_spots(spots, width, height)
+            t = transforms.get(filename, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0)})
+            print(f"  Transform: flip={t['flip']}, crop={t['crop']}")
+            xmp_data = generate_xmp_data_for_spots(
+                spots, width, height, flip=t["flip"], crop=t["crop"])
             print(f"  Generated XMP data: {len(xmp_data['brushes'])} brush masks")
 
         results.append((filename, spots, None, xmp_data))

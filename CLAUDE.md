@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Darktable Lua plugin for automatic cropping of DSLR-scanned film frames. Detects film holder edges and applies crop parameters to remove them.
+Darktable Lua plugins:
+- for automatic cropping of DSLR-scanned film frames. Detects film holder edges and applies crop parameters to remove them.
+- for automatic dust detection on DSLR-scanned film frames. Detects dust particles and applies healing brushes via darktable's retouch module
 
 ## Architecture
 
@@ -12,11 +14,23 @@ Two-component system: **Lua plugin** (runs inside darktable) calls a **Python sc
 
 ### Data Flow
 
+Autocropping feature (complete):
+
 1. `auto_crop.lua` exports selected images as downscaled JPEGs to a temp folder (`%TEMP%/darktable_autocrop_<timestamp>/`)
-2. Lua calls `process_images.py` via `conda run -n autocrop` with file paths as arguments
+2. Lua calls `auto_crop.py` via `conda run -n autocrop` with file paths as arguments
 3. Python detects margins using brightness profile analysis (OpenCV), writes results to `crop_results.txt` in a simple line format (`OK|filename|L=x|T=x|R=x|B=x`)
 4. Lua parses results, modifies each source image's XMP sidecar to inject a crop history entry with the detected parameters, and updates `change_timestamp`/`history_current_hash` to force preview regeneration
 5. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
+
+Automatic dust detection:
+
+1. `auto_retouch.lua` exports selected images as full-resolution JPEGs to a temp folder (`%TEMP%/darktable_autoretouch_<timestamp>/`)
+2. Lua reads each image's XMP sidecar to extract flip/crop transform params, writes `transform_params.txt`
+3. Lua calls `detect_dust.py` via `conda run -n autocrop` with file paths as arguments
+4. Python detects bright dust spots using local background subtraction (OpenCV), generates darktable retouch module binary data (brush masks, group mask, retouch params, blendop params), writes `dust_results.txt`
+5. Python applies inverse coordinate transforms (undo crop, undo flip) so mask coords are in darktable's original image space
+6. Lua parses results, injects retouch history entry + mask entries into each source image's XMP sidecar
+7. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 
 ### Key Design Decisions
 
@@ -28,6 +42,8 @@ Two-component system: **Lua plugin** (runs inside darktable) calls a **Python sc
 
 - **AutoCrop_Debug** (`export_and_find_edges_debug`) - export and detect only, no crop application. For testing edge detection.
 - **AutoCrop_InPlace** (`export_detect_and_apply_inplace`) - full pipeline: export, detect, apply crop directly to source image's XMP (no virtual copies). Updates `darktable:change_timestamp` and `darktable:history_current_hash` to force preview regeneration.
+- **AutoRetouch_Debug** (`export_and_detect_dust_debug`) - export and detect dust spots only, saves visualization overlays.
+- **AutoRetouch_InPlace** (`export_detect_and_apply_retouch_inplace`) - full pipeline: export, detect dust, apply heal retouch to source image's XMP.
 
 ## Python Environment
 
@@ -35,7 +51,8 @@ Two-component system: **Lua plugin** (runs inside darktable) calls a **Python sc
 - Setup: `conda env create -f environment.yml`
 - Update: `conda env update -f environment.yml --prune`
 - Dependencies: Python 3.11, OpenCV, NumPy, Pillow
-- Standalone test: `conda run -n autocrop python process_images.py <image.jpg>`
+- Standalone test (crop): `conda run -n autocrop python auto_crop.py <image.jpg>`
+- Standalone test (dust): `conda run -n autocrop python detect_dust.py <image.jpg>`
 
 ## Python Usage Rules
 
@@ -93,6 +110,12 @@ for i, image in ipairs(images) do  -- NOT: for _, image in ipairs(images) do
 ### Directory creation
 Use `df.mkdir()` directly, never wrapped in `df.check_if_bin_exists()`.
 
+### Locale-safe float formatting
+`string.format("%.6f", val)` uses the system locale's decimal separator (comma on European systems). When writing floats for cross-language interchange (e.g. Lua → Python), always force dots:
+```lua
+string.format("%.6f", val):gsub(",", ".")
+```
+
 ### Filename handling
 Always strip extension and sanitize before export:
 ```lua
@@ -110,11 +133,8 @@ local safe_name = df.sanitize_filename(base_name)
 
 ## Known Bugs / TODOs
 
-- [x] Cross-platform: removed `cmd /c` wrappers, use `dsys.external_command()` and `df.rmdir()` which handle Windows/Linux/macOS internally
-- [x] Visualization images only created in debug action (--no-vis flag)
-- [x] Remove temp dir after successful in-place crop (kept on errors for inspection)
-- [x] Replace external `dkjson.lua` with simple line format (no JSON dependency)
-- [x] Now rate of "slight errors" (where one edge is detected "significantly" wrong compared to human choice) is about 8%, try to improve
+- [x] Auto dust detection coordinate placement — fixed (locale bug: Lua `string.format` used commas as decimal separators, breaking Python parser)
+- [ ] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
 
 ## Dependencies
 
