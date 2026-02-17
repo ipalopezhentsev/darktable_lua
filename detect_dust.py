@@ -31,18 +31,24 @@ import numpy as np
 LOCAL_BG_KERNEL = 201          # Gaussian blur kernel for local background
 NOISE_THRESHOLD_MULTIPLIER = 3.0  # spots must be this many std devs above background
 MIN_ABSOLUTE_THRESHOLD = 15.0  # minimum brightness difference regardless of noise
-MIN_SPOT_AREA = 4              # minimum pixels (reject single-pixel noise)
+MIN_SPOT_AREA = 6              # minimum pixels (reject subpixel/imperceptible dust)
 MAX_SPOT_AREA = 800            # maximum pixels (~16px radius at full res)
-MIN_ASPECT_RATIO = 0.5         # bounding box aspect ratio (reject elongated fibers)
-MIN_COMPACTNESS = 0.4          # area / bbox_area (reject irregular shapes)
-MIN_SOLIDITY = 0.7             # area / convex_hull_area (reject non-convex shapes like letters)
-MIN_CIRCULARITY = 0.4          # 4*pi*area/perimeter^2 (reject complex shapes like symbols)
+MIN_ASPECT_RATIO = 0.3         # bounding box aspect ratio (reject elongated fibers)
+MIN_COMPACTNESS = 0.25         # area / bbox_area (reject irregular shapes)
+MIN_SOLIDITY = 0.5             # area / convex_hull_area (reject non-convex shapes like letters)
+MIN_CIRCULARITY = 0.15         # 4*pi*area/perimeter^2 (reject complex shapes like symbols)
 SHAPE_CHECK_MIN_AREA = 30      # only check solidity/circularity for spots larger than this
 TEXTURE_KERNEL = 31            # neighborhood size for local texture measurement
-MAX_LOCAL_TEXTURE = 15.0       # max local std dev — reject candidates in busy/textured areas
-MIN_CONTRAST_TEXTURE_RATIO = 8.0  # contrast/texture — reject spots hidden in grain
-MAX_BG_GRADIENT = 2.0          # max background gradient — reject edge halo artifacts
+MAX_LOCAL_TEXTURE_SMALL = 16.0 # max texture for tiny spots (area near MIN_SPOT_AREA)
+MAX_LOCAL_TEXTURE_LARGE = 8.0  # max texture for large spots (area >= 200px)
+MIN_CONTRAST_TEXTURE_RATIO = 6.0  # contrast/texture — reject spots hidden in grain
+MAX_BG_GRADIENT_RATIO = 0.08   # max bg_gradient/contrast — reject edge halo artifacts
 MAX_EXCESS_SATURATION = 7      # max (spot_sat - surround_sat) — dust matches local color cast
+MIN_BRIGHTNESS_FRAC_SMALL = 0.5  # brightness floor for tiny spots (area ~10)
+MIN_BRIGHTNESS_FRAC_LARGE = 0.8  # brightness floor for large spots (area >= 100)
+MIN_LOCAL_BG_FRACTION = 0.5    # local background must be >= this fraction of 95th pct
+MIN_SURROUND_BG_RATIO = 0.7   # immediate surround must be >= this fraction of local bg
+                               # (rejects bright reflections inside dark features like windows)
 MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious ones
 
 # ---------------------------------------------------------------------------
@@ -119,6 +125,16 @@ def detect_dust_spots(image_path):
     print(f"  Local texture range: {local_std.min():.1f} - {local_std.max():.1f}, "
           f"median={np.median(local_std):.1f}")
 
+    # Minimum brightness: dust is near film-base brightness (very bright on inverted negatives).
+    # Larger dust must be whiter — small spots can appear gray due to subpixel mixing,
+    # but any sizable dust particle is always near film-base brightness.
+    bright_ref = float(np.percentile(gray, 95))
+    min_local_bg = bright_ref * MIN_LOCAL_BG_FRACTION
+    print(f"  Brightness ref (95th pct): {bright_ref:.0f}, "
+          f"min brightness: {bright_ref * MIN_BRIGHTNESS_FRAC_SMALL:.0f} (small) / "
+          f"{bright_ref * MIN_BRIGHTNESS_FRAC_LARGE:.0f} (large), "
+          f"min local bg: {min_local_bg:.0f}")
+
     binary = (diff > threshold).astype(np.uint8)
 
     # Find connected components
@@ -129,7 +145,9 @@ def detect_dust_spots(image_path):
 
     spots = []
     rejected = {"too_small": 0, "too_large": 0, "shape": 0, "contrast": 0,
-                "color": 0, "edge": 0, "texture": 0, "ratio": 0}
+                "dim": 0, "dark_bg": 0, "embedded": 0, "color": 0, "edge": 0,
+                "texture": 0, "ratio": 0}
+    debug_rejects = []  # track rejected candidates with high contrast for diagnostics
     for label_id in range(1, num_labels):  # skip background (0)
         area = stats[label_id, cv2.CC_STAT_AREA]
         w = stats[label_id, cv2.CC_STAT_WIDTH]
@@ -147,13 +165,31 @@ def detect_dust_spots(image_path):
         aspect = min(w, h) / max(w, h) if max(w, h) > 0 else 0
         if aspect < MIN_ASPECT_RATIO:
             rejected["shape"] += 1
+            # Log high-contrast rejects for diagnostics
+            cx_tmp, cy_tmp = centroids[label_id]
+            bx_tmp = stats[label_id, cv2.CC_STAT_LEFT]
+            by_tmp = stats[label_id, cv2.CC_STAT_TOP]
+            cm_tmp = labels[by_tmp:by_tmp+h, bx_tmp:bx_tmp+w] == label_id
+            cd_tmp = diff[by_tmp:by_tmp+h, bx_tmp:bx_tmp+w]
+            c_tmp = float(np.max(cd_tmp[cm_tmp])) if cm_tmp.any() else 0
+            if c_tmp >= 40 and area >= 8:
+                debug_rejects.append(f"    REJECTED({cx_tmp:.0f},{cy_tmp:.0f}) area={area} contrast={c_tmp:.0f} by=aspect({aspect:.2f}<{MIN_ASPECT_RATIO})")
             continue
 
-        # Compactness: how much of the bounding box is filled
+        # Compactness: how much of the bounding box is filled.
+        # Only for small spots — larger ones use convex hull solidity instead.
         bbox_area = w * h
         compactness = area / bbox_area if bbox_area > 0 else 0
-        if compactness < MIN_COMPACTNESS:
+        if area < SHAPE_CHECK_MIN_AREA and compactness < MIN_COMPACTNESS:
             rejected["shape"] += 1
+            cx_tmp, cy_tmp = centroids[label_id]
+            bx_tmp = stats[label_id, cv2.CC_STAT_LEFT]
+            by_tmp = stats[label_id, cv2.CC_STAT_TOP]
+            cm_tmp = labels[by_tmp:by_tmp+h, bx_tmp:bx_tmp+w] == label_id
+            cd_tmp = diff[by_tmp:by_tmp+h, bx_tmp:bx_tmp+w]
+            c_tmp = float(np.max(cd_tmp[cm_tmp])) if cm_tmp.any() else 0
+            if c_tmp >= 40 and area >= 8:
+                debug_rejects.append(f"    REJECTED({cx_tmp:.0f},{cy_tmp:.0f}) area={area} contrast={c_tmp:.0f} by=compactness({compactness:.2f}<{MIN_COMPACTNESS})")
             continue
 
         # For contrast, use the max diff within the component (not just centroid)
@@ -172,33 +208,112 @@ def detect_dust_spots(image_path):
             if contours:
                 hull = cv2.convexHull(contours[0])
                 hull_area = cv2.contourArea(hull)
-                if hull_area > 0 and area / hull_area < MIN_SOLIDITY:
+                solidity = area / hull_area if hull_area > 0 else 1.0
+                if solidity < MIN_SOLIDITY:
                     rejected["shape"] += 1
+                    if contrast >= 40:
+                        debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=solidity({solidity:.2f}<{MIN_SOLIDITY})")
                     continue
                 perimeter = cv2.arcLength(contours[0], closed=True)
                 if perimeter > 0:
                     circularity = 4 * math.pi * area / (perimeter * perimeter)
                     if circularity < MIN_CIRCULARITY:
                         rejected["shape"] += 1
+                        if contrast >= 40:
+                            debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=circularity({circularity:.2f}<{MIN_CIRCULARITY})")
                         continue
         if contrast < threshold * 0.8:
             rejected["contrast"] += 1
             continue
 
-        # Reject edge halo artifacts: if the background has a strong gradient at this
-        # location, the diff is unreliable (caused by Gaussian smoothing near edges)
+        # Compute local background brightness and integer centroid (used by multiple filters)
         icx, icy = int(round(cx)), int(round(cy))
         icx = max(0, min(icx, width - 1))
         icy = max(0, min(icy, height - 1))
+        local_bg_brightness = float(local_bg[icy, icx])
+        is_dark_bg = local_bg_brightness < min_local_bg
+
+        # For dark backgrounds: reject if textured (image features on busy dark areas).
+        # Allow if smooth (dust on dark uniform surfaces like night sky, hallways).
+        # Use box-averaged texture (11x11) to avoid single-pixel misses on grid patterns.
+        if is_dark_bg:
+            # Sample texture in a ring AROUND the spot to avoid the bright dust pixels
+            # inflating the std in dark areas (one white pixel in black = huge variance).
+            spot_r = max(int(math.sqrt(area / math.pi) * 2), TEXTURE_KERNEL // 2 + 2)
+            ring_r = spot_r + TEXTURE_KERNEL // 2
+            ty1 = max(0, icy - ring_r)
+            ty2 = min(height, icy + ring_r + 1)
+            tx1 = max(0, icx - ring_r)
+            tx2 = min(width, icx + ring_r + 1)
+            patch_tex = local_std[ty1:ty2, tx1:tx2]
+            tpy, tpx = np.ogrid[ty1-icy:ty2-icy, tx1-icx:tx2-icx]
+            tdist_sq = tpx*tpx + tpy*tpy
+            tex_ring = (tdist_sq >= spot_r**2) & (tdist_sq <= ring_r**2)
+            dark_bg_texture = float(np.median(patch_tex[tex_ring])) if tex_ring.any() else 0.0
+            if dark_bg_texture > MAX_LOCAL_TEXTURE_LARGE:
+                rejected["dark_bg"] += 1
+                if contrast >= 40:
+                    debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=dark_bg(bg={local_bg_brightness:.0f}<{min_local_bg:.0f} tex={dark_bg_texture:.1f})")
+                continue
+            # On dark backgrounds, noise peaks are common — require higher contrast
+            # to separate real dust from grain (2x normal threshold = 6x noise std).
+            dark_bg_min_contrast = threshold * 4
+            if contrast < dark_bg_min_contrast:
+                rejected["dark_bg"] += 1
+                continue
+
+        # Reject dim features: dust on inverted negatives is near film-base brightness.
+        # Only applies to BRIGHT backgrounds — on dark backgrounds, dust is bright relative
+        # to its surroundings but not in absolute terms, so this check would be wrong.
+        # Scale brightness requirement linearly from SMALL (area<=10) to LARGE (area>=100).
+        component_gray = gray[by:by+h, bx:bx+w]
+        spot_brightness = float(np.mean(component_gray[component_mask]))
+        if not is_dark_bg and area >= 10:
+            area_factor = min((area - 10) / 90.0, 1.0)  # 0 at area=10, 1 at area>=100
+            required_brightness = bright_ref * (
+                MIN_BRIGHTNESS_FRAC_SMALL + (MIN_BRIGHTNESS_FRAC_LARGE - MIN_BRIGHTNESS_FRAC_SMALL) * area_factor
+            )
+            if spot_brightness < required_brightness:
+                rejected["dim"] += 1
+                if contrast >= 40:
+                    debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=dim(brightness={spot_brightness:.0f}<{required_brightness:.0f})")
+                continue
+
+        # Reject edge halo artifacts: if the background has a strong gradient relative
+        # to spot contrast, the diff is unreliable (caused by Gaussian smoothing near edges).
+        # Using ratio (gradient/contrast) so high-contrast dust on moderate gradients passes.
         local_bg_grad = float(bg_gradient[icy, icx])
-        if local_bg_grad > MAX_BG_GRADIENT:
+        grad_ratio = local_bg_grad / contrast if contrast > 0 else 999
+        if grad_ratio > MAX_BG_GRADIENT_RATIO:
             rejected["edge"] += 1
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=edge(grad={local_bg_grad:.1f} ratio={grad_ratio:.2f}>{MAX_BG_GRADIENT_RATIO})")
             continue
+
+        # Reject bright spots embedded in dark features (e.g. window reflections):
+        # Dust sits on a uniform background — no dark ring nearby.
+        # A window/porthole has a dark frame around the bright reflection.
+        # Only check on bright backgrounds — on dark backgrounds, noise alone makes
+        # the low percentile unreliable (naturally low pixels from grain, not dark frames).
+        radius_px = math.sqrt(area / math.pi)
+        if not is_dark_bg:
+            check_r = max(int(radius_px * 3), 8)
+            ny1 = max(0, icy - check_r)
+            ny2 = min(height, icy + check_r + 1)
+            nx1 = max(0, icx - check_r)
+            nx2 = min(width, icx + check_r + 1)
+            neighborhood = gray[ny1:ny2, nx1:nx2]
+            local_low = float(np.percentile(neighborhood, 5))
+            surround_ratio = local_low / local_bg_brightness if local_bg_brightness > 0 else 1.0
+            if surround_ratio < MIN_SURROUND_BG_RATIO:
+                rejected["embedded"] += 1
+                if contrast >= 40:
+                    debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=embedded(low5={local_low:.0f} bg={local_bg_brightness:.0f} ratio={surround_ratio:.2f}<{MIN_SURROUND_BG_RATIO})")
+                continue
 
         # Texture: measure in the surrounding ring, not inside the spot.
         # For large spots, the centroid is inside the bright area and inflates local_std.
         # Instead, sample texture in a ring from radius_px*1.5 to radius_px*3 around centroid.
-        radius_px = math.sqrt(area / math.pi)
         ring_inner = max(int(radius_px * 1.5), 2)
         ring_outer = max(int(radius_px * 3), ring_inner + TEXTURE_KERNEL)
         # Extract surrounding patch
@@ -216,14 +331,22 @@ def detect_dust_spots(image_path):
         else:
             local_texture = float(local_std[icy, icx])
 
-        # Reject spots in textured/busy areas — these are image features, not dust
-        if local_texture > MAX_LOCAL_TEXTURE:
+        # Reject spots in textured/busy areas — these are image features, not dust.
+        # Larger spots need smoother surroundings: a tiny speck can sit in moderate texture,
+        # but a large blob in moderate texture is almost certainly an image feature.
+        area_tex_factor = min((area - MIN_SPOT_AREA) / (200 - MIN_SPOT_AREA), 1.0)
+        max_texture = MAX_LOCAL_TEXTURE_SMALL - (MAX_LOCAL_TEXTURE_SMALL - MAX_LOCAL_TEXTURE_LARGE) * area_tex_factor
+        if local_texture > max_texture:
             rejected["texture"] += 1
+            if contrast >= 40 and area >= 8:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=texture({local_texture:.1f}>{max_texture:.1f})")
             continue
 
         # Reject spots hidden in grain — must stand out above local noise
         if local_texture > 0 and contrast / local_texture < MIN_CONTRAST_TEXTURE_RATIO:
             rejected["ratio"] += 1
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=ratio({contrast/local_texture:.1f}<{MIN_CONTRAST_TEXTURE_RATIO})")
             continue
 
         # Reject colored features: dust matches the local color cast (low excess saturation).
@@ -238,6 +361,8 @@ def detect_dust_spots(image_path):
         excess_sat = spot_sat - surround_sat
         if excess_sat > MAX_EXCESS_SATURATION:
             rejected["color"] += 1
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=color(exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION})")
             continue
 
         spots.append({
@@ -251,6 +376,12 @@ def detect_dust_spots(image_path):
         })
 
     print(f"  Rejected: {rejected} — accepted: {len(spots)}")
+    if debug_rejects:
+        print(f"  High-contrast rejects ({len(debug_rejects)}, showing top 20):")
+        for msg in debug_rejects[:20]:
+            print(msg)
+        if len(debug_rejects) > 20:
+            print(f"    ... and {len(debug_rejects) - 20} more")
     return spots, None
 
 

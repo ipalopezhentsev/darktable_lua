@@ -135,6 +135,13 @@ local safe_name = df.sanitize_filename(base_name)
 
 - [x] Auto dust detection coordinate placement — fixed (locale bug: Lua `string.format` used commas as decimal separators, breaking Python parser)
 - [ ] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
+- [ ] Add ability to not just put default brush shapes to xmp, but also correctly find spot for source of healing, around the detected particle
+- [ ] Add ability to heal sensor dust (larger, common between selected frames)
+- [ ] Add ability to heal thread-like dust
+- [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
+- [ ] Introduce parallelizm in python scripts
+- [ ] Create specs for the features, write down what features it detects on image searching for dust
+- [ ] separate different features by different folders
 
 ## Dependencies
 
