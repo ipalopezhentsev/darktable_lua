@@ -133,15 +133,15 @@ local safe_name = df.sanitize_filename(base_name)
 
 ## Known Bugs / TODOs
 
-- [x] Auto dust detection coordinate placement — fixed (locale bug: Lua `string.format` used commas as decimal separators, breaking Python parser)
 - [ ] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
 - [ ] Add ability to not just put default brush shapes to xmp, but also correctly find spot for source of healing, around the detected particle
 - [ ] Add ability to heal sensor dust (larger, common between selected frames)
-- [ ] Add ability to heal thread-like dust
+- [ ] Add ability to heal thread(fiber)-like dust
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
-- [x] Introduce parallelizm in python scripts
+- [ ] Introduce parallelizm/progress reporting in auto_crop like in auto_retouch
+- [ ] in auto_crop.lua, implement the same bugfix as in auto_retouch where it erroneously could delete previous history if there were some disabled steps in it. (check commit 7b444a3f77be05cf064097cef4e4eb4823ce7664)
 - [ ] Create spec for the auto_crop feature
-- [x] separate different features by different folders
+- [x] debugging UI for auto_retouch
 
 ## Dependencies
 

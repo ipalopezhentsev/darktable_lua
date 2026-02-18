@@ -53,6 +53,7 @@ MIN_LOCAL_BG_FRACTION = 0.5    # local background must be >= this fraction of 95
 MIN_SURROUND_BG_RATIO = 0.7   # immediate surround must be >= this fraction of local bg
                                # (rejects bright reflections inside dark features like windows)
 MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious ones
+REJECT_LOG_CONTRAST_MIN = 15  # minimum contrast to include in debug reject candidate list
 
 # ---------------------------------------------------------------------------
 # Darktable binary format constants
@@ -83,15 +84,17 @@ BLENDOP_TEMPLATE_ENCODED = "gz08eJxjYGBgYAFiCQYYOOEEIjd6dmXCRFgZMAEjFjEGhgZ7CB6p
 # Dust detection
 # ===================================================================
 
-def detect_dust_spots(image_path):
+def detect_dust_spots(image_path, collect_rejects=False):
     """Detect bright dust spots in an image.
 
-    Returns list of dicts with keys: cx, cy (pixel coords), radius_px, area, contrast.
-    Returns (None, error_msg) on failure.
+    Returns (spots, rejected_candidates, error_msg).
+    spots: list of dicts with keys: cx, cy (pixel coords), radius_px, area, contrast, texture, excess_sat.
+    rejected_candidates: list of structured reject dicts (only populated when collect_rejects=True).
+    error_msg: string on failure, None on success.
     """
     img = cv2.imread(str(image_path))
     if img is None:
-        return None, f"Failed to load image: {image_path}"
+        return None, [], f"Failed to load image: {image_path}"
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -147,10 +150,19 @@ def detect_dust_spots(image_path):
     print(f"  Connected components above threshold: {num_labels - 1}")
 
     spots = []
+    rejected_candidates = []  # structured rejects, only populated when collect_rejects=True
     rejected = {"too_small": 0, "too_large": 0, "shape": 0, "contrast": 0,
                 "dim": 0, "dark_bg": 0, "embedded": 0, "color": 0, "edge": 0,
                 "texture": 0, "ratio": 0}
     debug_rejects = []  # track rejected candidates with high contrast for diagnostics
+
+    def log_reject(cx, cy, area, contrast, reason, detail):
+        if collect_rejects and contrast >= REJECT_LOG_CONTRAST_MIN:
+            rejected_candidates.append({
+                "cx": float(cx), "cy": float(cy),
+                "area": int(area), "contrast": float(contrast),
+                "reason": reason, "detail": detail,
+            })
     for label_id in range(1, num_labels):  # skip background (0)
         area = stats[label_id, cv2.CC_STAT_AREA]
         w = stats[label_id, cv2.CC_STAT_WIDTH]
@@ -177,6 +189,7 @@ def detect_dust_spots(image_path):
             c_tmp = float(np.max(cd_tmp[cm_tmp])) if cm_tmp.any() else 0
             if c_tmp >= 40 and area >= 8:
                 debug_rejects.append(f"    REJECTED({cx_tmp:.0f},{cy_tmp:.0f}) area={area} contrast={c_tmp:.0f} by=aspect({aspect:.2f}<{MIN_ASPECT_RATIO})")
+            log_reject(cx_tmp, cy_tmp, area, c_tmp, "shape", f"aspect={aspect:.2f}<{MIN_ASPECT_RATIO}")
             continue
 
         # Compactness: how much of the bounding box is filled.
@@ -193,6 +206,7 @@ def detect_dust_spots(image_path):
             c_tmp = float(np.max(cd_tmp[cm_tmp])) if cm_tmp.any() else 0
             if c_tmp >= 40 and area >= 8:
                 debug_rejects.append(f"    REJECTED({cx_tmp:.0f},{cy_tmp:.0f}) area={area} contrast={c_tmp:.0f} by=compactness({compactness:.2f}<{MIN_COMPACTNESS})")
+            log_reject(cx_tmp, cy_tmp, area, c_tmp, "shape", f"compactness={compactness:.2f}<{MIN_COMPACTNESS}")
             continue
 
         # For contrast, use the max diff within the component (not just centroid)
@@ -216,6 +230,7 @@ def detect_dust_spots(image_path):
                     rejected["shape"] += 1
                     if contrast >= 40:
                         debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=solidity({solidity:.2f}<{MIN_SOLIDITY})")
+                    log_reject(cx, cy, area, contrast, "shape", f"solidity={solidity:.2f}<{MIN_SOLIDITY}")
                     continue
                 perimeter = cv2.arcLength(contours[0], closed=True)
                 if perimeter > 0:
@@ -224,9 +239,11 @@ def detect_dust_spots(image_path):
                         rejected["shape"] += 1
                         if contrast >= 40:
                             debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=circularity({circularity:.2f}<{MIN_CIRCULARITY})")
+                        log_reject(cx, cy, area, contrast, "shape", f"circularity={circularity:.2f}<{MIN_CIRCULARITY}")
                         continue
         if contrast < threshold * 0.8:
             rejected["contrast"] += 1
+            log_reject(cx, cy, area, contrast, "contrast", f"contrast={contrast:.1f}<{threshold*0.8:.1f}")
             continue
 
         # Compute local background brightness and integer centroid (used by multiple filters)
@@ -257,12 +274,14 @@ def detect_dust_spots(image_path):
                 rejected["dark_bg"] += 1
                 if contrast >= 40:
                     debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=dark_bg(bg={local_bg_brightness:.0f}<{min_local_bg:.0f} tex={dark_bg_texture:.1f})")
+                log_reject(cx, cy, area, contrast, "dark_bg", f"bg={local_bg_brightness:.0f} tex={dark_bg_texture:.1f}>{MAX_LOCAL_TEXTURE_LARGE}")
                 continue
             # On dark backgrounds, noise peaks are common — require higher contrast
             # to separate real dust from grain (2x normal threshold = 6x noise std).
             dark_bg_min_contrast = threshold * 4
             if contrast < dark_bg_min_contrast:
                 rejected["dark_bg"] += 1
+                log_reject(cx, cy, area, contrast, "dark_bg", f"contrast={contrast:.1f}<dark_min={dark_bg_min_contrast:.1f}")
                 continue
 
         # Reject dim features: dust on inverted negatives is near film-base brightness.
@@ -280,6 +299,7 @@ def detect_dust_spots(image_path):
                 rejected["dim"] += 1
                 if contrast >= 40:
                     debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=dim(brightness={spot_brightness:.0f}<{required_brightness:.0f})")
+                log_reject(cx, cy, area, contrast, "dim", f"brightness={spot_brightness:.0f}<{required_brightness:.0f}")
                 continue
 
         # Reject edge halo artifacts: if the background has a strong gradient relative
@@ -291,6 +311,7 @@ def detect_dust_spots(image_path):
             rejected["edge"] += 1
             if contrast >= 40:
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=edge(grad={local_bg_grad:.1f} ratio={grad_ratio:.2f}>{MAX_BG_GRADIENT_RATIO})")
+            log_reject(cx, cy, area, contrast, "edge", f"grad={local_bg_grad:.1f} ratio={grad_ratio:.2f}>{MAX_BG_GRADIENT_RATIO}")
             continue
 
         # Reject bright spots embedded in dark features (e.g. window reflections):
@@ -312,6 +333,7 @@ def detect_dust_spots(image_path):
                 rejected["embedded"] += 1
                 if contrast >= 40:
                     debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=embedded(low5={local_low:.0f} bg={local_bg_brightness:.0f} ratio={surround_ratio:.2f}<{MIN_SURROUND_BG_RATIO})")
+                log_reject(cx, cy, area, contrast, "embedded", f"surround={surround_ratio:.2f}<{MIN_SURROUND_BG_RATIO}")
                 continue
 
         # Texture: measure in the surrounding ring, not inside the spot.
@@ -343,6 +365,7 @@ def detect_dust_spots(image_path):
             rejected["texture"] += 1
             if contrast >= 40 and area >= 8:
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=texture({local_texture:.1f}>{max_texture:.1f})")
+            log_reject(cx, cy, area, contrast, "texture", f"texture={local_texture:.1f}>{max_texture:.1f}")
             continue
 
         # Reject spots hidden in grain — must stand out above local noise
@@ -350,6 +373,7 @@ def detect_dust_spots(image_path):
             rejected["ratio"] += 1
             if contrast >= 40:
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=ratio({contrast/local_texture:.1f}<{MIN_CONTRAST_TEXTURE_RATIO})")
+            log_reject(cx, cy, area, contrast, "ratio", f"ratio={contrast/local_texture:.1f}<{MIN_CONTRAST_TEXTURE_RATIO}")
             continue
 
         # Reject colored features: dust matches the local color cast (low excess saturation).
@@ -366,6 +390,7 @@ def detect_dust_spots(image_path):
             rejected["color"] += 1
             if contrast >= 40:
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=color(exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION})")
+            log_reject(cx, cy, area, contrast, "color", f"exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION}")
             continue
 
         spots.append({
@@ -385,7 +410,7 @@ def detect_dust_spots(image_path):
             print(msg)
         if len(debug_rejects) > 20:
             print(f"    ... and {len(debug_rejects) - 20} more")
-    return spots, None
+    return spots, rejected_candidates, None
 
 
 # ===================================================================
@@ -653,14 +678,54 @@ def save_visualization(image_path, spots, output_path):
 # Results output
 # ===================================================================
 
+def write_debug_spots_json(results, image_paths_by_stem, output_dir):
+    """Write debug_spots.json for the debug UI.
+
+    results: list of (filename_no_ext, spots_or_None, rejected_candidates, img_dims,
+                      error_or_None, xmp_data_or_None).
+    """
+    import json
+
+    class NumpyEncoder(json.JSONEncoder):
+        """Convert numpy scalars to plain Python types for JSON serialization."""
+        def default(self, obj):
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return super().default(obj)
+
+    images_out = []
+    for filename, spots, rejected_candidates, img_dims, error, xmp_data in results:
+        w, h = img_dims if img_dims else (0, 0)
+        images_out.append({
+            "stem": filename,
+            "image_path": str(image_paths_by_stem.get(filename, "")),
+            "width": int(w),
+            "height": int(h),
+            "detected": spots or [],
+            "rejected": rejected_candidates or [],
+        })
+    constants = {k: v for k, v in globals().items()
+                 if k.isupper() and isinstance(v, (int, float))}
+    data = {"images": images_out, "constants": constants}
+    out_path = os.path.join(output_dir, "debug_spots.json")
+    with open(out_path, "w") as f:
+        json.dump(data, f, indent=2, cls=NumpyEncoder)
+    print(f"Debug spots written to: {out_path}")
+
+
 def write_dust_results(results, output_dir):
     """Write dust_results.txt in the output directory.
 
-    results: list of (filename_no_ext, spots_or_None, error_or_None, xmp_data_or_None).
+    results: list of (filename_no_ext, spots_or_None, rejected_candidates, img_dims,
+                      error_or_None, xmp_data_or_None).
     """
     output_path = Path(output_dir) / "dust_results.txt"
     with open(output_path, "w") as f:
-        for filename, spots, error, xmp_data in results:
+        for filename, spots, rejected_candidates, img_dims, error, xmp_data in results:
             if error:
                 f.write(f"ERR|{filename}|{error}\n")
                 continue
@@ -711,13 +776,15 @@ def process_one_image(args):
     Must be a top-level function (not nested inside main) so multiprocessing
     can pickle it on Windows, which uses the 'spawn' start method.
     """
-    image_path, transforms, save_vis = args
+    image_path, transforms, save_vis, collect_rejects = args
     filename = Path(image_path).stem
 
     buf = io.StringIO()
     spots = None
+    rejected_candidates = []
     error = None
     xmp_data = None
+    img_dims = (0, 0)
 
     try:
         with redirect_stdout(buf):
@@ -725,14 +792,15 @@ def process_one_image(args):
             print(f"Processing: {filename}")
             print(f"{'='*60}")
 
-            spots, error = detect_dust_spots(image_path)
+            spots, rejected_candidates, error = detect_dust_spots(image_path, collect_rejects)
             if error:
                 print(f"  ERROR: {error}")
-                return (filename, None, error, None, buf.getvalue())
+                return (filename, None, [], (0, 0), error, None, buf.getvalue())
 
             print(f"  Image loaded successfully")
             img = cv2.imread(str(image_path))
             height, width = img.shape[:2]
+            img_dims = (width, height)
             print(f"  Dimensions: {width} x {height}")
             print(f"  Detected {len(spots)} dust spot(s) before filtering")
 
@@ -765,7 +833,7 @@ def process_one_image(args):
         buf.write(f"  EXCEPTION: {e}\n")
         error = str(e)
 
-    return (filename, spots, error, xmp_data, buf.getvalue())
+    return (filename, spots, rejected_candidates, img_dims, error, xmp_data, buf.getvalue())
 
 
 # ===================================================================
@@ -775,13 +843,17 @@ def process_one_image(args):
 def main():
     args = sys.argv[1:]
     if not args:
-        print("Usage: detect_dust.py [--no-vis] <image1.jpg> [image2.jpg ...]")
+        print("Usage: detect_dust.py [--no-vis] [--debug-ui] <image1.jpg> [image2.jpg ...]")
         sys.exit(1)
 
     save_vis = True
+    debug_ui = False
     if "--no-vis" in args:
         save_vis = False
         args.remove("--no-vis")
+    if "--debug-ui" in args:
+        debug_ui = True
+        args.remove("--debug-ui")
 
     image_paths = args
     if not image_paths:
@@ -809,22 +881,23 @@ def main():
     else:
         print("No transform_params.txt found, using identity transform")
 
+    image_paths_by_stem = {Path(p).stem: p for p in image_paths}
     results = []
     any_errors = False
 
     n_workers = min(cpu_count(), len(image_paths))
     print(f"Running {n_workers} parallel worker(s) for {len(image_paths)} image(s)", flush=True)
 
-    args_list = [(p, transforms, save_vis) for p in image_paths]
+    args_list = [(p, transforms, save_vis, debug_ui) for p in image_paths]
 
     with Pool(processes=n_workers) as pool:
         for i, result in enumerate(pool.imap_unordered(process_one_image, args_list), 1):
-            filename, spots, error, xmp_data, log_output = result
+            filename, spots, rejected_candidates, img_dims, error, xmp_data, log_output = result
             # Print worker log sequentially (no interleaving between images)
             print(log_output, end="", flush=True)
             if error:
                 any_errors = True
-            results.append((filename, spots, error, xmp_data))
+            results.append((filename, spots, rejected_candidates, img_dims, error, xmp_data))
             # Progress sentinel read by Lua via io.popen()
             print(f"PROGRESS|{i}|{len(image_paths)}", flush=True)
 
@@ -834,6 +907,13 @@ def main():
     # Write results file
     results_path = write_dust_results(results, output_dir)
     print(f"\nResults written to: {results_path}")
+
+    if debug_ui:
+        write_debug_spots_json(results, image_paths_by_stem, output_dir)
+        import subprocess
+        debug_ui_script = Path(__file__).parent / "debug_ui.py"
+        print(f"Launching debug UI: {debug_ui_script}", flush=True)
+        subprocess.Popen([sys.executable, str(debug_ui_script), output_dir])
 
     sys.exit(1 if any_errors else 0)
 
