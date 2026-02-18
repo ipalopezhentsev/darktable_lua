@@ -1,19 +1,19 @@
-# Darktable AutoCrop Plugin
+# Darktable Film Scanning Plugins
 
-Auto-export and process selected images in darktable using Lua and Python.
+Lua plugins for darktable to automate DSLR film scanning workflow.
 
 ## Features
 
-- Export selected images from darktable to temporary folder
-- Automatically resize to 10% of original dimensions
-- Process exported images with Python script
-- Uses conda environment for reliable Python dependency management
+- **AutoCrop** (`auto_crop/`) — Detect film holder edges and auto-crop scanned frames
+- **AutoRetouch** (`auto_retouch/`) — Detect dust spots and auto-apply healing brushes
+
+Both use a two-component architecture: Lua plugin (darktable integration) + Python script (image analysis via OpenCV).
 
 ## Installation
 
-### 1. Install the Lua Plugin
+### 1. Install the Lua Plugins
 
-Copy `auto_crop.lua` to your darktable Lua scripts directory:
+Copy this directory to your darktable Lua scripts directory:
 
 **Windows:**
 ```
@@ -25,10 +25,10 @@ Copy `auto_crop.lua` to your darktable Lua scripts directory:
 ~/.config/darktable/lua/
 ```
 
-Enable the script in darktable:
+Enable the scripts in darktable:
 1. Open darktable
 2. Go to **Settings → Lua Scripts**
-3. Enable **AutoCrop**
+3. Enable **AutoCrop** and/or **AutoRetouch**
 
 ### 2. Set Up Python Environment
 
@@ -60,9 +60,12 @@ python --version
 
 ## Files
 
-- `auto_crop.lua` - Main darktable Lua plugin
-- `process_images.py` - Python processing script
-- `environment.yml` - Conda environment specification
+- `auto_crop/auto_crop.lua` - AutoCrop darktable Lua plugin
+- `auto_crop/auto_crop.py` - AutoCrop Python image analysis
+- `auto_retouch/auto_retouch.lua` - AutoRetouch darktable Lua plugin
+- `auto_retouch/detect_dust.py` - Dust detection Python script
+- `auto_retouch/dust_detection_spec.md` - Dust detection algorithm specification
+- `environment.yml` - Shared conda environment specification
 - `CLAUDE.md` - Developer documentation
 
 ## Usage
@@ -122,9 +125,10 @@ Ensure conda is in your system PATH. On Windows, you may need to run from **Anac
 
 ### "Python script not found"
 
-Ensure `process_images.py` is in the same directory as `auto_crop.lua`:
+Ensure Python scripts are in the same directory as their Lua plugins:
 ```
-%LOCALAPPDATA%\darktable\lua\ilya\
+%LOCALAPPDATA%\darktable\lua\ilya\auto_crop\
+%LOCALAPPDATA%\darktable\lua\ilya\auto_retouch\
 ```
 
 ### "Environment autocrop not found"

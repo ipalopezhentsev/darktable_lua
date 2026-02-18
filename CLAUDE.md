@@ -4,29 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Darktable Lua plugins:
-- for automatic cropping of DSLR-scanned film frames. Detects film holder edges and applies crop parameters to remove them.
-- for automatic dust detection on DSLR-scanned film frames. Detects dust particles and applies healing brushes via darktable's retouch module
+Darktable Lua plugins organized in two subdirectories:
+- **`auto_crop/`** — automatic cropping of DSLR-scanned film frames. Detects film holder edges and applies crop parameters to remove them.
+- **`auto_retouch/`** — automatic dust detection on DSLR-scanned film frames. Detects dust particles and applies healing brushes via darktable's retouch module. See `auto_retouch/dust_detection_spec.md` for the detection algorithm spec.
 
 ## Architecture
 
-Two-component system: **Lua plugin** (runs inside darktable) calls a **Python script** (runs externally) for image analysis.
+Two-component system per plugin: **Lua plugin** (runs inside darktable) calls a **Python script** (runs externally) for image analysis. Each plugin lives in its own subdirectory with its Lua + Python files together.
 
 ### Data Flow
 
-Autocropping feature (complete):
+Autocropping feature (`auto_crop/`):
 
-1. `auto_crop.lua` exports selected images as downscaled JPEGs to a temp folder (`%TEMP%/darktable_autocrop_<timestamp>/`)
-2. Lua calls `auto_crop.py` via `conda run -n autocrop` with file paths as arguments
+1. `auto_crop/auto_crop.lua` exports selected images as downscaled JPEGs to a temp folder (`%TEMP%/darktable_autocrop_<timestamp>/`)
+2. Lua calls `auto_crop/auto_crop.py` via `conda run -n autocrop` with file paths as arguments
 3. Python detects margins using brightness profile analysis (OpenCV), writes results to `crop_results.txt` in a simple line format (`OK|filename|L=x|T=x|R=x|B=x`)
 4. Lua parses results, modifies each source image's XMP sidecar to inject a crop history entry with the detected parameters, and updates `change_timestamp`/`history_current_hash` to force preview regeneration
 5. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 
-Automatic dust detection:
+Automatic dust detection (`auto_retouch/`):
 
-1. `auto_retouch.lua` exports selected images as full-resolution JPEGs to a temp folder (`%TEMP%/darktable_autoretouch_<timestamp>/`)
+1. `auto_retouch/auto_retouch.lua` exports selected images as full-resolution JPEGs to a temp folder (`%TEMP%/darktable_autoretouch_<timestamp>/`)
 2. Lua reads each image's XMP sidecar to extract flip/crop transform params, writes `transform_params.txt`
-3. Lua calls `detect_dust.py` via `conda run -n autocrop` with file paths as arguments
+3. Lua calls `auto_retouch/detect_dust.py` via `conda run -n autocrop` with file paths as arguments
 4. Python detects bright dust spots using local background subtraction (OpenCV), generates darktable retouch module binary data (brush masks, group mask, retouch params, blendop params), writes `dust_results.txt`
 5. Python applies inverse coordinate transforms (undo crop, undo flip) so mask coords are in darktable's original image space
 6. Lua parses results, injects retouch history entry + mask entries into each source image's XMP sidecar
@@ -51,8 +51,8 @@ Automatic dust detection:
 - Setup: `conda env create -f environment.yml`
 - Update: `conda env update -f environment.yml --prune`
 - Dependencies: Python 3.11, OpenCV, NumPy, Pillow
-- Standalone test (crop): `conda run -n autocrop python auto_crop.py <image.jpg>`
-- Standalone test (dust): `conda run -n autocrop python detect_dust.py <image.jpg>`
+- Standalone test (crop): `conda run -n autocrop python auto_crop/auto_crop.py <image.jpg>`
+- Standalone test (dust): `conda run -n autocrop python auto_retouch/detect_dust.py <image.jpg>`
 
 ## Python Usage Rules
 
@@ -140,8 +140,8 @@ local safe_name = df.sanitize_filename(base_name)
 - [ ] Add ability to heal thread-like dust
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
 - [ ] Introduce parallelizm in python scripts
-- [ ] Create specs for the features, write down what features it detects on image searching for dust
-- [ ] separate different features by different folders
+- [x] Create specs for the features, write down what features it detects on image searching for dust
+- [x] separate different features by different folders
 
 ## Dependencies
 
