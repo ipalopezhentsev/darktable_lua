@@ -13,7 +13,6 @@ Auto Retouch Plugin for Darktable
 local dt = require "darktable"
 local du = require "lib/dtutils"
 local df = require "lib/dtutils.file"
-local dsys = require "lib/dtutils.system"
 local dlog = require "lib/dtutils.log"
 local dd = require "lib/dtutils.debug"
 local gettext = dt.gettext.gettext
@@ -297,8 +296,16 @@ local function apply_retouch_in_place(image, dust_data)
     local xmp_content = file:read("*all")
     file:close()
 
-    -- Determine the new history entry number
-    local max_history_num = find_max_history_num(xmp_content)
+    -- Determine the new history entry number.
+    -- Use the max of: (a) the highest darktable:num found by scan, and
+    -- (b) history_end - 1 (the last active entry index).
+    -- This protects against find_max_history_num missing entries (e.g. due to
+    -- darktable internally compacting/renaming entries), which would otherwise
+    -- set history_end too low and deactivate existing history steps.
+    local current_end_str = xmp_content:match('darktable:history_end="(%d+)"')
+    local current_history_end = tonumber(current_end_str) or 0
+    local scanned_max = find_max_history_num(xmp_content)
+    local max_history_num = math.max(scanned_max, current_history_end - 1)
     local new_history_num = max_history_num + 1
     local new_history_end = new_history_num + 1
     local mask_num = tostring(new_history_num)
@@ -311,14 +318,22 @@ local function apply_retouch_in_place(image, dust_data)
 
     local has_masks_history = xmp_content:find("<darktable:masks_history>")
     if has_masks_history then
-      -- Insert before the closing </rdf:Seq> of masks_history
+      -- Non-empty masks_history: has explicit </rdf:Seq> closing tag
       local insert_pos = xmp_content:find("</rdf:Seq>%s*</darktable:masks_history>")
-      if not insert_pos then
-        error("Found masks_history but could not find its closing tags")
+      if insert_pos then
+        xmp_content = xmp_content:sub(1, insert_pos - 1) .. "\n" ..
+                      mask_xml .. "\n" ..
+                      xmp_content:sub(insert_pos)
+      else
+        -- Empty masks_history uses self-closing <rdf:Seq/> — expand it to hold our masks
+        local seq_pos = xmp_content:find("<rdf:Seq/>", has_masks_history, true)
+        if not seq_pos then
+          error("Found masks_history but could not find its content sequence")
+        end
+        xmp_content = xmp_content:sub(1, seq_pos - 1) ..
+                      "<rdf:Seq>\n" .. mask_xml .. "\n    </rdf:Seq>" ..
+                      xmp_content:sub(seq_pos + 10)  -- skip past "<rdf:Seq/>"
       end
-      xmp_content = xmp_content:sub(1, insert_pos - 1) .. "\n" ..
-                    mask_xml .. "\n" ..
-                    xmp_content:sub(insert_pos)
     else
       -- Create masks_history section before <darktable:history>
       local history_pos = xmp_content:find("<darktable:history>")
@@ -499,10 +514,29 @@ local function export_and_detect(images, save_visualization)
 
   local log_file = export_dir .. "/processing.log"
   local vis_flag = save_visualization and "" or " --no-vis"
-  local command = string.format('conda run -n autocrop python "%s"%s%s > "%s" 2>&1',
-                                 python_script, vis_flag, file_args, log_file)
+  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s 2>&1',
+                                 python_script, vis_flag, file_args)
 
-  local result = dsys.external_command(command)
+  local log_handle = io.open(log_file, "w")
+  local pipe = io.popen(command)
+  if not pipe then
+    if log_handle then log_handle:close() end
+    dt.print(_("Failed to launch Python process"))
+    return nil, nil, nil
+  end
+  for line in pipe:lines() do
+    if log_handle then log_handle:write(line .. "\n"); log_handle:flush() end
+    local done, total = line:match("^PROGRESS|(%d+)|(%d+)")
+    if done then
+      dt.print(string.format(_("Dust detection: %s / %s images done..."), done, total))
+    end
+  end
+  if log_handle then log_handle:close() end
+  local pipe_status = {pipe:close()}
+  local ok   = pipe_status[1]
+  local code = pipe_status[3]
+  local exit_code = code or 0
+  local result = (ok or exit_code == 0) and 0 or exit_code
 
   if result ~= 0 then
     dt.print(string.format(_("Dust detection failed with code: %d. Check log: %s"), result, log_file))

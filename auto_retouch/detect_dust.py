@@ -13,12 +13,15 @@ Output:
 
 import sys
 import os
+import io
 import math
 import struct
 import zlib
 import base64
 import time
 import random
+from contextlib import redirect_stdout
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
 
 import cv2
@@ -699,6 +702,73 @@ def write_dust_results(results, output_dir):
 
 
 # ===================================================================
+# Per-image worker (top-level so it's picklable on Windows spawn)
+# ===================================================================
+
+def process_one_image(args):
+    """Detect dust in one image and return results + captured log output.
+
+    Must be a top-level function (not nested inside main) so multiprocessing
+    can pickle it on Windows, which uses the 'spawn' start method.
+    """
+    image_path, transforms, save_vis = args
+    filename = Path(image_path).stem
+
+    buf = io.StringIO()
+    spots = None
+    error = None
+    xmp_data = None
+
+    try:
+        with redirect_stdout(buf):
+            print(f"\n{'='*60}")
+            print(f"Processing: {filename}")
+            print(f"{'='*60}")
+
+            spots, error = detect_dust_spots(image_path)
+            if error:
+                print(f"  ERROR: {error}")
+                return (filename, None, error, None, buf.getvalue())
+
+            print(f"  Image loaded successfully")
+            img = cv2.imread(str(image_path))
+            height, width = img.shape[:2]
+            print(f"  Dimensions: {width} x {height}")
+            print(f"  Detected {len(spots)} dust spot(s) before filtering")
+
+            spots.sort(key=lambda s: s["contrast"], reverse=True)
+            if len(spots) > MAX_SPOTS:
+                print(f"  Capping from {len(spots)} to {MAX_SPOTS} strongest spots")
+                spots = spots[:MAX_SPOTS]
+
+            for i, spot in enumerate(spots):
+                print(
+                    f"    Spot {i}: center=({spot['cx']:.1f}, {spot['cy']:.1f}) "
+                    f"radius={spot['radius_px']:.1f}px area={spot['area']}px "
+                    f"contrast={spot['contrast']:.1f} texture={spot['texture']:.1f} "
+                    f"exSat={spot['excess_sat']:.1f}"
+                )
+
+            if save_vis and spots:
+                vis_path = Path(image_path).with_name(f"{filename}_dust_overlay.jpg")
+                save_visualization(image_path, spots, vis_path)
+                print(f"  Visualization saved: {vis_path}")
+
+            if spots:
+                t = transforms.get(filename, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0)})
+                print(f"  Transform: flip={t['flip']}, crop={t['crop']}")
+                xmp_data = generate_xmp_data_for_spots(
+                    spots, width, height, flip=t["flip"], crop=t["crop"])
+                print(f"  Generated XMP data: {len(xmp_data['brushes'])} brush masks")
+
+    except Exception as e:
+        buf.write(f"  EXCEPTION: {e}\n")
+        error = str(e)
+
+    return (filename, spots, error, xmp_data, buf.getvalue())
+
+
+# ===================================================================
 # Main
 # ===================================================================
 
@@ -742,56 +812,24 @@ def main():
     results = []
     any_errors = False
 
-    for image_path in image_paths:
-        filename = Path(image_path).stem
-        print(f"\n{'='*60}")
-        print(f"Processing: {filename}")
-        print(f"{'='*60}")
+    n_workers = min(cpu_count(), len(image_paths))
+    print(f"Running {n_workers} parallel worker(s) for {len(image_paths)} image(s)", flush=True)
 
-        # Detect spots
-        spots, error = detect_dust_spots(image_path)
-        if error:
-            print(f"  ERROR: {error}")
-            results.append((filename, None, error, None))
-            any_errors = True
-            continue
+    args_list = [(p, transforms, save_vis) for p in image_paths]
 
-        print(f"  Image loaded successfully")
-        img = cv2.imread(str(image_path))
-        height, width = img.shape[:2]
-        print(f"  Dimensions: {width} x {height}")
-        print(f"  Detected {len(spots)} dust spot(s) before filtering")
+    with Pool(processes=n_workers) as pool:
+        for i, result in enumerate(pool.imap_unordered(process_one_image, args_list), 1):
+            filename, spots, error, xmp_data, log_output = result
+            # Print worker log sequentially (no interleaving between images)
+            print(log_output, end="", flush=True)
+            if error:
+                any_errors = True
+            results.append((filename, spots, error, xmp_data))
+            # Progress sentinel read by Lua via io.popen()
+            print(f"PROGRESS|{i}|{len(image_paths)}", flush=True)
 
-        # Sort by contrast (strongest first) and cap at MAX_SPOTS
-        spots.sort(key=lambda s: s["contrast"], reverse=True)
-        if len(spots) > MAX_SPOTS:
-            print(f"  Capping from {len(spots)} to {MAX_SPOTS} strongest spots")
-            spots = spots[:MAX_SPOTS]
-
-        for i, spot in enumerate(spots):
-            print(
-                f"    Spot {i}: center=({spot['cx']:.1f}, {spot['cy']:.1f}) "
-                f"radius={spot['radius_px']:.1f}px area={spot['area']}px "
-                f"contrast={spot['contrast']:.1f} texture={spot['texture']:.1f} "
-                f"exSat={spot['excess_sat']:.1f}"
-            )
-
-        # Save visualization (before XMP generation so it always works)
-        if save_vis and spots:
-            vis_path = Path(image_path).with_name(f"{filename}_dust_overlay.jpg")
-            save_visualization(image_path, spots, vis_path)
-            print(f"  Visualization saved: {vis_path}")
-
-        # Generate XMP data
-        xmp_data = None
-        if spots:
-            t = transforms.get(filename, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0)})
-            print(f"  Transform: flip={t['flip']}, crop={t['crop']}")
-            xmp_data = generate_xmp_data_for_spots(
-                spots, width, height, flip=t["flip"], crop=t["crop"])
-            print(f"  Generated XMP data: {len(xmp_data['brushes'])} brush masks")
-
-        results.append((filename, spots, None, xmp_data))
+    # Sort for deterministic output order (imap_unordered returns in completion order)
+    results.sort(key=lambda r: r[0])
 
     # Write results file
     results_path = write_dust_results(results, output_dir)
