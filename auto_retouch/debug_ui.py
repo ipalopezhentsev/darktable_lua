@@ -1060,7 +1060,12 @@ class DebugUI:
                     "MIN_COMPACTNESS", "MIN_SOLIDITY", "MIN_CIRCULARITY",
                     "MAX_LOCAL_TEXTURE_SMALL", "MAX_LOCAL_TEXTURE_LARGE",
                     "MIN_CONTRAST_TEXTURE_RATIO", "MAX_BG_GRADIENT_RATIO",
-                    "MAX_EXCESS_SATURATION", "REJECT_LOG_CONTRAST_MIN"]:
+                    "MAX_EXCESS_SATURATION", "MAX_CONTEXT_TEXTURE",
+                    "LARGE_SPOT_AREA_THRESHOLD", "LARGE_SPOT_MIN_CONTRAST",
+                    "ISOLATION_RADIUS", "MAX_NEARBY_ACCEPTED",
+                    "SOFT_CONTEXT_VOTE_THRESHOLD", "SOFT_TEXTURE_VOTE_THRESHOLD",
+                    "SOFT_RATIO_VOTE_THRESHOLD", "MIN_DUST_VOTES",
+                    "REJECT_LOG_CONTRAST_MIN"]:
             if key in constants:
                 lines.append(f"  {key} = {constants[key]}")
         lines.append("")

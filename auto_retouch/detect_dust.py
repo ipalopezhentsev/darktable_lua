@@ -42,11 +42,30 @@ MIN_SOLIDITY = 0.5             # area / convex_hull_area (reject non-convex shap
 MIN_CIRCULARITY = 0.15         # 4*pi*area/perimeter^2 (reject complex shapes like symbols)
 SHAPE_CHECK_MIN_AREA = 30      # only check solidity/circularity for spots larger than this
 TEXTURE_KERNEL = 31            # neighborhood size for local texture measurement
-MAX_LOCAL_TEXTURE_SMALL = 16.0 # max texture for tiny spots (area near MIN_SPOT_AREA)
+MAX_LOCAL_TEXTURE_SMALL = 12.0 # max texture for tiny spots (area near MIN_SPOT_AREA)
 MAX_LOCAL_TEXTURE_LARGE = 8.0  # max texture for large spots (area >= 200px)
-MIN_CONTRAST_TEXTURE_RATIO = 6.0  # contrast/texture — reject spots hidden in grain
-MAX_BG_GRADIENT_RATIO = 0.08   # max bg_gradient/contrast — reject edge halo artifacts
-MAX_EXCESS_SATURATION = 7      # max (spot_sat - surround_sat) — dust matches local color cast
+MAX_DARK_BG_TEXTURE = 10.0     # max texture in ring around spot on dark backgrounds (separate from above)
+MIN_CONTRAST_TEXTURE_RATIO = 5.5  # contrast/texture — reject spots hidden in grain
+MAX_BG_GRADIENT_RATIO = 0.09   # max bg_gradient/contrast — reject edge halo artifacts
+MAX_EXCESS_SATURATION = 10     # max (spot_sat - surround_sat) — dust matches local color cast
+# NOTE: No MIN_EXCESS_SATURATION — dust on colorful content is genuinely desaturated (excess_sat can reach -100+)
+# NOTE: No MAX_SPOT_SATURATION — color film negatives produce dust spots with spot_sat 100-230 (film emulsion
+#       color characteristics), so absolute saturation is not a reliable discriminator.
+MAX_CONTEXT_TEXTURE = 9.0      # max median local_std across a 200px radius from spot center.
+                               # Dust sits on smooth backgrounds (sky, walls: median ≈ 2-7).
+                               # Crowd/foliage FPs sit in texured scenes (median ≈ 10-25).
+                               # Threshold at 9 separates smooth-background dust from busy-scene FPs.
+LARGE_SPOT_AREA_THRESHOLD = 300  # spots larger than this require higher contrast
+LARGE_SPOT_MIN_CONTRAST = 60     # min contrast for large spots — avoids pale foggy blobs
+ISOLATION_RADIUS = 250         # pixel radius for neighbor density check
+MAX_NEARBY_ACCEPTED = 3        # reject if more than this many accepted spots within ISOLATION_RADIUS
+                               # Real dust is sparse; crowd/foliage FPs form dense clusters.
+# Soft voting: require MIN_DUST_VOTES of 3 signals to clearly indicate dust.
+# Catches borderline spots that slip through individual hard filters but fail multiple soft tests.
+SOFT_CONTEXT_VOTE_THRESHOLD = 7.0  # context_texture < this votes "dust" (clear sky/walls: 2-6)
+SOFT_TEXTURE_VOTE_THRESHOLD = 8.0  # local_texture < this votes "dust"
+SOFT_RATIO_VOTE_THRESHOLD = 8.25   # contrast/texture > this votes "dust" (1.5× hard minimum)
+MIN_DUST_VOTES = 2             # require at least this many out of 3 soft votes to accept
 MIN_BRIGHTNESS_FRAC_SMALL = 0.5  # brightness floor for tiny spots (area ~10)
 MIN_BRIGHTNESS_FRAC_LARGE = 0.8  # brightness floor for large spots (area >= 100)
 MIN_LOCAL_BG_FRACTION = 0.5    # local background must be >= this fraction of 95th pct
@@ -88,7 +107,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
     """Detect bright dust spots in an image.
 
     Returns (spots, rejected_candidates, error_msg).
-    spots: list of dicts with keys: cx, cy (pixel coords), radius_px, area, contrast, texture, excess_sat.
+    spots: list of dicts with keys: cx, cy (pixel coords), radius_px, area, contrast, texture, excess_sat, spot_sat.
     rejected_candidates: list of structured reject dicts (only populated when collect_rejects=True).
     error_msg: string on failure, None on success.
     """
@@ -152,8 +171,9 @@ def detect_dust_spots(image_path, collect_rejects=False):
     spots = []
     rejected_candidates = []  # structured rejects, only populated when collect_rejects=True
     rejected = {"too_small": 0, "too_large": 0, "shape": 0, "contrast": 0,
-                "dim": 0, "dark_bg": 0, "embedded": 0, "color": 0, "edge": 0,
-                "texture": 0, "ratio": 0}
+                "large_dim": 0, "dim": 0, "dark_bg": 0, "embedded": 0, "edge": 0,
+                "texture": 0, "ratio": 0, "context": 0, "votes": 0, "color": 0,
+                "isolation": 0}
     debug_rejects = []  # track rejected candidates with high contrast for diagnostics
 
     def log_reject(cx, cy, area, contrast, reason, detail):
@@ -246,6 +266,16 @@ def detect_dust_spots(image_path, collect_rejects=False):
             log_reject(cx, cy, area, contrast, "contrast", f"contrast={contrast:.1f}<{threshold*0.8:.1f}")
             continue
 
+        # Large dim spots: pale foggy blobs are not dust. Real dust is small and bright.
+        # Large spots (area > threshold) that aren't sharply brighter than surroundings
+        # are almost certainly image features or film artifacts, not dust particles.
+        if area > LARGE_SPOT_AREA_THRESHOLD and contrast < LARGE_SPOT_MIN_CONTRAST:
+            rejected["large_dim"] += 1
+            if contrast >= REJECT_LOG_CONTRAST_MIN:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=large_dim(area>{LARGE_SPOT_AREA_THRESHOLD} contrast<{LARGE_SPOT_MIN_CONTRAST})")
+            log_reject(cx, cy, area, contrast, "large_dim", f"area={area}>{LARGE_SPOT_AREA_THRESHOLD} contrast={contrast:.1f}<{LARGE_SPOT_MIN_CONTRAST}")
+            continue
+
         # Compute local background brightness and integer centroid (used by multiple filters)
         icx, icy = int(round(cx)), int(round(cy))
         icx = max(0, min(icx, width - 1))
@@ -270,15 +300,15 @@ def detect_dust_spots(image_path, collect_rejects=False):
             tdist_sq = tpx*tpx + tpy*tpy
             tex_ring = (tdist_sq >= spot_r**2) & (tdist_sq <= ring_r**2)
             dark_bg_texture = float(np.median(patch_tex[tex_ring])) if tex_ring.any() else 0.0
-            if dark_bg_texture > MAX_LOCAL_TEXTURE_LARGE:
+            if dark_bg_texture > MAX_DARK_BG_TEXTURE:
                 rejected["dark_bg"] += 1
                 if contrast >= 40:
                     debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=dark_bg(bg={local_bg_brightness:.0f}<{min_local_bg:.0f} tex={dark_bg_texture:.1f})")
-                log_reject(cx, cy, area, contrast, "dark_bg", f"bg={local_bg_brightness:.0f} tex={dark_bg_texture:.1f}>{MAX_LOCAL_TEXTURE_LARGE}")
+                log_reject(cx, cy, area, contrast, "dark_bg", f"bg={local_bg_brightness:.0f} tex={dark_bg_texture:.1f}>{MAX_DARK_BG_TEXTURE}")
                 continue
             # On dark backgrounds, noise peaks are common — require higher contrast
-            # to separate real dust from grain (2x normal threshold = 6x noise std).
-            dark_bg_min_contrast = threshold * 4
+            # to separate real dust from grain (2.5x normal threshold = 7.5x noise std).
+            dark_bg_min_contrast = threshold * 2.5
             if contrast < dark_bg_min_contrast:
                 rejected["dark_bg"] += 1
                 log_reject(cx, cy, area, contrast, "dark_bg", f"contrast={contrast:.1f}<dark_min={dark_bg_min_contrast:.1f}")
@@ -376,6 +406,53 @@ def detect_dust_spots(image_path, collect_rejects=False):
             log_reject(cx, cy, area, contrast, "ratio", f"ratio={contrast/local_texture:.1f}<{MIN_CONTRAST_TEXTURE_RATIO}")
             continue
 
+        # Large-scale context texture: dust sits on smooth backgrounds (sky, plain walls).
+        # FPs in crowd/foliage scenes pass the small-scale ring texture check (they can sit
+        # on a locally smooth patch), but the 200px context around them is textured.
+        # Measure median of pre-computed local_std across a 200px radius circle, excluding
+        # the immediate ring already checked. Uses already-computed local_std (no extra blur).
+        ctx_r = 200
+        ctx_y1 = max(0, icy - ctx_r)
+        ctx_y2 = min(height, icy + ctx_r + 1)
+        ctx_x1 = max(0, icx - ctx_r)
+        ctx_x2 = min(width, icx + ctx_r + 1)
+        ctx_patch = local_std[ctx_y1:ctx_y2, ctx_x1:ctx_x2]
+        ctx_py, ctx_px = np.ogrid[ctx_y1 - icy:ctx_y2 - icy, ctx_x1 - icx:ctx_x2 - icx]
+        ctx_dist_sq = ctx_px * ctx_px + ctx_py * ctx_py
+        # Exclude the inner ring zone (already measured by local_texture check)
+        ctx_excl_r = ring_outer + TEXTURE_KERNEL // 2
+        ctx_mask = (ctx_dist_sq <= ctx_r ** 2) & (ctx_dist_sq > ctx_excl_r ** 2)
+        if ctx_mask.any():
+            context_texture = float(np.median(ctx_patch[ctx_mask]))
+        else:
+            context_texture = float(np.median(ctx_patch))
+        if context_texture > MAX_CONTEXT_TEXTURE:
+            rejected["context"] += 1
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=context(ctx={context_texture:.1f}>{MAX_CONTEXT_TEXTURE})")
+            log_reject(cx, cy, area, contrast, "context", f"ctx={context_texture:.1f}>{MAX_CONTEXT_TEXTURE}")
+            continue
+
+        # Soft voting: require MIN_DUST_VOTES out of 3 signals to clearly indicate dust.
+        # Each hard filter above has an "inner zone" (well below threshold) that votes YES.
+        # A spot that just barely passed multiple filters is suspicious — real dust sits
+        # comfortably within each filter's range, not on the boundary of several.
+        dust_votes = 0
+        if context_texture < SOFT_CONTEXT_VOTE_THRESHOLD:
+            dust_votes += 1   # scene is clearly smooth (sky, wall)
+        if local_texture < SOFT_TEXTURE_VOTE_THRESHOLD:
+            dust_votes += 1   # immediate surroundings are clearly smooth
+        if local_texture > 0 and contrast / local_texture > SOFT_RATIO_VOTE_THRESHOLD:
+            dust_votes += 1   # spot clearly stands out above local noise
+        if dust_votes < MIN_DUST_VOTES:
+            rejected["votes"] += 1
+            ratio_str = f"{contrast/local_texture:.1f}" if local_texture > 0 else "inf"
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=votes({dust_votes}/{MIN_DUST_VOTES} ctx={context_texture:.1f} tex={local_texture:.1f} ratio={ratio_str})")
+            log_reject(cx, cy, area, contrast, "votes",
+                       f"votes={dust_votes}/{MIN_DUST_VOTES} ctx={context_texture:.1f} tex={local_texture:.1f} ratio={ratio_str}")
+            continue
+
         # Reject colored features: dust matches the local color cast (low excess saturation).
         # Colored image features (leaves, symbols) are more saturated than their surroundings.
         component_sat = saturation[by:by+h, bx:bx+w]
@@ -392,7 +469,6 @@ def detect_dust_spots(image_path, collect_rejects=False):
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=color(exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION})")
             log_reject(cx, cy, area, contrast, "color", f"exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION}")
             continue
-
         spots.append({
             "cx": float(cx),
             "cy": float(cy),
@@ -401,7 +477,30 @@ def detect_dust_spots(image_path, collect_rejects=False):
             "contrast": contrast,
             "texture": local_texture,
             "excess_sat": excess_sat,
+            "spot_sat": spot_sat,
+            "context_texture": context_texture,
         })
+
+    # Isolation pass: reject spots in dense clusters (crowd/foliage FPs).
+    # Real film dust is sparse — a few spots per frame at most, spread across the image.
+    # FP clusters from crowd highlights or foliage can produce dozens of spots in a small area.
+    # For each accepted spot, count how many other accepted spots are within ISOLATION_RADIUS.
+    # If too many neighbors exist, the whole dense region is suspect — reject those spots.
+    if len(spots) > MAX_NEARBY_ACCEPTED:
+        iso_r_sq = ISOLATION_RADIUS ** 2
+        to_keep = []
+        for i, si in enumerate(spots):
+            neighbors = sum(
+                1 for j, sj in enumerate(spots)
+                if i != j and
+                (si["cx"] - sj["cx"]) ** 2 + (si["cy"] - sj["cy"]) ** 2 <= iso_r_sq
+            )
+            if neighbors <= MAX_NEARBY_ACCEPTED:
+                to_keep.append(si)
+        isolation_removed = len(spots) - len(to_keep)
+        if isolation_removed > 0:
+            rejected["isolation"] = isolation_removed
+            spots = to_keep
 
     print(f"  Rejected: {rejected} — accepted: {len(spots)}")
     if debug_rejects:
