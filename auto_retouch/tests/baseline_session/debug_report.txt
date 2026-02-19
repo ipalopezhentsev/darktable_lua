@@ -1,0 +1,215 @@
+DUST DETECTION DEBUG REPORT
+Generated: 2026-02-19 22:54:00
+Export dir: auto_retouch/tests/baseline_session
+Images processed: 36
+
+Detection constants at time of run:
+  NOISE_THRESHOLD_MULTIPLIER = 3.0
+  MIN_ABSOLUTE_THRESHOLD = 15.0
+  MIN_SPOT_AREA = 6
+  MAX_SPOT_AREA = 800
+  MIN_ASPECT_RATIO = 0.3
+  MIN_COMPACTNESS = 0.25
+  MIN_SOLIDITY = 0.5
+  MIN_CIRCULARITY = 0.15
+  MAX_LOCAL_TEXTURE_SMALL = 12.0
+  MAX_LOCAL_TEXTURE_LARGE = 8.0
+  MIN_CONTRAST_TEXTURE_RATIO = 5.5
+  MAX_BG_GRADIENT_RATIO = 0.09
+  MAX_EXCESS_SATURATION = 10
+  MAX_CONTEXT_TEXTURE = 9.0
+  LARGE_SPOT_AREA_THRESHOLD = 300
+  LARGE_SPOT_MIN_CONTRAST = 60
+  ISOLATION_RADIUS = 250
+  MAX_NEARBY_ACCEPTED = 3
+  SOFT_CONTEXT_VOTE_THRESHOLD = 7.0
+  SOFT_TEXTURE_VOTE_THRESHOLD = 8.0
+  SOFT_RATIO_VOTE_THRESHOLD = 8.25
+  MIN_DUST_VOTES = 2
+  REJECT_LOG_CONTRAST_MIN = 15
+
+================================================
+IMAGE: DSC_0002  (5726 x 3783 px)
+  Detected: 86 | Rejected shown: 5411 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0003  (5682 x 3703 px)
+  Detected: 0 | Rejected shown: 5953 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0004  (5708 x 3786 px)
+  Detected: 3 | Rejected shown: 4762 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0005  (5613 x 3773 px)
+  Detected: 0 | Rejected shown: 7862 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0006  (5551 x 3764 px)
+  Detected: 1 | Rejected shown: 2935 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0007  (5516 x 3769 px)
+  Detected: 2 | Rejected shown: 3546 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0008  (5609 x 3722 px)
+  Detected: 6 | Rejected shown: 17335 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0009  (5679 x 3731 px)
+  Detected: 21 | Rejected shown: 8095 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0010  (5668 x 3762 px)
+  Detected: 8 | Rejected shown: 9079 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0011  (5677 x 3724 px)
+  Detected: 14 | Rejected shown: 8215 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0012  (5694 x 3745 px)
+  Detected: 130 | Rejected shown: 7620 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0013  (5683 x 3742 px)
+  Detected: 32 | Rejected shown: 17168 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0014  (5761 x 3747 px)
+  Detected: 6 | Rejected shown: 9921 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0015  (5692 x 3769 px)
+  Detected: 35 | Rejected shown: 6890 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0016  (5664 x 3773 px)
+  Detected: 11 | Rejected shown: 9940 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0017  (5707 x 3730 px)
+  Detected: 0 | Rejected shown: 8810 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0018  (5701 x 3773 px)
+  Detected: 23 | Rejected shown: 25274 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0019  (5589 x 3754 px)
+  Detected: 0 | Rejected shown: 5889 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0020  (5721 x 3788 px)
+  Detected: 0 | Rejected shown: 16282 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0021  (5691 x 3767 px)
+  Detected: 72 | Rejected shown: 7994 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0022  (5693 x 3782 px)
+  Detected: 62 | Rejected shown: 24233 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0023  (5679 x 3780 px)
+  Detected: 34 | Rejected shown: 11357 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0024  (2670 x 4032 px)
+  Detected: 4 | Rejected shown: 2176 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0025  (5688 x 3779 px)
+  Detected: 72 | Rejected shown: 20009 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0026  (5617 x 3748 px)
+  Detected: 43 | Rejected shown: 7880 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0027  (5708 x 3772 px)
+  Detected: 52 | Rejected shown: 10828 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0028  (5662 x 3786 px)
+  Detected: 7 | Rejected shown: 21657 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0029  (5689 x 3776 px)
+  Detected: 82 | Rejected shown: 13227 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0030  (5702 x 3782 px)
+  Detected: 57 | Rejected shown: 28033 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0031  (5689 x 3779 px)
+  Detected: 18 | Rejected shown: 22919 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0032  (5676 x 3765 px)
+  Detected: 9 | Rejected shown: 9141 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0033  (5536 x 3780 px)
+  Detected: 78 | Rejected shown: 5237 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0034  (5696 x 3714 px)
+  Detected: 5 | Rejected shown: 8527 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0035  (5695 x 3757 px)
+  Detected: 15 | Rejected shown: 10244 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0036  (2655 x 4031 px)
+  Detected: 0 | Rejected shown: 4055 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+IMAGE: DSC_0037  (5515 x 3709 px)
+  Detected: 5 | Rejected shown: 11793 | FP marked: 0 | Missed added: 0
+  No user annotations.
+
+================================================
+SUMMARY
+  Total false positives across all images: 0
+  Total missed dust across all images: 0
+  Images with annotations: 0 / 36

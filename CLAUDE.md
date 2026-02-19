@@ -133,15 +133,24 @@ local safe_name = df.sanitize_filename(base_name)
 
 ## Known Bugs / TODOs
 
-- [ ] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
+For auto_crop feature:
+- [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
+- [ ] Introduce parallelizm/progress reporting in auto_crop like in auto_retouch
+- [ ] in auto_crop.lua, implement the same bugfix as in auto_retouch where it erroneously could delete previous history if there were some disabled steps in it. (check commit 7b444a3f77be05cf064097cef4e4eb4823ce7664)
+- [ ] Create spec/current algo description like for auto_retouch feature
+- [ ] create baseline and tests - any improvement should base on them and not deviate
+
+For auto_retouch feature:
+- [x] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
 - [ ] Add ability to not just put default brush shapes to xmp, but also correctly find spot for source of healing, around the detected particle
 - [ ] Add ability to heal sensor dust (larger, common between selected frames)
 - [ ] Add ability to heal thread(fiber)-like dust
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
-- [ ] Introduce parallelizm/progress reporting in auto_crop like in auto_retouch
-- [ ] in auto_crop.lua, implement the same bugfix as in auto_retouch where it erroneously could delete previous history if there were some disabled steps in it. (check commit 7b444a3f77be05cf064097cef4e4eb4823ce7664)
-- [ ] Create spec for the auto_crop feature
 - [x] debugging UI for auto_retouch
+- [x] create baseline and tests - any improvement should base on them and not deviate
+- [ ] add space/b going through images in debugging UI
+- [ ] scrolling thumbnails doesn't work, only via scrollbar
+- [ ] add params now hardcoded in py to DT UI, pass along with crops?
 
 ## Dependencies
 
