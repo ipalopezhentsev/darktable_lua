@@ -515,11 +515,40 @@ local function export_and_detect(images, save_visualization, debug_ui_mode)
   local log_file = export_dir .. "/processing.log"
   local vis_flag = save_visualization and "" or " --no-vis"
   local debug_flag = debug_ui_mode and " --debug-ui" or ""
-  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s 2>&1',
+  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s',
                                  python_script, vis_flag, debug_flag, file_args)
 
+  -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
+  if debug_ui_mode then
+    if dt.configuration.running_os == "windows" then
+      local bat_file = export_dir .. "/run_debug.bat"
+      local f = io.open(bat_file, "w")
+      if not f then
+        dt.print(_("Failed to write batch file for debug launch"))
+        return nil, nil, nil
+      end
+      f:write(command .. ' > "' .. log_file .. '" 2>&1\n')
+      f:close()
+      -- VBScript launcher: window style 0 = hidden, False = don't wait (fire and forget)
+      local vbs_file = export_dir .. "/run_debug.vbs"
+      local fv = io.open(vbs_file, "w")
+      if not fv then
+        dt.print(_("Failed to write vbs launcher for debug launch"))
+        return nil, nil, nil
+      end
+      fv:write('Set WshShell = CreateObject("WScript.Shell")\n')
+      fv:write('WshShell.Run Chr(34) & "' .. bat_file .. '" & Chr(34), 0, False\n')
+      fv:close()
+      os.execute('wscript "' .. vbs_file .. '"')
+    else
+      os.execute(command .. ' > "' .. log_file .. '" 2>&1 &')
+    end
+    dt.print(string.format(_("Debug UI launched. Log: %s"), log_file))
+    return nil, nil, nil
+  end
+
   local log_handle = io.open(log_file, "w")
-  local pipe = io.popen(command)
+  local pipe = io.popen(command .. " 2>&1")
   if not pipe then
     if log_handle then log_handle:close() end
     dt.print(_("Failed to launch Python process"))
@@ -545,13 +574,6 @@ local function export_and_detect(images, save_visualization, debug_ui_mode)
   end
 
   dt.print(string.format(_("Dust detection completed. Log: %s"), log_file))
-
-  if debug_ui_mode then
-    local report_path = export_dir .. "/debug_report.txt"
-    if df.check_if_file_exists(report_path) then
-      dt.print(string.format(_("Debug report saved: %s"), report_path))
-    end
-  end
 
   -- Parse results
   local results_file = export_dir .. "/dust_results.txt"
@@ -579,7 +601,6 @@ local function export_and_detect_dust_debug()
   end
 
   export_and_detect(images, true, true)
-  dt.print(_("Debug session complete"))
 end
 
 -- Full pipeline: export, detect, apply retouch to source images
