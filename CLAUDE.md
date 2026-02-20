@@ -152,6 +152,7 @@ For auto_retouch feature:
 - [ ] scrolling thumbnails doesn't work, only via scrollbar
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
 - [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass. But currently, second application to xmp does not add new shapes but replaces previous ones. Consider adding second retouch instance. 
+- [ ] I see points of different radiuses detected and correctly showed in debug dump but not debug ui and in xmps! there they are all equal (see DSC_0004)
 
 ## Dependencies
 

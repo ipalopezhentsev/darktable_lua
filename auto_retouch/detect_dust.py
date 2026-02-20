@@ -83,12 +83,22 @@ BRUSH_STATE_NORMAL = 1
 BRUSH_DELTA = 0.00001          # offset between 2 brush points (forms a "dot")
 BRUSH_CTRL_OFFSET = 0.000003   # bezier control handle offset from corner
 MIN_BRUSH_BORDER = 0.002306    # minimum brush radius in normalized coords
-HEAL_SOURCE_OFFSET_X = 0.01   # heal source offset from spot center
-HEAL_SOURCE_OFFSET_Y = -0.01
+HEAL_SOURCE_OFFSET_X = 0.01   # heal source offset from spot center (right)
+HEAL_SOURCE_OFFSET_Y = 0.01   # positive = down (darktable default is right+down)
 
 MASK_TYPE_BRUSH_CLONE = 72     # DT_MASKS_CLONE | DT_MASKS_BRUSH (8 | 64)
 MASK_TYPE_GROUP_CLONE = 12     # DT_MASKS_GROUP | DT_MASKS_CLONE (4 | 8)
 MASK_VERSION = 6               # DEVELOP_MASKS_VERSION
+
+# ---------------------------------------------------------------------------
+# Source detection constants
+# ---------------------------------------------------------------------------
+SOURCE_SEARCH_INNER_FACTOR = 2.5  # inner exclusion ring = radius * this (avoid the spot itself)
+SOURCE_SEARCH_MAX_RADIUS = 150    # cap search radius in pixels
+SOURCE_SEARCH_MIN_RADIUS = 25     # minimum search radius for tiny spots
+SOURCE_COLOR_WEIGHT = 1.0         # weight for Lab color distance in scoring
+SOURCE_TEXTURE_WEIGHT = 3.0       # weight for texture mismatch in scoring
+SOURCE_GRID_STEP = 8              # grid step for candidate sampling (pixels)
 
 RETOUCH_ALGO_HEAL = 2
 RETOUCH_MOD_VERSION = 3
@@ -113,7 +123,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
     """
     img = cv2.imread(str(image_path))
     if img is None:
-        return None, [], f"Failed to load image: {image_path}"
+        return None, [], f"Failed to load image: {image_path}", None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -509,7 +519,119 @@ def detect_dust_spots(image_path, collect_rejects=False):
             print(msg)
         if len(debug_rejects) > 20:
             print(f"    ... and {len(debug_rejects) - 20} more")
-    return spots, rejected_candidates, None
+
+    # Find optimal healing sources for each spot
+    if spots:
+        img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+        for spot in spots:
+            src_cx, src_cy = find_healing_source(
+                spot["cx"], spot["cy"], spot["radius_px"],
+                img_lab, local_std, spots, width, height)
+            spot["src_cx"] = src_cx
+            spot["src_cy"] = src_cy
+
+    return spots, rejected_candidates, None, local_std
+
+
+# ===================================================================
+# Source point detection
+# ===================================================================
+
+def find_healing_source(cx, cy, radius_px, img_lab, local_std, all_spots, width, height):
+    """Find the best healing source position for a dust spot at (cx, cy).
+
+    Searches the area around the spot for a region with similar color and
+    texture to the spot's surroundings, avoiding other detected dust spots.
+
+    Returns (src_cx, src_cy) in pixel coordinates.
+    """
+    icx = max(0, min(int(round(cx)), width - 1))
+    icy = max(0, min(int(round(cy)), height - 1))
+
+    # Measure reference color + texture in a ring around the spot
+    # (same ring used by the texture filter — avoids sampling inside the bright dust)
+    ring_inner = max(int(radius_px * 1.5), 2)
+    ring_outer = max(int(radius_px * 3), ring_inner + 5)
+    y1 = max(0, icy - ring_outer)
+    y2 = min(height, icy + ring_outer + 1)
+    x1 = max(0, icx - ring_outer)
+    x2 = min(width, icx + ring_outer + 1)
+    py, px = np.ogrid[y1 - icy:y2 - icy, x1 - icx:x2 - icx]
+    dist_sq = px * px + py * py
+    ring_mask = (dist_sq >= ring_inner ** 2) & (dist_sq <= ring_outer ** 2)
+    patch_lab = img_lab[y1:y2, x1:x2]
+    if ring_mask.any():
+        ref_L = float(np.mean(patch_lab[:, :, 0][ring_mask]))
+        ref_a = float(np.mean(patch_lab[:, :, 1][ring_mask]))
+        ref_b = float(np.mean(patch_lab[:, :, 2][ring_mask]))
+        ref_texture = float(np.median(local_std[y1:y2, x1:x2][ring_mask]))
+    else:
+        ref_L = float(img_lab[icy, icx, 0])
+        ref_a = float(img_lab[icy, icx, 1])
+        ref_b = float(img_lab[icy, icx, 2])
+        ref_texture = float(local_std[icy, icx])
+
+    # Annulus search bounds
+    search_inner = max(int(radius_px * SOURCE_SEARCH_INNER_FACTOR),
+                       SOURCE_SEARCH_MIN_RADIUS // 2)
+    search_outer = max(
+        min(int(radius_px * 10), SOURCE_SEARCH_MAX_RADIUS),
+        SOURCE_SEARCH_MIN_RADIUS,
+    )
+
+    # Default fallback: same fixed offset as before
+    dim = max(width, height)
+    default_src_x = min(width - 1, max(0, cx + HEAL_SOURCE_OFFSET_X * dim))
+    default_src_y = min(height - 1, max(0, cy + HEAL_SOURCE_OFFSET_Y * dim))
+
+    # Forbidden zones: other accepted dust spots (avoid placing source on another dust spot)
+    forbidden = [
+        (int(round(s["cx"])), int(round(s["cy"])), max(int(s["radius_px"]) * 2, 4))
+        for s in all_spots
+        if not (abs(s["cx"] - cx) < 0.5 and abs(s["cy"] - cy) < 0.5)
+    ]
+
+    best_score = float("inf")
+    best_src = (default_src_x, default_src_y)
+
+    step = max(SOURCE_GRID_STEP, max(int(radius_px), 2))
+
+    for sy in range(max(0, icy - search_outer), min(height, icy + search_outer + 1), step):
+        for sx in range(max(0, icx - search_outer), min(width, icx + search_outer + 1), step):
+            dx = sx - icx
+            dy = sy - icy
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist < search_inner or dist > search_outer:
+                continue
+
+            # Skip if overlapping another dust spot
+            skip = False
+            for fx, fy, fr in forbidden:
+                if math.hypot(sx - fx, sy - fy) < fr:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            # Color score (Lab ΔE-like distance)
+            cand_L = float(img_lab[sy, sx, 0])
+            cand_a = float(img_lab[sy, sx, 1])
+            cand_b = float(img_lab[sy, sx, 2])
+            color_dist = math.sqrt(
+                (cand_L - ref_L) ** 2 +
+                (cand_a - ref_a) ** 2 +
+                (cand_b - ref_b) ** 2
+            )
+
+            # Texture score
+            texture_dist = abs(float(local_std[sy, sx]) - ref_texture)
+
+            score = SOURCE_COLOR_WEIGHT * color_dist + SOURCE_TEXTURE_WEIGHT * texture_dist
+            if score < best_score:
+                best_score = score
+                best_src = (float(sx), float(sy))
+
+    return best_src
 
 
 # ===================================================================
@@ -717,9 +839,16 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
         norm_radius = spot["radius_px"] / max(image_width, image_height)
         border = max(MIN_BRUSH_BORDER, norm_radius * 2.0)
 
-        # Heal source: offset from spot center in original space
-        src_x = max(0.0, min(1.0, norm_cx + HEAL_SOURCE_OFFSET_X))
-        src_y = max(0.0, min(1.0, norm_cy + HEAL_SOURCE_OFFSET_Y))
+        # Heal source: use auto-detected optimal position if available, else fixed offset
+        if "src_cx" in spot and "src_cy" in spot:
+            src_norm_x = spot["src_cx"] / image_width
+            src_norm_y = spot["src_cy"] / image_height
+            src_x, src_y = _export_to_original(src_norm_x, src_norm_y, flip, crop)
+            src_x = max(0.0, min(1.0, src_x))
+            src_y = max(0.0, min(1.0, src_y))
+        else:
+            src_x = max(0.0, min(1.0, norm_cx + HEAL_SOURCE_OFFSET_X))
+            src_y = max(0.0, min(1.0, norm_cy + HEAL_SOURCE_OFFSET_Y))
 
         mask_id = id_gen.next_id()
         brush_ids.append(mask_id)
@@ -891,7 +1020,7 @@ def process_one_image(args):
             print(f"Processing: {filename}")
             print(f"{'='*60}")
 
-            spots, rejected_candidates, error = detect_dust_spots(image_path, collect_rejects)
+            spots, rejected_candidates, error, local_std = detect_dust_spots(image_path, collect_rejects)
             if error:
                 print(f"  ERROR: {error}")
                 return (filename, None, [], (0, 0), error, None, buf.getvalue())
@@ -908,12 +1037,24 @@ def process_one_image(args):
                 print(f"  Capping from {len(spots)} to {MAX_SPOTS} strongest spots")
                 spots = spots[:MAX_SPOTS]
 
+            # Find optimal healing source for each spot
+            if spots and local_std is not None:
+                img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+                for spot in spots:
+                    src_cx, src_cy = find_healing_source(
+                        spot["cx"], spot["cy"], spot["radius_px"],
+                        img_lab, local_std, spots, width, height)
+                    spot["src_cx"] = src_cx
+                    spot["src_cy"] = src_cy
+
             for i, spot in enumerate(spots):
+                src_str = (f" src=({spot['src_cx']:.0f},{spot['src_cy']:.0f})"
+                           if "src_cx" in spot else "")
                 print(
                     f"    Spot {i}: center=({spot['cx']:.1f}, {spot['cy']:.1f}) "
                     f"radius={spot['radius_px']:.1f}px area={spot['area']}px "
                     f"contrast={spot['contrast']:.1f} texture={spot['texture']:.1f} "
-                    f"exSat={spot['excess_sat']:.1f}"
+                    f"exSat={spot['excess_sat']:.1f}{src_str}"
                 )
 
             if save_vis and spots:

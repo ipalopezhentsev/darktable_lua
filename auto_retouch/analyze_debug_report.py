@@ -81,7 +81,7 @@ def load_report(debug_dir):
             if m:
                 stem = m.group(1)
                 current = {"stem": stem, "width": int(m.group(2)), "height": int(m.group(3)),
-                           "detected": 0, "fps": [], "missed": []}
+                           "detected": 0, "fps": [], "missed": [], "src_repositions": []}
                 images[stem] = current
                 mode = None
                 continue
@@ -106,6 +106,9 @@ def load_report(debug_dir):
             if "MISSED DUST: none" in line:
                 mode = None
                 continue
+            if "SOURCE REPOSITIONS" in line:
+                mode = "src_repos"
+                continue
             if "REJECTED CANDIDATES" in line:
                 mode = "rejected"
                 continue
@@ -120,6 +123,16 @@ def load_report(debug_dir):
                 m = re.match(r"\s+cx=(\d+)\s+cy=(\d+)", line)
                 if m:
                     current["missed"].append({"cx": int(m.group(1)), "cy": int(m.group(2))})
+                elif line.strip() == "":
+                    mode = None
+            elif mode == "src_repos":
+                m = re.match(r"\s+Spot #(\d+): src=\((\d+),\s*(\d+)\)", line)
+                if m:
+                    current["src_repositions"].append({
+                        "spot_idx": int(m.group(1)),
+                        "src_cx": int(m.group(2)),
+                        "src_cy": int(m.group(3))
+                    })
                 elif line.strip() == "":
                     mode = None
 
@@ -205,16 +218,19 @@ def summarize(debug_dir):
 
     total_fps = 0
     total_missed = 0
-    print(f"\n{'Image':<15}  {'Detected':>8}  {'FP':>4}  {'Missed':>6}")
-    print("-" * 40)
+    total_src_repos = 0
+    print(f"\n{'Image':<15}  {'Detected':>8}  {'FP':>4}  {'Missed':>6}  {'SrcRepos':>8}")
+    print("-" * 50)
     for stem, img in images.items():
         fp_count = len(img["fps"])
         miss_count = len(img["missed"])
+        src_repos_count = len(img.get("src_repositions", []))
         total_fps += fp_count
         total_missed += miss_count
-        print(f"{stem:<15}  {img['detected']:>8}  {fp_count:>4}  {miss_count:>6}")
-    print("-" * 40)
-    print(f"{'TOTAL':<15}  {'':>8}  {total_fps:>4}  {total_missed:>6}")
+        total_src_repos += src_repos_count
+        print(f"{stem:<15}  {img['detected']:>8}  {fp_count:>4}  {miss_count:>6}  {src_repos_count:>8}")
+    print("-" * 50)
+    print(f"{'TOTAL':<15}  {'':>8}  {total_fps:>4}  {total_missed:>6}  {total_src_repos:>8}")
 
     if data:
         stats = _filter_stats(data)
@@ -266,6 +282,12 @@ def summarize(debug_dir):
                                 reason = best["reason"]
                                 detail = f"  [{best['detail']}]  dist={dist:.0f}px"
                 print(f"  cx={miss['cx']} cy={miss['cy']}  → {reason}{detail}")
+
+        src_repos = img.get("src_repositions", [])
+        if src_repos:
+            print(f"\n{stem} source repositions (user-corrected heal sources):")
+            for sr in src_repos:
+                print(f"  Spot #{sr['spot_idx']}: src=({sr['src_cx']}, {sr['src_cy']})")
 
 
 # ---------------------------------------------------------------------------

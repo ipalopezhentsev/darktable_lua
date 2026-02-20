@@ -39,7 +39,7 @@ def _worker(image_path):
         return (stem, None, [], (0, 0), f"Failed to load: {img_path}", None)
     height, width = img.shape[:2]
 
-    spots, rejected, error = detect_dust.detect_dust_spots(img_path, collect_rejects=True)
+    spots, rejected, error, local_std = detect_dust.detect_dust_spots(img_path, collect_rejects=True)
     return (stem, spots, rejected, (width, height), error, None)
 
 
@@ -71,7 +71,7 @@ def main():
     for stem in image_paths_by_stem:
         ann_path = BASELINE_DIR / f"{stem}_annotations.json"
         if not ann_path.exists():
-            ann = {"stem": stem, "false_positives": [], "missed_dust": []}
+            ann = {"stem": stem, "false_positives": [], "missed_dust": [], "source_overrides": []}
             with open(ann_path, "w") as f:
                 json.dump(ann, f, indent=2)
 

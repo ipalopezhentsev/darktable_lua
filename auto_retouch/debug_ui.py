@@ -69,7 +69,12 @@ class DebugUI:
         self.annotations = {}
         for img in self.images:
             stem = img["stem"]
-            self.annotations[stem] = {"false_positives": set(), "missed_dust": []}
+            self.annotations[stem] = {
+                "false_positives": set(),
+                "missed_dust": [],
+                "source_overrides": {},  # {spot_idx: (src_cx, src_cy)}
+                "source_mismatches": [],  # list from quality test diff sessions
+            }
 
         # Load any previously saved annotations
         self._load_existing_annotations()
@@ -87,6 +92,7 @@ class DebugUI:
         self.selected_detected = set()   # set of int (detected spot indices)
         self.selected_rejected = set()   # set of int (rejected candidate indices)
         self.selected_missed = set()     # set of int (indices into missed_dust list)
+        self.selected_source = None      # int or None: spot index whose source is selected
 
         # Visibility
         self.hide_markers = False
@@ -168,6 +174,8 @@ class DebugUI:
             ("✕", "#ff3333", "False positive"),
             ("●", "#ff8800", "Rejected candidate"),
             ("✚", "#00ffff", "Missed dust (added)"),
+            ("□", "#00cc44", "Heal source (- - line)"),
+            ("□", "#ff4444", "Baseline source (mismatch)"),
         ]:
             row = tk.Frame(left, bg="#2b2b2b")
             row.pack(anchor="w", padx=6)
@@ -359,6 +367,7 @@ class DebugUI:
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = set()
+        self.selected_source = None
         self.remove_missed_btn.config(state=tk.DISABLED)
         self._set_info_text("No marker selected.\n"
                             "Click a marker or Ctrl+Click to add missed dust.")
@@ -409,8 +418,19 @@ class DebugUI:
 
         self._redraw_markers()
 
+    def _get_source(self, stem, spot_idx, spot):
+        """Return (src_cx, src_cy) for a spot — user override first, then auto-detected."""
+        overrides = self.annotations[stem].get("source_overrides", {})
+        if spot_idx in overrides:
+            return overrides[spot_idx]
+        src_cx = spot.get("src_cx")
+        src_cy = spot.get("src_cy")
+        if src_cx is not None and src_cy is not None:
+            return (src_cx, src_cy)
+        return None
+
     def _redraw_markers(self):
-        self.canvas.delete("detected", "rejected", "fp", "missed", "sel", "rubberband")
+        self.canvas.delete("detected", "rejected", "fp", "missed", "source", "sel", "rubberband")
         if self.pil_image is None or self.hide_markers:
             return
 
@@ -436,6 +456,7 @@ class DebugUI:
             rad = max(5, spot["radius_px"] * self.zoom)
             is_fp = i in ann["false_positives"]
             is_sel = i in self.selected_detected
+            is_src_sel = (self.selected_source == i)
             color = "#00cc44"
             lw = 2
             if is_sel:
@@ -450,6 +471,42 @@ class DebugUI:
                                         fill="#ff3333", width=2, tags="fp")
                 self.canvas.create_line(cx + r2, cy - r2, cx - r2, cy + r2,
                                         fill="#ff3333", width=2, tags="fp")
+            # Source marker: dashed line from spot to source, small square at source
+            src = self._get_source(stem, i, spot)
+            if src is not None:
+                src_cx, src_cy = src
+                sx, sy = image_to_canvas(src_cx, src_cy,
+                                         self.offset_x, self.offset_y, self.zoom)
+                src_color = "#ffff00" if (is_sel or is_src_sel) else "#00cc44"
+                sq = max(3, int(2 * self.zoom))
+                self.canvas.create_line(cx, cy, sx, sy,
+                                        fill=src_color, width=1, dash=(4, 3),
+                                        tags="source")
+                self.canvas.create_rectangle(sx - sq, sy - sq, sx + sq, sy + sq,
+                                             outline=src_color,
+                                             width=2 if is_src_sel else 1,
+                                             tags="source")
+
+                # If source mismatch exists, also draw baseline source in red
+                for mismatch in ann.get("source_mismatches", []):
+                    if mismatch.get("spot_idx") == i:
+                        baseline_src_cx = mismatch.get("baseline_src_cx")
+                        baseline_src_cy = mismatch.get("baseline_src_cy")
+                        if baseline_src_cx is not None and baseline_src_cy is not None:
+                            bsx, bsy = image_to_canvas(baseline_src_cx, baseline_src_cy,
+                                                       self.offset_x, self.offset_y, self.zoom)
+                            # Draw baseline source in red with dashed line
+                            self.canvas.create_line(cx, cy, bsx, bsy,
+                                                   fill="#ff4444", width=1, dash=(2, 4),
+                                                   tags="source")
+                            self.canvas.create_rectangle(bsx - sq, bsy - sq, bsx + sq, bsy + sq,
+                                                         outline="#ff4444", width=1,
+                                                         tags="source")
+                            # Draw line connecting baseline and new source
+                            self.canvas.create_line(bsx, bsy, sx, sy,
+                                                   fill="#ff8800", width=1, dash=(1, 2),
+                                                   tags="source")
+                        break
 
         # Missed dust markers (cyan +)
         for i, md in enumerate(ann["missed_dust"]):
@@ -636,13 +693,25 @@ class DebugUI:
         self._redraw()
 
     def _do_add_missed(self, canvas_x, canvas_y):
-        """Ctrl+Click: immediately add a missed dust marker."""
+        """Ctrl+Click: reposition selected source, or add a missed dust marker."""
         ix, iy = canvas_to_image(canvas_x, canvas_y,
                                  self.offset_x, self.offset_y, self.zoom)
         img_dict = self.images[self.current_idx]
         iw, ih = img_dict["width"], img_dict["height"]
         ix = max(0, min(iw, ix))
         iy = max(0, min(ih, iy))
+        stem = img_dict["stem"]
+
+        # If a source is selected, reposition it
+        if self.selected_source is not None:
+            self.annotations[stem].setdefault("source_overrides", {})[self.selected_source] = (
+                float(ix), float(iy))
+            self._auto_save(stem)
+            self._redraw_markers()
+            self._set_info_text(
+                f"Source for Spot #{self.selected_source} moved to ({ix:.0f}, {iy:.0f})\n"
+                f"Ctrl+Click again to reposition further.")
+            return
 
         # If near existing marker, treat as normal click instead
         nearest = self._find_nearest_marker(canvas_x, canvas_y)
@@ -650,12 +719,12 @@ class DebugUI:
             self._handle_click(canvas_x, canvas_y)
             return
 
-        stem = img_dict["stem"]
         self.annotations[stem]["missed_dust"].append({"cx": ix, "cy": iy})
         new_idx = len(self.annotations[stem]["missed_dust"]) - 1
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = {new_idx}
+        self.selected_source = None
         self.remove_missed_btn.config(state=tk.NORMAL)
         self._auto_save(stem)
         self._redraw_markers()
@@ -732,9 +801,13 @@ class DebugUI:
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = set()
+        self.selected_source = None
 
         if kind == "detected":
             self.selected_detected = {idx}
+            self.remove_missed_btn.config(state=tk.DISABLED)
+        elif kind == "source":
+            self.selected_source = idx
             self.remove_missed_btn.config(state=tk.DISABLED)
         elif kind == "rejected":
             self.selected_rejected = {idx}
@@ -774,6 +847,16 @@ class DebugUI:
                 best = ("detected", i)
                 best_dist = d
 
+        # Source markers (check before rejected so they're easy to click)
+        for i, spot in enumerate(img_dict.get("detected") or []):
+            src = self._get_source(stem, i, spot)
+            if src is not None:
+                src_cx, src_cy = src
+                d = math.hypot(src_cx - ix, src_cy - iy)
+                if d < hit_r and d < best_dist:
+                    best = ("source", i)
+                    best_dist = d
+
         # Rejected (only when visible)
         if self.show_rejected_var.get():
             for i, r in enumerate(img_dict.get("rejected") or []):
@@ -794,18 +877,35 @@ class DebugUI:
         ann = self.annotations[stem]
 
         lines = []
-        if self.selected_detected:
+        if self.selected_source is not None:
+            i = self.selected_source
+            spots = img_dict.get("detected") or []
+            if i < len(spots):
+                s = spots[i]
+                src = self._get_source(stem, i, s)
+                overrides = ann.get("source_overrides", {})
+                src_kind = "user set" if i in overrides else "auto-detected"
+                src_str = f"({src[0]:.0f}, {src[1]:.0f})" if src else "none"
+                lines.append(
+                    f"Source for Spot #{i}: {src_kind}  src={src_str}\n"
+                    f"  Spot at: ({s['cx']:.0f}, {s['cy']:.0f})\n"
+                    f"  Ctrl+Click anywhere to reposition.\n"
+                    f"  Click elsewhere to deselect.")
+        elif self.selected_detected:
             for i in sorted(self.selected_detected):
                 spots = img_dict.get("detected") or []
                 if i < len(spots):
                     s = spots[i]
                     is_fp = i in ann["false_positives"]
                     status = "FALSE POSITIVE (marked)" if is_fp else "accepted"
+                    src = self._get_source(stem, i, s)
+                    src_str = (f"\n  src=({src[0]:.0f}, {src[1]:.0f})" if src else "")
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
                         f"radius={s['radius_px']:.1f}px  area={s['area']}\n"
                         f"  contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
-                        f"excess_sat={s['excess_sat']:.1f}  status={status}")
+                        f"excess_sat={s['excess_sat']:.1f}  status={status}"
+                        f"{src_str}")
             if len(self.selected_detected) > 1:
                 lines = [f"{len(self.selected_detected)} spots selected"] + lines[:3]
         elif self.selected_rejected:
@@ -908,6 +1008,7 @@ class DebugUI:
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = set()
+        self.selected_source = None
         self.remove_missed_btn.config(state=tk.DISABLED)
         self._set_info_text("No marker selected.\n"
                             "Click a marker or Ctrl+Click to add missed dust.")
@@ -998,10 +1099,17 @@ class DebugUI:
             if idx < len(detected):
                 fp_list.append(detected[idx])
 
+        # Serialize source_overrides as list of {spot_idx, src_cx, src_cy}
+        src_overrides_list = [
+            {"spot_idx": k, "src_cx": float(v[0]), "src_cy": float(v[1])}
+            for k, v in sorted(ann.get("source_overrides", {}).items())
+        ]
+
         data = {
             "stem": stem,
             "false_positives": fp_list,
             "missed_dust": ann["missed_dust"],
+            "source_overrides": src_overrides_list,
         }
         ann_path = os.path.join(self.export_dir, f"{stem}_annotations.json")
         with open(ann_path, "w") as f:
@@ -1030,6 +1138,17 @@ class DebugUI:
                         break
             self.annotations[stem]["false_positives"] = fp_indices
             self.annotations[stem]["missed_dust"] = data.get("missed_dust", [])
+            # Restore source overrides: list of {spot_idx, src_cx, src_cy}
+            src_overrides = {}
+            for entry in data.get("source_overrides", []):
+                try:
+                    src_overrides[int(entry["spot_idx"])] = (
+                        float(entry["src_cx"]), float(entry["src_cy"]))
+                except (KeyError, ValueError, TypeError):
+                    pass
+            self.annotations[stem]["source_overrides"] = src_overrides
+            # Load source mismatches from quality test diff sessions
+            self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
 
     # ------------------------------------------------------------------
     # Report generation & close
@@ -1072,6 +1191,7 @@ class DebugUI:
 
         total_fp = 0
         total_missed = 0
+        total_src_repositions = 0
         images_with_annotations = 0
 
         for img_dict in self.images:
@@ -1081,10 +1201,12 @@ class DebugUI:
             rejected_list = img_dict.get("rejected") or []
             fp_indices = ann["false_positives"]
             missed_list = ann["missed_dust"]
+            src_overrides = ann.get("source_overrides", {})
 
             total_fp += len(fp_indices)
             total_missed += len(missed_list)
-            has_annotations = bool(fp_indices or missed_list)
+            total_src_repositions += len(src_overrides)
+            has_annotations = bool(fp_indices or missed_list or src_overrides)
             if has_annotations:
                 images_with_annotations += 1
 
@@ -1124,6 +1246,15 @@ class DebugUI:
             else:
                 lines.append("  MISSED DUST: none")
 
+            # Source repositions
+            src_overrides = ann.get("source_overrides", {})
+            if src_overrides:
+                lines.append("")
+                lines.append("  SOURCE REPOSITIONS (user-adjusted heal sources):")
+                for spot_idx in sorted(src_overrides.keys()):
+                    src_cx, src_cy = src_overrides[spot_idx]
+                    lines.append(f"    Spot #{spot_idx}: src=({src_cx:.0f}, {src_cy:.0f})")
+
             # Rejected candidates (for context)
             if rejected_list:
                 lines.append("")
@@ -1142,6 +1273,7 @@ class DebugUI:
         lines.append("SUMMARY")
         lines.append(f"  Total false positives across all images: {total_fp}")
         lines.append(f"  Total missed dust across all images: {total_missed}")
+        lines.append(f"  Total source repositions across all images: {total_src_repositions}")
         lines.append(f"  Images with annotations: {images_with_annotations} / {len(self.images)}")
         lines.append("")
 
