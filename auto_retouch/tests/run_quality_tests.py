@@ -59,6 +59,7 @@ PASS_NEW_RATIO = 0.25      # new spots ≤ 25% of baseline count → acceptable
 WARN_NEW_RATIO = 0.50      # new spots ≤ 50% → warn
 MAX_SOURCE_DIST = 200      # px: warn if source is farther than this from spot
 SOURCE_MISMATCH_RADIUS = 20  # px: baseline/new source differ by more than this → mismatch
+RADIUS_MISMATCH_THRESHOLD = 3.0  # px: brush_radius_px difference to flag as mismatch
 
 
 def _worker(image_path):
@@ -82,10 +83,11 @@ def _dist(a, b):
 def _match_spots(baseline_spots, new_spots, radius=MATCH_RADIUS):
     """Greedy nearest-neighbour matching within radius.
 
-    Returns (matched_pairs, missing_baseline, new_fps, source_issues, source_mismatches).
+    Returns (matched_pairs, missing_baseline, new_fps, source_issues, source_mismatches, radius_mismatches).
     matched_pairs: list of (baseline_idx, new_idx, baseline_spot, new_spot)
     source_issues: list of (new_idx, issue_description)
     source_mismatches: list of (new_idx, baseline_src, new_src, distance)
+    radius_mismatches: list of (new_idx, baseline_brush_radius_px, new_brush_radius_px, diff)
     """
     used_new = set()
     matched_pairs = []
@@ -136,15 +138,28 @@ def _match_spots(baseline_spots, new_spots, radius=MATCH_RADIUS):
                     src_diff
                 ))
 
-    return matched_pairs, missing, new_fps, source_issues, source_mismatches
+    # Compare brush_radius_px for matched spots
+    radius_mismatches = []
+    for bi, ni, bs, ns in matched_pairs:
+        if "brush_radius_px" in bs and "brush_radius_px" in ns:
+            radius_diff = abs(bs["brush_radius_px"] - ns["brush_radius_px"])
+            if radius_diff > RADIUS_MISMATCH_THRESHOLD:
+                radius_mismatches.append((
+                    ni,
+                    bs["brush_radius_px"],
+                    ns["brush_radius_px"],
+                    radius_diff
+                ))
+
+    return matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches
 
 
-def _verdict(baseline_count, new_count, matched, missing, new_fps, source_issues, source_mismatches):
+def _verdict(baseline_count, new_count, matched, missing, new_fps, source_issues, source_mismatches, radius_mismatches):
     match_rate = (len(matched) / baseline_count) if baseline_count > 0 else 1.0
     new_ratio = (len(new_fps) / baseline_count) if baseline_count > 0 else 0.0
 
-    # Source issues/mismatches are a warning, not a failure
-    has_source_problems = len(source_issues) > 0 or len(source_mismatches) > 0
+    # Source issues/mismatches and radius mismatches are a warning, not a failure
+    has_source_problems = len(source_issues) > 0 or len(source_mismatches) > 0 or len(radius_mismatches) > 0
 
     if match_rate >= PASS_MATCH_RATE and new_ratio <= PASS_NEW_RATIO:
         return ("WARN" if has_source_problems else "PASS"), match_rate, new_ratio
@@ -174,7 +189,7 @@ def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
     detect_dust.write_debug_spots_json(raw_results, image_paths_by_stem, str(session_dir))
 
     # Write annotations.json with pre-populated diff markers
-    for stem, (missing, new_fps, source_mismatches) in diff_by_stem.items():
+    for stem, (missing, new_fps, source_mismatches, radius_mismatches) in diff_by_stem.items():
         ann = {
             "stem": stem,
             # New spots in new run (not in baseline) → show as false positives (red X)
@@ -192,6 +207,16 @@ def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
                     "distance": dist
                 }
                 for ni, baseline_src, new_src, dist in source_mismatches
+            ],
+            # Radius mismatches: store baseline radius for each spot with changed brush size
+            "radius_mismatches": [
+                {
+                    "spot_idx": ni,
+                    "baseline_brush_radius_px": baseline_r,
+                    "new_brush_radius_px": new_r,
+                    "radius_diff": diff
+                }
+                for ni, baseline_r, new_r, diff in radius_mismatches
             ],
         }
         ann_path = session_dir / f"{stem}_annotations.json"
@@ -238,14 +263,14 @@ def main():
         baseline_entry = baseline.get(stem)
 
         if error:
-            verdicts.append(("FAIL", stem, 0, 0, [], [], [], [], [], error))
-            diff_by_stem[stem] = ([], [], [])
+            verdicts.append(("FAIL", stem, 0, 0, [], [], [], [], [], [], error))
+            diff_by_stem[stem] = ([], [], [], [])
             continue
 
         if baseline_entry is None:
-            verdicts.append(("WARN", stem, len(new_spots), 0, [], [], new_spots, [], [],
+            verdicts.append(("WARN", stem, len(new_spots), 0, [], [], new_spots, [], [], [],
                              "not in baseline"))
-            diff_by_stem[stem] = ([], new_spots, [])
+            diff_by_stem[stem] = ([], new_spots, [], [])
             continue
 
         baseline_spots = baseline_entry.get("detected", [])
@@ -254,23 +279,25 @@ def main():
         if baseline_spots and "src_cx" in baseline_spots[0]:
             baseline_has_sources = True
 
-        matched_pairs, missing, new_fps, source_issues, source_mismatches = _match_spots(baseline_spots, new_spots)
+        matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches = _match_spots(baseline_spots, new_spots)
         verdict, match_rate, new_ratio = _verdict(
-            len(baseline_spots), len(new_spots), matched_pairs, missing, new_fps, source_issues, source_mismatches)
+            len(baseline_spots), len(new_spots), matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches)
         verdicts.append((verdict, stem, len(new_spots), len(baseline_spots),
-                         matched_pairs, missing, new_fps, source_issues, source_mismatches, None))
-        diff_by_stem[stem] = (missing, new_fps, source_mismatches)
+                         matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches, None))
+        diff_by_stem[stem] = (missing, new_fps, source_mismatches, radius_mismatches)
 
     # --- Print summary ---
     counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
     total_source_issues = 0
     total_source_mismatches = 0
+    total_radius_mismatches = 0
 
     for entry in verdicts:
-        verdict, stem, new_count, baseline_count, matched, missing, new_fps, source_issues, source_mismatches, note = entry
+        verdict, stem, new_count, baseline_count, matched, missing, new_fps, source_issues, source_mismatches, radius_mismatches, note = entry
         counts[verdict] += 1
         total_source_issues += len(source_issues)
         total_source_mismatches += len(source_mismatches)
+        total_radius_mismatches += len(radius_mismatches)
 
         match_count = len(matched)
         match_rate_str = (f"  match={match_count}/{baseline_count}"
@@ -279,9 +306,10 @@ def main():
         fp_str = f"  new_fps={len(new_fps)}" if new_fps else ""
         src_str = f"  src_issues={len(source_issues)}" if source_issues else ""
         mismatch_str = f"  src_mismatch={len(source_mismatches)}" if source_mismatches else ""
+        radius_str = f"  radius_mismatch={len(radius_mismatches)}" if radius_mismatches else ""
         note_str = f"  ({note})" if note else ""
         print(f"[{verdict}] {stem:<12} baseline={baseline_count:>3}  new={new_count:>3}"
-              f"{match_rate_str}{miss_str}{fp_str}{src_str}{mismatch_str}{note_str}")
+              f"{match_rate_str}{miss_str}{fp_str}{src_str}{mismatch_str}{radius_str}{note_str}")
 
     print(f"\nOverall: {counts['PASS']} PASS, {counts['WARN']} WARN, {counts['FAIL']} FAIL")
 
@@ -297,6 +325,11 @@ def main():
         print(f"\n⚠ WARNING: {total_source_mismatches} source position mismatch(es) detected.")
         print(f"   Source positions differ from baseline by more than {SOURCE_MISMATCH_RADIUS}px.")
         print("   Review diff session for details.")
+
+    if total_radius_mismatches > 0:
+        print(f"\n⚠ WARNING: {total_radius_mismatches} brush radius mismatch(es) detected.")
+        print(f"   brush_radius_px differs from baseline by more than {RADIUS_MISMATCH_THRESHOLD}px.")
+        print("   Review diff session for details (shown as dashed orange circles in UI).")
 
     # --- Write diff session ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
