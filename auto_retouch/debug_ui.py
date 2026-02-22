@@ -21,6 +21,7 @@ import datetime
 from pathlib import Path
 
 import tkinter as tk
+import tkinter.ttk as ttk
 from tkinter import messagebox
 
 from PIL import Image, ImageTk
@@ -111,6 +112,9 @@ class DebugUI:
         # Track whether we're at fit zoom so resize can re-fit automatically
         self.at_fit_zoom = True
 
+        self.spot_list_data = {}      # iid -> {kind, idx, sort_* values}
+        self._syncing_selection = False
+
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -133,7 +137,7 @@ class DebugUI:
         # ---- LEFT PANEL ----
         left = tk.Frame(paned, width=220, bg="#2b2b2b")
         left.pack_propagate(False)
-        paned.add(left, minsize=160)
+        paned.add(left, minsize=160, stretch="never")
 
         tk.Label(left, text="Images:", bg="#2b2b2b", fg="white",
                  font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
@@ -214,9 +218,15 @@ class DebugUI:
         ), bg="#2b2b2b", fg="white", font=("Courier", 8),
                  justify=tk.LEFT).pack(anchor="w", padx=6, pady=(8, 4))
 
-        # ---- RIGHT PANEL ----
+        # ---- CENTER PANEL (canvas) ----
         right = tk.Frame(paned, bg="#1e1e1e")
-        paned.add(right)
+        paned.add(right, stretch="always")
+
+        # ---- SPOT LIST PANEL ----
+        spot_pane = tk.Frame(paned, width=230, bg="#2b2b2b")
+        spot_pane.pack_propagate(False)
+        paned.add(spot_pane, minsize=140, stretch="never")
+        self._build_spot_list_panel(spot_pane)
 
         # Canvas + scrollbars
         canvas_frame = tk.Frame(right, bg="#1e1e1e")
@@ -391,6 +401,7 @@ class DebugUI:
 
         self._redraw()
         self._update_count_label()
+        self._populate_spots_list()
 
         # Highlight selected row and scroll to it
         self._highlight_lb_row(idx)
@@ -787,6 +798,8 @@ class DebugUI:
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
+        self._populate_spots_list()
+        self._sync_spot_list_selection()
         self._set_info_text(f"Added missed dust at ({ix:.0f}, {iy:.0f})")
 
     def _handle_shift_click(self, canvas_x, canvas_y):
@@ -975,7 +988,7 @@ class DebugUI:
                         rc_str = "\n  Scroll to annotate correct radius"
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
-                        f"radius={s['radius_px']:.1f}px  area={s['area']}\n"
+                        f"enc_r={s['radius_px']:.1f}px  area={s['area']}\n"
                         f"  contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
                         f"excess_sat={s['excess_sat']:.1f}  status={status}"
                         f"{src_str}{rm_str}{rc_str}")
@@ -1011,6 +1024,7 @@ class DebugUI:
 
         self._set_info_text("\n".join(lines))
         self._update_count_label()
+        self._sync_spot_list_selection()
 
     def _update_count_label(self):
         img_dict = self.images[self.current_idx]
@@ -1042,6 +1056,7 @@ class DebugUI:
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
+        self._populate_spots_list()
         self._set_info_text(f"Added {added} rejected candidate(s) as missed dust.")
 
     def _mark_fp(self):
@@ -1051,6 +1066,7 @@ class DebugUI:
         self.annotations[stem]["false_positives"] |= self.selected_detected
         self._auto_save(stem)
         self._redraw_markers()
+        self._populate_spots_list()
         self._update_info_from_selection()
 
     def _clear_fp(self):
@@ -1060,6 +1076,7 @@ class DebugUI:
         self.annotations[stem]["false_positives"] -= self.selected_detected
         self._auto_save(stem)
         self._redraw_markers()
+        self._populate_spots_list()
         self._update_info_from_selection()
 
     def _remove_missed(self):
@@ -1075,6 +1092,7 @@ class DebugUI:
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
+        self._populate_spots_list()
         self._set_info_text("Missed dust marker(s) removed.")
 
     def _clear_selection(self):
@@ -1167,6 +1185,212 @@ class DebugUI:
 
     def _on_lb_scroll(self, event):
         self.lb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    # ------------------------------------------------------------------
+    # Spot list panel  (ttk.Treeview table with sortable columns)
+    # ------------------------------------------------------------------
+
+    _SPOT_COLS    = ("idx", "cx", "cy", "r", "ctr", "tex", "fp")
+    _SPOT_HEADERS = {"idx": "#",   "cx": "cx",  "cy": "cy",
+                     "r":   "r",   "ctr": "ctr", "tex": "tex", "fp": "FP"}
+    _SPOT_WIDTHS  = {"idx": 30, "cx": 46, "cy": 46,
+                     "r":  30, "ctr": 40, "tex": 36, "fp": 24}
+
+    def _build_spot_list_panel(self, parent):
+        """Build the right-side spot table panel (ttk.Treeview)."""
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Spot.Treeview",
+                        background="#1e1e1e", foreground="#cccccc",
+                        fieldbackground="#1e1e1e", borderwidth=0,
+                        font=("Courier", 8), rowheight=20)
+        style.configure("Spot.Treeview.Heading",
+                        background="#2b2b2b", foreground="#aaaaaa",
+                        font=("", 8, "bold"), relief="flat")
+        style.map("Spot.Treeview",
+                  background=[("selected", "#3a5a8f")],
+                  foreground=[("selected", "white")])
+
+        tk.Label(parent, text="Spots:", bg="#2b2b2b", fg="white",
+                 font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
+        self.spot_list_header = tk.Label(parent, text="", bg="#2b2b2b", fg="#aaaaaa",
+                                         font=("", 9))
+        self.spot_list_header.pack(anchor="w", padx=6, pady=(0, 2))
+
+        tree_frame = tk.Frame(parent, bg="#2b2b2b")
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 2))
+
+        self.spot_tree = ttk.Treeview(tree_frame, columns=self._SPOT_COLS,
+                                       show="headings", style="Spot.Treeview",
+                                       selectmode="browse")
+        self._sort_state = {}   # col -> currently_descending
+
+        for col in self._SPOT_COLS:
+            self.spot_tree.heading(col, text=self._SPOT_HEADERS[col],
+                                   command=lambda c=col: self._sort_column(c))
+            self.spot_tree.column(col, width=self._SPOT_WIDTHS[col],
+                                  anchor="center" if col == "fp" else "e",
+                                  stretch=False, minwidth=18)
+
+        self.spot_tree.tag_configure("det",    foreground="#cccccc")
+        self.spot_tree.tag_configure("fp",     foreground="#ff8888")
+        self.spot_tree.tag_configure("missed", foreground="#00ddcc")
+
+        sb_y = tk.Scrollbar(tree_frame, orient=tk.VERTICAL,
+                            command=self.spot_tree.yview)
+        self.spot_tree.configure(yscrollcommand=sb_y.set)
+        sb_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.spot_tree.pack(fill=tk.BOTH, expand=True)
+
+        self.spot_tree.bind("<<TreeviewSelect>>", lambda *_: self._on_spot_tree_select())
+
+        self.center_btn = tk.Button(
+            parent, text="Center on spot",
+            command=self._center_on_selected_spot,
+            bg="#3a3a3a", fg="white", relief=tk.FLAT,
+            padx=6, pady=3, state=tk.DISABLED)
+        self.center_btn.pack(fill=tk.X, padx=4, pady=(2, 4))
+
+    def _populate_spots_list(self):
+        """Rebuild the spot table for the current image."""
+        for iid in self.spot_tree.get_children():
+            self.spot_tree.delete(iid)
+        self.spot_list_data = {}
+        self._sort_state = {}
+        for col in self._SPOT_COLS:
+            self.spot_tree.heading(col, text=self._SPOT_HEADERS[col])
+
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        ann = self.annotations[stem]
+        detected = img_dict.get("detected") or []
+        missed = ann["missed_dust"]
+
+        self.spot_list_header.config(
+            text=f"{len(detected)} detected, {len(missed)} missed")
+
+        for i, spot in enumerate(detected):
+            is_fp = i in ann["false_positives"]
+            iid = f"det_{i}"
+            values = (i,
+                      int(spot["cx"]),
+                      int(spot["cy"]),
+                      int(spot["brush_radius_px"]),
+                      f"{spot['contrast']:.1f}",
+                      f"{spot['texture']:.1f}",
+                      "●" if is_fp else "")
+            self.spot_tree.insert("", tk.END, iid=iid, values=values,
+                                  tags=("fp" if is_fp else "det",))
+            self.spot_list_data[iid] = {
+                "kind": "detected", "idx": i,
+                "sort_idx": i,
+                "sort_cx":  spot["cx"],            "sort_cy":  spot["cy"],
+                "sort_r":   spot["brush_radius_px"],
+                "sort_ctr": spot["contrast"],      "sort_tex": spot["texture"],
+                "sort_fp":  1 if is_fp else 0,
+            }
+
+        for i, md in enumerate(missed):
+            iid = f"missed_{i}"
+            values = (f"m{i}", int(md["cx"]), int(md["cy"]),
+                      "", "", "", "")
+            self.spot_tree.insert("", tk.END, iid=iid, values=values,
+                                  tags=("missed",))
+            self.spot_list_data[iid] = {
+                "kind": "missed", "idx": i,
+                "sort_idx": 100000 + i,
+                "sort_cx":  md["cx"],  "sort_cy":  md["cy"],
+                "sort_r": -1, "sort_ctr": -1, "sort_tex": -1, "sort_fp": 0,
+            }
+
+    def _sort_column(self, col):
+        """Sort the treeview by the clicked column header; toggle asc/desc."""
+        reverse = not self._sort_state.get(col, False)
+        sort_key = {"idx": "sort_idx", "cx": "sort_cx", "cy": "sort_cy",
+                    "r": "sort_r", "ctr": "sort_ctr",
+                    "tex": "sort_tex", "fp": "sort_fp"}[col]
+        items = [(self.spot_list_data[iid][sort_key], iid)
+                 for iid in self.spot_tree.get_children()]
+        items.sort(reverse=reverse)
+        for pos, (_key, iid) in enumerate(items):
+            self.spot_tree.move(iid, "", pos)
+        self._sort_state[col] = reverse
+        for c in self._SPOT_COLS:
+            arrow = (" ▼" if reverse else " ▲") if c == col else ""
+            self.spot_tree.heading(c, text=self._SPOT_HEADERS[c] + arrow)
+
+    def _on_spot_tree_select(self):
+        """Treeview row selected: sync canvas selection."""
+        if self._syncing_selection:
+            return
+        sel = self.spot_tree.selection()
+        if not sel:
+            return
+        data = self.spot_list_data.get(sel[0])
+        if data is None:
+            return
+
+        self.selected_detected = set()
+        self.selected_rejected = set()
+        self.selected_missed = set()
+        self.selected_source = None
+
+        if data["kind"] == "detected":
+            self.selected_detected = {data["idx"]}
+            self.remove_missed_btn.config(state=tk.DISABLED)
+        elif data["kind"] == "missed":
+            self.selected_missed = {data["idx"]}
+            self.remove_missed_btn.config(state=tk.NORMAL)
+
+        self._update_info_from_selection()
+        self._redraw_markers()
+
+    def _center_canvas_on(self, ix, iy):
+        """Pan canvas so image coordinates (ix, iy) appear at the canvas center."""
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        self.offset_x = cw / 2 - ix * self.zoom
+        self.offset_y = ch / 2 - iy * self.zoom
+        self.at_fit_zoom = False
+        self._redraw()
+
+    def _center_on_selected_spot(self):
+        """Button action: pan canvas to center on the selected table row."""
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        if self.selected_detected:
+            idx = next(iter(self.selected_detected))
+            spots = img_dict.get("detected") or []
+            if idx < len(spots):
+                self._center_canvas_on(spots[idx]["cx"], spots[idx]["cy"])
+        elif self.selected_missed:
+            idx = next(iter(self.selected_missed))
+            md = self.annotations[stem]["missed_dust"]
+            if idx < len(md):
+                self._center_canvas_on(md[idx]["cx"], md[idx]["cy"])
+
+    def _sync_spot_list_selection(self):
+        """Sync treeview selection to match current canvas selection state."""
+        has_sel = bool(self.selected_detected or self.selected_missed)
+        self.center_btn.config(state=tk.NORMAL if has_sel else tk.DISABLED)
+
+        target_iid = None
+        if self.selected_detected:
+            target_iid = f"det_{next(iter(self.selected_detected))}"
+        elif self.selected_missed:
+            target_iid = f"missed_{next(iter(self.selected_missed))}"
+
+        self._syncing_selection = True
+        try:
+            current = self.spot_tree.selection()
+            if target_iid and self.spot_tree.exists(target_iid):
+                if not current or current[0] != target_iid:
+                    self.spot_tree.selection_set(target_iid)
+                self.spot_tree.see(target_iid)
+            elif current:
+                self.spot_tree.selection_remove(*current)
+        finally:
+            self._syncing_selection = False
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1285,7 +1509,8 @@ class DebugUI:
                     "ISOLATION_RADIUS", "MAX_NEARBY_ACCEPTED",
                     "SOFT_CONTEXT_VOTE_THRESHOLD", "SOFT_TEXTURE_VOTE_THRESHOLD",
                     "SOFT_RATIO_VOTE_THRESHOLD", "MIN_DUST_VOTES",
-                    "REJECT_LOG_CONTRAST_MIN"]:
+                    "REJECT_LOG_CONTRAST_MIN",
+                    "MIN_BRUSH_PX", "BRUSH_HARDNESS"]:
             if key in constants:
                 lines.append(f"  {key} = {constants[key]}")
         lines.append("")
@@ -1333,7 +1558,7 @@ class DebugUI:
                         s = detected[i]
                         lines.append(
                             f"    cx={s['cx']:.1f}  cy={s['cy']:.1f}  "
-                            f"radius={s['radius_px']:.1f}px  area={s['area']}  "
+                            f"enc_r={s['radius_px']:.1f}px  area={s['area']}  "
                             f"contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
                             f"excess_sat={s['excess_sat']:.1f}")
             else:

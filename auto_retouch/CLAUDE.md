@@ -40,3 +40,5 @@ For auto_retouch feature:
 - [ ] I see it writes just one flip to transform_params, i.e. ignores that flip can be different in two axes
 - [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass. But currently, second application to xmp does not add new shapes but replaces previous ones. Consider adding second retouch instance. 
 - [ ] radius detection has mistakes, most of time is too wide. marked errors here: C:\Users\ilyap\AppData\Local\Temp\darktable_autoretouch_1771783315\debug_report.txt 
+- [ ] show source brush?
+- [ ] UI takes long to startup. create thumbnails only when scrolling?

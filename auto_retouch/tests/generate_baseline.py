@@ -71,7 +71,8 @@ def main():
     for stem in image_paths_by_stem:
         ann_path = BASELINE_DIR / f"{stem}_annotations.json"
         if not ann_path.exists():
-            ann = {"stem": stem, "false_positives": [], "missed_dust": [], "source_overrides": []}
+            ann = {"stem": stem, "false_positives": [], "missed_dust": [],
+                   "source_overrides": [], "radius_overrides": [], "radius_mismatches": []}
             with open(ann_path, "w") as f:
                 json.dump(ann, f, indent=2)
 

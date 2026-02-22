@@ -82,11 +82,9 @@ BRUSH_HARDNESS = 0.66
 BRUSH_STATE_NORMAL = 1
 BRUSH_DELTA = 0.00001          # offset between 2 brush points (forms a "dot")
 BRUSH_CTRL_OFFSET = 0.000003   # bezier control handle offset from corner
-BRUSH_SCALE_MAX      = 8.0   # hard cap on brush scale
-BRUSH_SCALE_BASE     = 20.0  # area-based formula numerator; scale = BASE / (1 + sqrt(area / AREA_REF))
-BRUSH_AREA_REF       = 50.0  # area at which area-factor = BASE/2; tune to typical mid-size spot area
-BRUSH_CONTRAST_REF   = 60.0  # reference contrast: spots at this contrast get unscaled area brush;
-                              # higher contrast → proportionally larger brush; lower → smaller
+MIN_BRUSH_PX         = 5.0   # minimum brush radius in pixels (darktable effectiveness floor)
+                              # brush_radius_px = max(MIN_BRUSH_PX, enc_r / BRUSH_HARDNESS)
+                              # where enc_r is the min enclosing circle radius of the spot contour
 HEAL_SOURCE_OFFSET_X = 0.01   # heal source offset from spot center (right)
 HEAL_SOURCE_OFFSET_Y = 0.01   # positive = down (darktable default is right+down)
 
@@ -250,6 +248,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
         contrast = float(np.max(component_diff[component_mask]))
 
         # Shape checks for larger spots: reject non-blob shapes (letters, symbols, arrows)
+        contours = []
         if area >= SHAPE_CHECK_MIN_AREA:
             mask_u8 = component_mask.astype(np.uint8) * 255
             contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL,
@@ -273,6 +272,22 @@ def detect_dust_spots(image_path, collect_rejects=False):
                             debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=circularity({circularity:.2f}<{MIN_CIRCULARITY})")
                         log_reject(cx, cy, area, contrast, "shape", f"circularity={circularity:.2f}<{MIN_CIRCULARITY}")
                         continue
+
+        # Compute min enclosing circle radius — physical extent of the spot, handles irregular shapes.
+        # For large spots: reuse already-computed contour; for small spots: compute fresh.
+        if area >= SHAPE_CHECK_MIN_AREA and contours:
+            _, enc_r = cv2.minEnclosingCircle(contours[0])
+            enc_r = float(enc_r)
+        else:
+            mask_u8_enc = component_mask.astype(np.uint8) * 255
+            enc_contours, _ = cv2.findContours(mask_u8_enc, cv2.RETR_EXTERNAL,
+                                               cv2.CHAIN_APPROX_SIMPLE)
+            if enc_contours:
+                _, enc_r = cv2.minEnclosingCircle(enc_contours[0])
+                enc_r = float(enc_r)
+            else:
+                enc_r = math.sqrt(area / math.pi)  # fallback, should not happen
+
         if contrast < threshold * 0.8:
             rejected["contrast"] += 1
             log_reject(cx, cy, area, contrast, "contrast", f"contrast={contrast:.1f}<{threshold*0.8:.1f}")
@@ -381,8 +396,8 @@ def detect_dust_spots(image_path, collect_rejects=False):
         # Texture: measure in the surrounding ring, not inside the spot.
         # For large spots, the centroid is inside the bright area and inflates local_std.
         # Instead, sample texture in a ring from radius_px*1.5 to radius_px*3 around centroid.
-        ring_inner = max(int(radius_px * 1.5), 2)
-        ring_outer = max(int(radius_px * 3), ring_inner + TEXTURE_KERNEL)
+        ring_inner = max(int(enc_r * 1.5), 2)
+        ring_outer = max(int(enc_r * 3), ring_inner + TEXTURE_KERNEL)
         # Extract surrounding patch
         y1 = max(0, icy - ring_outer)
         y2 = min(height, icy + ring_outer + 1)
@@ -481,13 +496,12 @@ def detect_dust_spots(image_path, collect_rejects=False):
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=color(exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION})")
             log_reject(cx, cy, area, contrast, "color", f"exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION}")
             continue
-        area_scale = BRUSH_SCALE_BASE / (1.0 + math.sqrt(area / BRUSH_AREA_REF))
-        brush_scale = min(BRUSH_SCALE_MAX, area_scale * (contrast / BRUSH_CONTRAST_REF))
+        brush_radius_px = max(MIN_BRUSH_PX, enc_r / BRUSH_HARDNESS)
         spots.append({
             "cx": float(cx),
             "cy": float(cy),
-            "radius_px": radius_px,
-            "brush_radius_px": radius_px * brush_scale,
+            "radius_px": enc_r,
+            "brush_radius_px": brush_radius_px,
             "threshold": threshold,
             "area": area,
             "contrast": contrast,
