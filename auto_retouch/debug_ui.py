@@ -18,6 +18,8 @@ import os
 import json
 import math
 import datetime
+import threading
+import queue
 from pathlib import Path
 
 import tkinter as tk
@@ -118,10 +120,10 @@ class DebugUI:
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Populate thumbnail list (after _build_ui so lb_rows etc. exist)
-        self._populate_thumb_list()
-
-        # Defer initial load until window is rendered so winfo_width() works
+        # Defer all post-UI work so the window skeleton appears immediately.
+        # after(0) fires on the first event-loop tick; after(150) fires later,
+        # by which time lb_rows will already exist.
+        self.root.after(0, self._populate_thumb_list)
         self.root.after(150, self._load_image_by_idx, 0)
 
     # ------------------------------------------------------------------
@@ -135,22 +137,22 @@ class DebugUI:
         paned.pack(fill=tk.BOTH, expand=True)
 
         # ---- LEFT PANEL ----
-        left = tk.Frame(paned, width=220, bg="#2b2b2b")
+        left = tk.Frame(paned, width=220, bg="#484848")
         left.pack_propagate(False)
         paned.add(left, minsize=160, stretch="never")
 
-        tk.Label(left, text="Images:", bg="#2b2b2b", fg="white",
+        tk.Label(left, text="Images:", bg="#484848", fg="white",
                  font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
 
-        lb_frame = tk.Frame(left, bg="#2b2b2b")
+        lb_frame = tk.Frame(left, bg="#484848")
         lb_frame.pack(fill=tk.BOTH, expand=True, padx=4)
         lb_sb = tk.Scrollbar(lb_frame, orient=tk.VERTICAL)
-        self.lb_canvas = tk.Canvas(lb_frame, bg="#1e1e1e",
+        self.lb_canvas = tk.Canvas(lb_frame, bg="#363636",
                                    yscrollcommand=lb_sb.set, highlightthickness=0)
         lb_sb.config(command=self.lb_canvas.yview)
         lb_sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.lb_canvas.pack(fill=tk.BOTH, expand=True)
-        self.lb_inner = tk.Frame(self.lb_canvas, bg="#1e1e1e")
+        self.lb_inner = tk.Frame(self.lb_canvas, bg="#363636")
         self.lb_canvas_window = self.lb_canvas.create_window(
             0, 0, anchor="nw", window=self.lb_inner)
         self.lb_inner.bind("<Configure>", self._on_lb_inner_configure)
@@ -165,16 +167,25 @@ class DebugUI:
         tk.Checkbutton(left, text="Show rejected candidates",
                        variable=self.show_rejected_var,
                        command=self._redraw_markers,
-                       bg="#2b2b2b", fg="white", selectcolor="#1e1e1e",
-                       activebackground="#2b2b2b", activeforeground="white"
+                       bg="#484848", fg="white", selectcolor="#363636",
+                       activebackground="#484848", activeforeground="white"
                        ).pack(anchor="w", padx=6, pady=2)
 
-        self.status_label = tk.Label(left, text="", bg="#2b2b2b", fg="#aaaaaa",
+        # Show source brush circle toggle
+        self.show_source_brush_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(left, text="Show source brush",
+                       variable=self.show_source_brush_var,
+                       command=self._redraw_markers,
+                       bg="#484848", fg="white", selectcolor="#363636",
+                       activebackground="#484848", activeforeground="white"
+                       ).pack(anchor="w", padx=6, pady=2)
+
+        self.status_label = tk.Label(left, text="", bg="#484848", fg="#c0c0c0",
                                      font=("", 9), wraplength=200, justify=tk.LEFT)
         self.status_label.pack(anchor="w", padx=6, pady=2)
 
         # Legend
-        tk.Label(left, text="Legend:", bg="#2b2b2b", fg="#aaaaaa",
+        tk.Label(left, text="Legend:", bg="#484848", fg="#c0c0c0",
                  font=("", 8, "bold")).pack(anchor="w", padx=6, pady=(6, 1))
         for symbol, color, label in [
             ("●", "#00cc44", "Detected spot"),
@@ -182,15 +193,16 @@ class DebugUI:
             ("●", "#ff8800", "Rejected candidate"),
             ("✚", "#00ffff", "Missed dust (added)"),
             ("□", "#00cc44", "Heal source (- - line)"),
+            ("○", "#00cc44", "Source brush (dashed)"),
             ("□", "#ff4444", "Baseline source (mismatch)"),
             ("○", "#ff9900", "Baseline radius (mismatch)"),
             ("○", "#00ddff", "Corrected radius (annotated)"),
         ]:
-            row = tk.Frame(left, bg="#2b2b2b")
+            row = tk.Frame(left, bg="#484848")
             row.pack(anchor="w", padx=6)
-            tk.Label(row, text=symbol, bg="#2b2b2b", fg=color,
+            tk.Label(row, text=symbol, bg="#484848", fg=color,
                      font=("", 11)).pack(side=tk.LEFT, padx=(0, 4))
-            tk.Label(row, text=label, bg="#2b2b2b", fg="#cccccc",
+            tk.Label(row, text=label, bg="#484848", fg="#cccccc",
                      font=("", 8)).pack(side=tk.LEFT)
 
         # Hints
@@ -215,24 +227,24 @@ class DebugUI:
             "  +/- — zoom ×2 / ÷2\n"
             "  Arrows — pan  (Shift=fast)\n"
             "  F — fit to window"
-        ), bg="#2b2b2b", fg="white", font=("Courier", 8),
+        ), bg="#484848", fg="white", font=("Courier", 8),
                  justify=tk.LEFT).pack(anchor="w", padx=6, pady=(8, 4))
 
         # ---- CENTER PANEL (canvas) ----
-        right = tk.Frame(paned, bg="#1e1e1e")
+        right = tk.Frame(paned, bg="#363636")
         paned.add(right, stretch="always")
 
         # ---- SPOT LIST PANEL ----
-        spot_pane = tk.Frame(paned, width=230, bg="#2b2b2b")
+        spot_pane = tk.Frame(paned, width=230, bg="#484848")
         spot_pane.pack_propagate(False)
         paned.add(spot_pane, minsize=140, stretch="never")
         self._build_spot_list_panel(spot_pane)
 
         # Canvas + scrollbars
-        canvas_frame = tk.Frame(right, bg="#1e1e1e")
+        canvas_frame = tk.Frame(right, bg="#363636")
         canvas_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(canvas_frame, bg="#1e1e1e",
+        self.canvas = tk.Canvas(canvas_frame, bg="#363636",
                                 cursor="crosshair", highlightthickness=0)
         h_scroll = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL,
                                 command=self.canvas.xview)
@@ -285,19 +297,19 @@ class DebugUI:
         self.root.bind("<B>",             lambda e: self._nav_image(-1))
 
         # Bottom panel
-        bottom = tk.Frame(right, bg="#2b2b2b", height=190)
+        bottom = tk.Frame(right, bg="#484848", height=190)
         bottom.pack(fill=tk.X)
         bottom.pack_propagate(False)
 
         # Scrollable info text
-        info_frame = tk.Frame(bottom, bg="#2b2b2b")
+        info_frame = tk.Frame(bottom, bg="#484848")
         info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=6)
-        tk.Label(info_frame, text="Selected:", bg="#2b2b2b", fg="#aaaaaa",
+        tk.Label(info_frame, text="Selected:", bg="#484848", fg="#c0c0c0",
                  font=("", 9, "bold")).pack(anchor="w")
-        info_text_wrap = tk.Frame(info_frame, bg="#2b2b2b")
+        info_text_wrap = tk.Frame(info_frame, bg="#484848")
         info_text_wrap.pack(fill=tk.BOTH, expand=True)
         info_sb = tk.Scrollbar(info_text_wrap, orient=tk.VERTICAL)
-        self.info_text = tk.Text(info_text_wrap, bg="#1e1e1e", fg="white",
+        self.info_text = tk.Text(info_text_wrap, bg="#363636", fg="white",
                                  font=("Courier", 9), wrap=tk.WORD,
                                  state=tk.DISABLED, height=7,
                                  yscrollcommand=info_sb.set,
@@ -310,14 +322,14 @@ class DebugUI:
                             "Click a marker or Ctrl+Click to add missed dust.")
 
         # Buttons
-        btn_frame = tk.Frame(bottom, bg="#2b2b2b")
+        btn_frame = tk.Frame(bottom, bg="#484848")
         btn_frame.pack(side=tk.RIGHT, padx=8, pady=6)
 
         self.count_label = tk.Label(btn_frame, text="FP: 0 | Missed: 0",
-                                    bg="#2b2b2b", fg="#aaaaaa", font=("", 9))
+                                    bg="#484848", fg="#c0c0c0", font=("", 9))
         self.count_label.pack(anchor="e", pady=(0, 4))
 
-        btn_cfg = {"bg": "#3a3a3a", "fg": "white", "relief": tk.FLAT,
+        btn_cfg = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
                    "padx": 8, "pady": 4, "width": 20}
 
         tk.Button(btn_frame, text="Rejected → Missed  (R)",
@@ -525,6 +537,14 @@ class DebugUI:
                                              outline=src_color,
                                              width=2 if is_src_sel else 1,
                                              tags="source")
+                # Source brush circle (same radius as the spot brush)
+                if self.show_source_brush_var.get():
+                    src_br = radius_overrides.get(i, spot["brush_radius_px"])
+                    src_brad = max(5, src_br * self.zoom)
+                    self.canvas.create_oval(sx - src_brad, sy - src_brad,
+                                            sx + src_brad, sy + src_brad,
+                                            outline=src_color, width=1, dash=(4, 3),
+                                            tags="source")
 
                 # If source mismatch exists, also draw baseline source in red
                 for mismatch in ann.get("source_mismatches", []):
@@ -1110,36 +1130,62 @@ class DebugUI:
     # ------------------------------------------------------------------
 
     def _populate_thumb_list(self):
+        self.lb_img_labels = []   # Label widget per row (holds thumb, created lazily)
         for i, img_dict in enumerate(self.images):
-            row = tk.Frame(self.lb_inner, bg="#1e1e1e", cursor="hand2")
+            row = tk.Frame(self.lb_inner, bg="#363636", cursor="hand2")
             row.pack(fill=tk.X, padx=2, pady=(2, 0))
-
-            photo = None
-            try:
-                pil_img = Image.open(img_dict["image_path"])
-                pil_img.thumbnail((210, 140), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(pil_img)
-            except Exception:
-                pass
-            self.lb_photos.append(photo)
+            self.lb_photos.append(None)   # placeholder; filled in lazily
 
             def _bind_click(w, idx=i):
                 w.bind("<Button-1>", lambda e: self._on_thumb_row_click(idx))
                 w.bind("<MouseWheel>", self._on_lb_scroll)
 
-            if photo:
-                lbl_img = tk.Label(row, image=photo, bg="#1e1e1e",
-                                   cursor="hand2", anchor="center")
-                lbl_img.pack(fill=tk.X)
-                _bind_click(lbl_img)
+            # Placeholder label (shows loading indicator, replaced by thumb later)
+            lbl_img = tk.Label(row, text="…", bg="#363636", fg="#808080",
+                               font=("", 8), cursor="hand2", anchor="center",
+                               width=26, height=5)
+            lbl_img.pack(fill=tk.X)
+            _bind_click(lbl_img)
+            self.lb_img_labels.append(lbl_img)
 
-            lbl_txt = tk.Label(row, text=img_dict["stem"], bg="#1e1e1e",
+            lbl_txt = tk.Label(row, text=img_dict["stem"], bg="#363636",
                                fg="#cccccc", font=("", 8), wraplength=200,
                                cursor="hand2", anchor="w")
             lbl_txt.pack(fill=tk.X, padx=2, pady=(1, 3))
             _bind_click(lbl_txt)
             _bind_click(row)
             self.lb_rows.append(row)
+
+        # Load thumbnails in background thread; main thread applies them
+        self._thumb_queue = queue.Queue()
+        self._thumb_thread = threading.Thread(
+            target=self._thumb_loader_thread, daemon=True)
+        self._thumb_thread.start()
+        self.root.after(50, self._poll_thumb_queue)
+
+    def _thumb_loader_thread(self):
+        """Background: open + resize each image, push PIL Image to queue."""
+        for i, img_dict in enumerate(self.images):
+            try:
+                pil_img = Image.open(img_dict["image_path"])
+                pil_img.thumbnail((210, 140), Image.LANCZOS)
+            except Exception:
+                pil_img = None
+            self._thumb_queue.put((i, pil_img))
+
+    def _poll_thumb_queue(self):
+        """Main thread: drain queue, create PhotoImages, update labels."""
+        try:
+            while True:
+                i, pil_img = self._thumb_queue.get_nowait()
+                if pil_img is not None:
+                    photo = ImageTk.PhotoImage(pil_img)
+                    self.lb_photos[i] = photo
+                    self.lb_img_labels[i].config(image=photo, text="", width=0, height=0)
+        except queue.Empty:
+            pass
+        if self._thumb_thread.is_alive() or not self._thumb_queue.empty():
+            self.root.after(50, self._poll_thumb_queue)
 
     def _nav_image(self, delta):
         """Go to next (+1) or previous (-1) image."""
@@ -1159,7 +1205,7 @@ class DebugUI:
 
     def _highlight_lb_row(self, idx):
         sel_bg = "#3a5a8f"
-        norm_bg = "#1e1e1e"
+        norm_bg = "#363636"
         for i, row in enumerate(self.lb_rows):
             bg = sel_bg if i == idx else norm_bg
             row.config(bg=bg)
@@ -1201,23 +1247,23 @@ class DebugUI:
         style = ttk.Style()
         style.theme_use("default")
         style.configure("Spot.Treeview",
-                        background="#1e1e1e", foreground="#cccccc",
-                        fieldbackground="#1e1e1e", borderwidth=0,
+                        background="#363636", foreground="#cccccc",
+                        fieldbackground="#363636", borderwidth=1,
                         font=("Courier", 8), rowheight=20)
         style.configure("Spot.Treeview.Heading",
-                        background="#2b2b2b", foreground="#aaaaaa",
-                        font=("", 8, "bold"), relief="flat")
+                        background="#484848", foreground="#c0c0c0",
+                        font=("", 8, "bold"), relief="groove")
         style.map("Spot.Treeview",
                   background=[("selected", "#3a5a8f")],
                   foreground=[("selected", "white")])
 
-        tk.Label(parent, text="Spots:", bg="#2b2b2b", fg="white",
+        tk.Label(parent, text="Spots:", bg="#484848", fg="white",
                  font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
-        self.spot_list_header = tk.Label(parent, text="", bg="#2b2b2b", fg="#aaaaaa",
+        self.spot_list_header = tk.Label(parent, text="", bg="#484848", fg="#c0c0c0",
                                          font=("", 9))
         self.spot_list_header.pack(anchor="w", padx=6, pady=(0, 2))
 
-        tree_frame = tk.Frame(parent, bg="#2b2b2b")
+        tree_frame = tk.Frame(parent, bg="#484848")
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 2))
 
         self.spot_tree = ttk.Treeview(tree_frame, columns=self._SPOT_COLS,
@@ -1235,6 +1281,8 @@ class DebugUI:
         self.spot_tree.tag_configure("det",    foreground="#cccccc")
         self.spot_tree.tag_configure("fp",     foreground="#ff8888")
         self.spot_tree.tag_configure("missed", foreground="#00ddcc")
+        self.spot_tree.tag_configure("even",   background="#414141")
+        # "odd" rows keep the default fieldbackground (#363636)
 
         sb_y = tk.Scrollbar(tree_frame, orient=tk.VERTICAL,
                             command=self.spot_tree.yview)
@@ -1247,7 +1295,7 @@ class DebugUI:
         self.center_btn = tk.Button(
             parent, text="Center on spot",
             command=self._center_on_selected_spot,
-            bg="#3a3a3a", fg="white", relief=tk.FLAT,
+            bg="#585858", fg="white", relief=tk.FLAT,
             padx=6, pady=3, state=tk.DISABLED)
         self.center_btn.pack(fill=tk.X, padx=4, pady=(2, 4))
 
@@ -1269,9 +1317,12 @@ class DebugUI:
         self.spot_list_header.config(
             text=f"{len(detected)} detected, {len(missed)} missed")
 
+        row_num = 0
         for i, spot in enumerate(detected):
             is_fp = i in ann["false_positives"]
             iid = f"det_{i}"
+            parity = "even" if row_num % 2 == 0 else "odd"
+            row_num += 1
             values = (i,
                       int(spot["cx"]),
                       int(spot["cy"]),
@@ -1280,7 +1331,7 @@ class DebugUI:
                       f"{spot['texture']:.1f}",
                       "●" if is_fp else "")
             self.spot_tree.insert("", tk.END, iid=iid, values=values,
-                                  tags=("fp" if is_fp else "det",))
+                                  tags=("fp" if is_fp else "det", parity))
             self.spot_list_data[iid] = {
                 "kind": "detected", "idx": i,
                 "sort_idx": i,
@@ -1292,10 +1343,12 @@ class DebugUI:
 
         for i, md in enumerate(missed):
             iid = f"missed_{i}"
+            parity = "even" if row_num % 2 == 0 else "odd"
+            row_num += 1
             values = (f"m{i}", int(md["cx"]), int(md["cy"]),
                       "", "", "", "")
             self.spot_tree.insert("", tk.END, iid=iid, values=values,
-                                  tags=("missed",))
+                                  tags=("missed", parity))
             self.spot_list_data[iid] = {
                 "kind": "missed", "idx": i,
                 "sort_idx": 100000 + i,
@@ -1318,6 +1371,21 @@ class DebugUI:
         for c in self._SPOT_COLS:
             arrow = (" ▼" if reverse else " ▲") if c == col else ""
             self.spot_tree.heading(c, text=self._SPOT_HEADERS[c] + arrow)
+        self._reapply_row_parity()
+
+    def _reapply_row_parity(self):
+        """Reapply even/odd background tags after rows are reordered by sort."""
+        ann = self.annotations[self.images[self.current_idx]["stem"]]
+        for row_num, iid in enumerate(self.spot_tree.get_children()):
+            data = self.spot_list_data.get(iid, {})
+            kind = data.get("kind", "detected")
+            parity = "even" if row_num % 2 == 0 else "odd"
+            if kind == "missed":
+                semantic = "missed"
+            else:
+                is_fp = data.get("idx", -1) in ann["false_positives"]
+                semantic = "fp" if is_fp else "det"
+            self.spot_tree.item(iid, tags=(semantic, parity))
 
     def _on_spot_tree_select(self):
         """Treeview row selected: sync canvas selection."""
@@ -1328,6 +1396,16 @@ class DebugUI:
             return
         data = self.spot_list_data.get(sel[0])
         if data is None:
+            return
+
+        # On Windows, <<TreeviewSelect>> fired by our own selection_set() in
+        # _sync_spot_list_selection is deferred and arrives after _syncing_selection
+        # is already False.  If the treeview row's index is already present in the
+        # current canvas selection, this event is that deferred echo — ignore it so
+        # a rubber-band multi-selection isn't collapsed to one spot.
+        if data["kind"] == "detected" and data["idx"] in self.selected_detected:
+            return
+        if data["kind"] == "missed" and data["idx"] in self.selected_missed:
             return
 
         self.selected_detected = set()

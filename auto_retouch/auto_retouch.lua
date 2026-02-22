@@ -520,6 +520,7 @@ local function export_and_detect(images, save_visualization, debug_ui_mode)
 
   -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
   if debug_ui_mode then
+    dt.print(_("Running detection in background (conda env + detection can take ~30s)..."))
     if dt.configuration.running_os == "windows" then
       local bat_file = export_dir .. "/run_debug.bat"
       local f = io.open(bat_file, "w")
@@ -543,7 +544,7 @@ local function export_and_detect(images, save_visualization, debug_ui_mode)
     else
       os.execute(command .. ' > "' .. log_file .. '" 2>&1 &')
     end
-    dt.print(string.format(_("Debug UI launched. Log: %s"), log_file))
+    dt.print(string.format(_("Debug detection started — UI will open when detection finishes. Log: %s"), log_file))
     return nil, nil, nil
   end
 

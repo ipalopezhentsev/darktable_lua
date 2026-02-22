@@ -32,13 +32,9 @@ Current key fields: `cx`, `cy`, `radius_px` (raw detected, for algorithm interna
 
 For auto_retouch feature:
 - [x] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
-- [x] Add ability to not just put default brush shapes to xmp, but also correctly find spot for source of healing, around the detected particle
 - [ ] Add ability to heal sensor dust (larger, common between selected frames)
 - [ ] Add ability to heal thread(fiber)-like dust
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
 - [ ] I see it writes just one flip to transform_params, i.e. ignores that flip can be different in two axes
 - [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass. But currently, second application to xmp does not add new shapes but replaces previous ones. Consider adding second retouch instance. 
-- [ ] radius detection has mistakes, most of time is too wide. marked errors here: C:\Users\ilyap\AppData\Local\Temp\darktable_autoretouch_1771783315\debug_report.txt 
-- [ ] show source brush?
-- [ ] UI takes long to startup. create thumbnails only when scrolling?
