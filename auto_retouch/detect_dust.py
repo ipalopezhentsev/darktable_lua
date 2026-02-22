@@ -82,7 +82,11 @@ BRUSH_HARDNESS = 0.66
 BRUSH_STATE_NORMAL = 1
 BRUSH_DELTA = 0.00001          # offset between 2 brush points (forms a "dot")
 BRUSH_CTRL_OFFSET = 0.000003   # bezier control handle offset from corner
-MIN_BRUSH_BORDER = 0.002306    # minimum brush radius in normalized coords
+BRUSH_SCALE_MAX      = 8.0   # hard cap on brush scale
+BRUSH_SCALE_BASE     = 20.0  # area-based formula numerator; scale = BASE / (1 + sqrt(area / AREA_REF))
+BRUSH_AREA_REF       = 50.0  # area at which area-factor = BASE/2; tune to typical mid-size spot area
+BRUSH_CONTRAST_REF   = 60.0  # reference contrast: spots at this contrast get unscaled area brush;
+                              # higher contrast → proportionally larger brush; lower → smaller
 HEAL_SOURCE_OFFSET_X = 0.01   # heal source offset from spot center (right)
 HEAL_SOURCE_OFFSET_Y = 0.01   # positive = down (darktable default is right+down)
 
@@ -96,8 +100,6 @@ MASK_VERSION = 6               # DEVELOP_MASKS_VERSION
 SOURCE_SEARCH_INNER_FACTOR = 2.5  # inner exclusion ring = radius * this (avoid the spot itself)
 SOURCE_SEARCH_MAX_RADIUS = 150    # cap search radius in pixels
 SOURCE_SEARCH_MIN_RADIUS = 25     # minimum search radius for tiny spots
-SOURCE_COLOR_WEIGHT = 1.0         # weight for Lab color distance in scoring
-SOURCE_TEXTURE_WEIGHT = 3.0       # weight for texture mismatch in scoring
 SOURCE_GRID_STEP = 8              # grid step for candidate sampling (pixels)
 
 RETOUCH_ALGO_HEAL = 2
@@ -479,10 +481,14 @@ def detect_dust_spots(image_path, collect_rejects=False):
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=color(exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION})")
             log_reject(cx, cy, area, contrast, "color", f"exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION}")
             continue
+        area_scale = BRUSH_SCALE_BASE / (1.0 + math.sqrt(area / BRUSH_AREA_REF))
+        brush_scale = min(BRUSH_SCALE_MAX, area_scale * (contrast / BRUSH_CONTRAST_REF))
         spots.append({
             "cx": float(cx),
             "cy": float(cy),
             "radius_px": radius_px,
+            "brush_radius_px": radius_px * brush_scale,
+            "threshold": threshold,
             "area": area,
             "contrast": contrast,
             "texture": local_texture,
@@ -523,10 +529,11 @@ def detect_dust_spots(image_path, collect_rejects=False):
     # Find optimal healing sources for each spot
     if spots:
         img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+        L_f32 = img_lab[:, :, 0].astype(np.float32)
         for spot in spots:
             src_cx, src_cy = find_healing_source(
-                spot["cx"], spot["cy"], spot["radius_px"],
-                img_lab, local_std, spots, width, height)
+                spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
+                img_lab, L_f32, local_std, spots, width, height)
             spot["src_cx"] = src_cx
             spot["src_cy"] = src_cy
 
@@ -537,101 +544,111 @@ def detect_dust_spots(image_path, collect_rejects=False):
 # Source point detection
 # ===================================================================
 
-def find_healing_source(cx, cy, radius_px, img_lab, local_std, all_spots, width, height):
-    """Find the best healing source position for a dust spot at (cx, cy).
+def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, local_std, all_spots, width, height):
+    """Find the best healing source position using NCC template matching.
 
-    Searches the area around the spot for a region with similar color and
-    texture to the spot's surroundings, avoiding other detected dust spots.
+    Extracts a template from the clean surroundings of the dust spot (a patch
+    of radius ring_outer centred on the spot, with the dust centre filled in
+    so it does not bias the match) and searches for the best-matching location
+    in the valid annulus via normalised cross-correlation on the L channel.
+
+    NCC matches actual pixel patterns, not just statistics, so a region of
+    uniform water scores much higher than a region where water meets a wooden
+    structure edge — even if both have a similar mean brightness.
 
     Returns (src_cx, src_cy) in pixel coordinates.
     """
     icx = max(0, min(int(round(cx)), width - 1))
     icy = max(0, min(int(round(cy)), height - 1))
 
-    # Measure reference color + texture in a ring around the spot
-    # (same ring used by the texture filter — avoids sampling inside the bright dust)
     ring_inner = max(int(radius_px * 1.5), 2)
     ring_outer = max(int(radius_px * 3), ring_inner + 5)
-    y1 = max(0, icy - ring_outer)
-    y2 = min(height, icy + ring_outer + 1)
-    x1 = max(0, icx - ring_outer)
-    x2 = min(width, icx + ring_outer + 1)
-    py, px = np.ogrid[y1 - icy:y2 - icy, x1 - icx:x2 - icx]
-    dist_sq = px * px + py * py
-    ring_mask = (dist_sq >= ring_inner ** 2) & (dist_sq <= ring_outer ** 2)
-    patch_lab = img_lab[y1:y2, x1:x2]
-    if ring_mask.any():
-        ref_L = float(np.mean(patch_lab[:, :, 0][ring_mask]))
-        ref_a = float(np.mean(patch_lab[:, :, 1][ring_mask]))
-        ref_b = float(np.mean(patch_lab[:, :, 2][ring_mask]))
-        ref_texture = float(np.median(local_std[y1:y2, x1:x2][ring_mask]))
-    else:
-        ref_L = float(img_lab[icy, icx, 0])
-        ref_a = float(img_lab[icy, icx, 1])
-        ref_b = float(img_lab[icy, icx, 2])
-        ref_texture = float(local_std[icy, icx])
 
-    # Annulus search bounds
-    search_inner = max(int(radius_px * SOURCE_SEARCH_INNER_FACTOR),
-                       SOURCE_SEARCH_MIN_RADIUS // 2)
+    # --- Build template: L-channel patch of radius ring_outer around the dust ---
+    # Fill the dust centre with the ring mean so it does not make the matcher
+    # seek other bright blobs rather than matching the background content.
+    tmpl_r = ring_outer
+    ty1 = max(0, icy - tmpl_r); ty2 = min(height, icy + tmpl_r + 1)
+    tx1 = max(0, icx - tmpl_r); tx2 = min(width,  icx + tmpl_r + 1)
+    template = L_f32[ty1:ty2, tx1:tx2].copy()
+    t_icy = icy - ty1   # dust centre row within template
+    t_icx = icx - tx1   # dust centre col within template
+    py_g = np.arange(template.shape[0], dtype=np.float32).reshape(-1, 1)
+    px_g = np.arange(template.shape[1], dtype=np.float32).reshape(1, -1)
+    dust_mask = (px_g - t_icx) ** 2 + (py_g - t_icy) ** 2 <= ring_inner ** 2
+    if dust_mask.any():
+        ring_vals = template[~dust_mask]
+        fill = float(np.mean(ring_vals)) if ring_vals.size > 0 else float(np.mean(template))
+        template[dust_mask] = fill
+    tmpl_h, tmpl_w = template.shape
+
+    # --- Annulus search bounds ---
+    # Non-overlap: source brush must not intersect dust brush.
+    search_inner = max(
+        int(radius_px * SOURCE_SEARCH_INNER_FACTOR),
+        SOURCE_SEARCH_MIN_RADIUS // 2,
+        math.ceil(2 * brush_radius_px),
+    )
     search_outer = max(
         min(int(radius_px * 10), SOURCE_SEARCH_MAX_RADIUS),
         SOURCE_SEARCH_MIN_RADIUS,
+        search_inner + SOURCE_SEARCH_MIN_RADIUS,
     )
 
-    # Default fallback: same fixed offset as before
+    # Default fallback
     dim = max(width, height)
     default_src_x = min(width - 1, max(0, cx + HEAL_SOURCE_OFFSET_X * dim))
     default_src_y = min(height - 1, max(0, cy + HEAL_SOURCE_OFFSET_Y * dim))
 
-    # Forbidden zones: other accepted dust spots (avoid placing source on another dust spot)
+    # Forbidden zones: other accepted dust spots
     forbidden = [
         (int(round(s["cx"])), int(round(s["cy"])), max(int(s["radius_px"]) * 2, 4))
         for s in all_spots
         if not (abs(s["cx"] - cx) < 0.5 and abs(s["cy"] - cy) < 0.5)
     ]
 
-    best_score = float("inf")
-    best_src = (default_src_x, default_src_y)
+    # --- NCC on a small crop of the image covering the search annulus ---
+    sb_y1 = max(0, icy - search_outer - tmpl_r)
+    sb_y2 = min(height, icy + search_outer + tmpl_r + 1)
+    sb_x1 = max(0, icx - search_outer - tmpl_r)
+    sb_x2 = min(width,  icx + search_outer + tmpl_r + 1)
+    search_region = L_f32[sb_y1:sb_y2, sb_x1:sb_x2]
 
-    step = max(SOURCE_GRID_STEP, max(int(radius_px), 2))
+    if search_region.shape[0] < tmpl_h or search_region.shape[1] < tmpl_w:
+        return (default_src_x, default_src_y)
 
-    for sy in range(max(0, icy - search_outer), min(height, icy + search_outer + 1), step):
-        for sx in range(max(0, icx - search_outer), min(width, icx + search_outer + 1), step):
-            dx = sx - icx
-            dy = sy - icy
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist < search_inner or dist > search_outer:
-                continue
+    # TM_SQDIFF_NORMED: lower score = better match (seek minimum).
+    # For a near-uniform template (dust on plain sky/water), SQDIFF measures
+    # the variance of the source patch — so clean sky scores near 0 and a wire
+    # or edge scores high. For a textured template it measures pixel-by-pixel
+    # mismatch, which also correctly prefers similar content over different content.
+    # TM_CCOEFF_NORMED (correlation) degenerates to noise on flat templates
+    # because both numerator and denominator approach zero.
+    result = cv2.matchTemplate(search_region, template, cv2.TM_SQDIFF_NORMED)
+    if result.size == 0:
+        return (default_src_x, default_src_y)
 
-            # Skip if overlapping another dust spot
-            skip = False
-            for fx, fy, fr in forbidden:
-                if math.hypot(sx - fx, sy - fy) < fr:
-                    skip = True
-                    break
-            if skip:
-                continue
+    # result[ry, rx]: SQDIFF score when template top-left is at (sb_y1+ry, sb_x1+rx),
+    # meaning the template centre aligns to image coords
+    # (sb_y1 + ry + t_icy, sb_x1 + rx + t_icx).
+    result_h, result_w = result.shape
+    ry_arr = np.arange(result_h, dtype=np.float32).reshape(-1, 1)
+    rx_arr = np.arange(result_w, dtype=np.float32).reshape(1, -1)
+    centre_y = sb_y1 + ry_arr + t_icy
+    centre_x = sb_x1 + rx_arr + t_icx
 
-            # Color score (Lab ΔE-like distance)
-            cand_L = float(img_lab[sy, sx, 0])
-            cand_a = float(img_lab[sy, sx, 1])
-            cand_b = float(img_lab[sy, sx, 2])
-            color_dist = math.sqrt(
-                (cand_L - ref_L) ** 2 +
-                (cand_a - ref_a) ** 2 +
-                (cand_b - ref_b) ** 2
-            )
+    dist = np.sqrt((centre_x - icx) ** 2 + (centre_y - icy) ** 2)
+    valid = (dist >= search_inner) & (dist <= search_outer)
+    for fx, fy, fr in forbidden:
+        valid &= np.hypot(centre_x - fx, centre_y - fy) >= fr
 
-            # Texture score
-            texture_dist = abs(float(local_std[sy, sx]) - ref_texture)
+    if not valid.any():
+        return (default_src_x, default_src_y)
 
-            score = SOURCE_COLOR_WEIGHT * color_dist + SOURCE_TEXTURE_WEIGHT * texture_dist
-            if score < best_score:
-                best_score = score
-                best_src = (float(sx), float(sy))
-
-    return best_src
+    # Mask invalid positions with a large sentinel, then find the minimum.
+    masked = np.where(valid, result, 2.0)
+    best_ry, best_rx = np.unravel_index(int(np.argmin(masked)), result.shape)
+    return (float(sb_x1 + best_rx + t_icx), float(sb_y1 + best_ry + t_icy))
 
 
 # ===================================================================
@@ -835,9 +852,8 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
         # Transform to original image space (undo crop + flip)
         norm_cx, norm_cy = _export_to_original(norm_cx, norm_cy, flip, crop)
 
-        # Brush border proportional to detected spot radius, with minimum
-        norm_radius = spot["radius_px"] / max(image_width, image_height)
-        border = max(MIN_BRUSH_BORDER, norm_radius * 2.0)
+        # Brush border: normalize brush_radius_px exactly — spot dict is the canonical size
+        border = spot["brush_radius_px"] / max(image_width, image_height)
 
         # Heal source: use auto-detected optimal position if available, else fixed offset
         if "src_cx" in spot and "src_cy" in spot:
@@ -896,7 +912,7 @@ def save_visualization(image_path, spots, output_path):
     for spot in spots:
         cx = int(round(spot["cx"]))
         cy = int(round(spot["cy"]))
-        r = max(5, int(round(spot["radius_px"] * 3)))  # enlarge for visibility
+        r = max(1, int(round(spot["brush_radius_px"])))
         cv2.circle(img, (cx, cy), r, (0, 0, 255), 2)
 
     cv2.imwrite(str(output_path), img)
@@ -1040,10 +1056,11 @@ def process_one_image(args):
             # Find optimal healing source for each spot
             if spots and local_std is not None:
                 img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+                L_f32 = img_lab[:, :, 0].astype(np.float32)
                 for spot in spots:
                     src_cx, src_cy = find_healing_source(
-                        spot["cx"], spot["cy"], spot["radius_px"],
-                        img_lab, local_std, spots, width, height)
+                        spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
+                        img_lab, L_f32, local_std, spots, width, height)
                     spot["src_cx"] = src_cx
                     spot["src_cy"] = src_cy
 
