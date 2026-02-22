@@ -16,6 +16,7 @@ It should try to look around the found dust particle and find best candidate for
 - close by texture
 - not being another dust particle
 - not very far from the original point
+- not being within detected brush size
 - something else?
 
 The feature should be added holistically:
