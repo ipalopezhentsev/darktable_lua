@@ -72,8 +72,10 @@ class DebugUI:
             self.annotations[stem] = {
                 "false_positives": set(),
                 "missed_dust": [],
-                "source_overrides": {},  # {spot_idx: (src_cx, src_cy)}
+                "source_overrides": {},   # {spot_idx: (src_cx, src_cy)}
+                "radius_overrides": {},   # {spot_idx: corrected_radius_px}
                 "source_mismatches": [],  # list from quality test diff sessions
+                "radius_mismatches": [],  # list from quality test diff sessions
             }
 
         # Load any previously saved annotations
@@ -148,6 +150,7 @@ class DebugUI:
         self.lb_canvas_window = self.lb_canvas.create_window(
             0, 0, anchor="nw", window=self.lb_inner)
         self.lb_inner.bind("<Configure>", self._on_lb_inner_configure)
+        self.lb_inner.bind("<MouseWheel>", self._on_lb_scroll)
         self.lb_canvas.bind("<Configure>", self._on_lb_outer_configure)
         self.lb_canvas.bind("<MouseWheel>", self._on_lb_scroll)
         self.lb_rows = []        # Frame per image row
@@ -176,6 +179,8 @@ class DebugUI:
             ("✚", "#00ffff", "Missed dust (added)"),
             ("□", "#00cc44", "Heal source (- - line)"),
             ("□", "#ff4444", "Baseline source (mismatch)"),
+            ("○", "#ff9900", "Baseline radius (mismatch)"),
+            ("○", "#00ddff", "Corrected radius (annotated)"),
         ]:
             row = tk.Frame(left, bg="#2b2b2b")
             row.pack(anchor="w", padx=6)
@@ -188,6 +193,8 @@ class DebugUI:
         tk.Label(left, text=(
             "Mouse:\n"
             "  Scroll — zoom in/out\n"
+            "  Scroll (1 spot sel'd) —\n"
+            "    adjust radius correction\n"
             "  Middle drag — pan\n"
             "  Click — select marker\n"
             "  Drag — multi-select\n"
@@ -195,6 +202,7 @@ class DebugUI:
             "  Ctrl+click — add missed\n"
             "  Ctrl+drag — zoom to rect\n"
             "Keys:\n"
+            "  Space/B — next/prev image\n"
             "  R — rejected → missed\n"
             "  M — mark false positive\n"
             "  C — clear FP mark\n"
@@ -262,6 +270,9 @@ class DebugUI:
         self.root.bind("<Shift-Right>",   lambda e: self._pan_by(-pan_big, 0))
         self.root.bind("<Shift-Up>",      lambda e: self._pan_by(0,  pan_big))
         self.root.bind("<Shift-Down>",    lambda e: self._pan_by(0, -pan_big))
+        self.root.bind("<space>",         lambda e: self._nav_image(+1))
+        self.root.bind("<b>",             lambda e: self._nav_image(-1))
+        self.root.bind("<B>",             lambda e: self._nav_image(-1))
 
         # Bottom panel
         bottom = tk.Frame(right, bg="#2b2b2b", height=190)
@@ -437,6 +448,8 @@ class DebugUI:
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         ann = self.annotations[stem]
+        radius_mismatch_by_idx = {m["spot_idx"]: m for m in ann.get("radius_mismatches", [])}
+        radius_overrides = ann.get("radius_overrides", {})
 
         # Rejected candidates (orange, shown only when toggled)
         if self.show_rejected_var.get():
@@ -453,7 +466,7 @@ class DebugUI:
         for i, spot in enumerate(img_dict.get("detected") or []):
             cx, cy = image_to_canvas(spot["cx"], spot["cy"],
                                      self.offset_x, self.offset_y, self.zoom)
-            rad = max(5, spot["radius_px"] * self.zoom)
+            rad = max(5, spot["brush_radius_px"] * self.zoom)
             is_fp = i in ann["false_positives"]
             is_sel = i in self.selected_detected
             is_src_sel = (self.selected_source == i)
@@ -464,9 +477,24 @@ class DebugUI:
                 lw = 3
             self.canvas.create_oval(cx - rad, cy - rad, cx + rad, cy + rad,
                                     outline=color, width=lw, tags="detected")
+            # Baseline radius circle (dashed orange) when brush_radius_px differs from baseline
+            rm = radius_mismatch_by_idx.get(i)
+            if rm is not None:
+                baseline_rad = max(5, rm["baseline_brush_radius_px"] * self.zoom)
+                self.canvas.create_oval(cx - baseline_rad, cy - baseline_rad,
+                                        cx + baseline_rad, cy + baseline_rad,
+                                        outline="#ff9900", width=1, dash=(4, 3),
+                                        tags="detected")
+            # User radius correction circle (dashed cyan)
+            if i in radius_overrides:
+                corr_rad = max(3, radius_overrides[i] * self.zoom)
+                self.canvas.create_oval(cx - corr_rad, cy - corr_rad,
+                                        cx + corr_rad, cy + corr_rad,
+                                        outline="#00ddff", width=2, dash=(5, 3),
+                                        tags="detected")
             # FP X mark
             if is_fp:
-                r2 = max(5, spot["radius_px"] * self.zoom)
+                r2 = max(5, spot["brush_radius_px"] * self.zoom)
                 self.canvas.create_line(cx - r2, cy - r2, cx + r2, cy + r2,
                                         fill="#ff3333", width=2, tags="fp")
                 self.canvas.create_line(cx + r2, cy - r2, cx - r2, cy + r2,
@@ -544,7 +572,12 @@ class DebugUI:
         self._redraw()
 
     def _on_mousewheel(self, event):
-        # Determine zoom direction
+        # When exactly one detected spot is selected, scroll adjusts its radius correction
+        if len(self.selected_detected) == 1:
+            self._adjust_radius_correction(event)
+            return
+
+        # Normal zoom centered on mouse position
         if event.num == 4:
             delta = 1
         elif event.num == 5:
@@ -555,13 +588,38 @@ class DebugUI:
         factor = 1.15 if delta > 0 else (1 / 1.15)
         new_zoom = max(0.05, min(20.0, self.zoom * factor))
 
-        # Zoom centered on mouse position
         mx, my = event.x, event.y
         self.offset_x = mx - (mx - self.offset_x) * (new_zoom / self.zoom)
         self.offset_y = my - (my - self.offset_y) * (new_zoom / self.zoom)
         self.zoom = new_zoom
         self.at_fit_zoom = False
         self._redraw()
+
+    def _adjust_radius_correction(self, event):
+        """Scroll wheel: grow/shrink the radius correction for the selected detected spot."""
+        if event.num == 4:
+            delta = 1
+        elif event.num == 5:
+            delta = -1
+        else:
+            delta = 1 if event.delta > 0 else -1
+
+        idx = next(iter(self.selected_detected))
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        spots = img_dict.get("detected") or []
+        if idx >= len(spots):
+            return
+        spot = spots[idx]
+        ann = self.annotations[stem]
+        # Start from existing override or original detected radius
+        current_r = ann["radius_overrides"].get(idx, spot["brush_radius_px"])
+        factor = 1.1 if delta > 0 else (1 / 1.1)
+        new_r = max(1.0, current_r * factor)
+        ann["radius_overrides"][idx] = new_r
+        self._auto_save(stem)
+        self._redraw_markers()
+        self._update_info_from_selection()
 
     def _on_pan_start(self, event):
         self.pan_start = (event.x, event.y)
@@ -875,6 +933,7 @@ class DebugUI:
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         ann = self.annotations[stem]
+        radius_mismatch_by_idx = {m["spot_idx"]: m for m in ann.get("radius_mismatches", [])}
 
         lines = []
         if self.selected_source is not None:
@@ -900,12 +959,26 @@ class DebugUI:
                     status = "FALSE POSITIVE (marked)" if is_fp else "accepted"
                     src = self._get_source(stem, i, s)
                     src_str = (f"\n  src=({src[0]:.0f}, {src[1]:.0f})" if src else "")
+                    rm = radius_mismatch_by_idx.get(i)
+                    rm_str = (
+                        f"\n  RADIUS DIFF: baseline={rm['baseline_brush_radius_px']:.1f}px"
+                        f"  new={rm['new_brush_radius_px']:.1f}px"
+                        f"  diff={rm['radius_diff']:+.1f}px"
+                        if rm else "")
+                    radius_overrides = ann.get("radius_overrides", {})
+                    if i in radius_overrides:
+                        corr_r = radius_overrides[i]
+                        rc_str = (f"\n  RADIUS CORRECTED: {corr_r:.1f}px"
+                                  f"  (detected: {s['brush_radius_px']:.1f}px)"
+                                  f"  scroll to adjust")
+                    else:
+                        rc_str = "\n  Scroll to annotate correct radius"
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
                         f"radius={s['radius_px']:.1f}px  area={s['area']}\n"
                         f"  contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
                         f"excess_sat={s['excess_sat']:.1f}  status={status}"
-                        f"{src_str}")
+                        f"{src_str}{rm_str}{rc_str}")
             if len(self.selected_detected) > 1:
                 lines = [f"{len(self.selected_detected)} spots selected"] + lines[:3]
         elif self.selected_rejected:
@@ -1034,6 +1107,7 @@ class DebugUI:
 
             def _bind_click(w, idx=i):
                 w.bind("<Button-1>", lambda e: self._on_thumb_row_click(idx))
+                w.bind("<MouseWheel>", self._on_lb_scroll)
 
             if photo:
                 lbl_img = tk.Label(row, image=photo, bg="#1e1e1e",
@@ -1048,6 +1122,15 @@ class DebugUI:
             _bind_click(lbl_txt)
             _bind_click(row)
             self.lb_rows.append(row)
+
+    def _nav_image(self, delta):
+        """Go to next (+1) or previous (-1) image."""
+        new_idx = self.current_idx + delta
+        if new_idx < 0 or new_idx >= len(self.images):
+            return
+        stem = self.images[self.current_idx]["stem"]
+        self._auto_save(stem)
+        self._load_image_by_idx(new_idx)
 
     def _on_thumb_row_click(self, idx):
         if idx == self.current_idx and self.pil_image is not None:
@@ -1105,11 +1188,20 @@ class DebugUI:
             for k, v in sorted(ann.get("source_overrides", {}).items())
         ]
 
+        # Serialize radius_overrides as list of {spot_idx, corrected_radius_px}
+        radius_overrides_list = [
+            {"spot_idx": k, "corrected_radius_px": float(v)}
+            for k, v in sorted(ann.get("radius_overrides", {}).items())
+        ]
+
         data = {
             "stem": stem,
             "false_positives": fp_list,
             "missed_dust": ann["missed_dust"],
             "source_overrides": src_overrides_list,
+            "radius_overrides": radius_overrides_list,
+            "source_mismatches": ann.get("source_mismatches", []),
+            "radius_mismatches": ann.get("radius_mismatches", []),
         }
         ann_path = os.path.join(self.export_dir, f"{stem}_annotations.json")
         with open(ann_path, "w") as f:
@@ -1147,8 +1239,17 @@ class DebugUI:
                 except (KeyError, ValueError, TypeError):
                     pass
             self.annotations[stem]["source_overrides"] = src_overrides
-            # Load source mismatches from quality test diff sessions
+            # Restore radius overrides: list of {spot_idx, corrected_radius_px}
+            radius_overrides = {}
+            for entry in data.get("radius_overrides", []):
+                try:
+                    radius_overrides[int(entry["spot_idx"])] = float(entry["corrected_radius_px"])
+                except (KeyError, ValueError, TypeError):
+                    pass
+            self.annotations[stem]["radius_overrides"] = radius_overrides
+            # Load source/radius mismatches from quality test diff sessions
             self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
+            self.annotations[stem]["radius_mismatches"] = data.get("radius_mismatches", [])
 
     # ------------------------------------------------------------------
     # Report generation & close
@@ -1203,10 +1304,11 @@ class DebugUI:
             missed_list = ann["missed_dust"]
             src_overrides = ann.get("source_overrides", {})
 
+            radius_overrides = ann.get("radius_overrides", {})
             total_fp += len(fp_indices)
             total_missed += len(missed_list)
             total_src_repositions += len(src_overrides)
-            has_annotations = bool(fp_indices or missed_list or src_overrides)
+            has_annotations = bool(fp_indices or missed_list or src_overrides or radius_overrides)
             if has_annotations:
                 images_with_annotations += 1
 
@@ -1254,6 +1356,17 @@ class DebugUI:
                 for spot_idx in sorted(src_overrides.keys()):
                     src_cx, src_cy = src_overrides[spot_idx]
                     lines.append(f"    Spot #{spot_idx}: src=({src_cx:.0f}, {src_cy:.0f})")
+
+            # Radius corrections
+            if radius_overrides:
+                lines.append("")
+                lines.append("  RADIUS CORRECTIONS (user-annotated correct brush radius):")
+                for spot_idx in sorted(radius_overrides.keys()):
+                    corr_r = radius_overrides[spot_idx]
+                    orig_r = detected[spot_idx]["brush_radius_px"] if spot_idx < len(detected) else "?"
+                    orig_str = f"{orig_r:.1f}" if isinstance(orig_r, float) else str(orig_r)
+                    lines.append(
+                        f"    Spot #{spot_idx}: corrected={corr_r:.1f}px  detected={orig_str}px")
 
             # Rejected candidates (for context)
             if rejected_list:
