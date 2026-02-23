@@ -5,7 +5,7 @@ Detects bright dust particles on inverted negatives and generates
 XMP-ready binary data for darktable's retouch module.
 
 Usage:
-    python detect_dust.py [--no-vis] <image1.jpg> [image2.jpg ...]
+    python detect_dust.py [--debug-ui] <image1.jpg> [image2.jpg ...]
 
 Output:
     dust_results.txt in the same directory as the first input image.
@@ -914,24 +914,6 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
 
 
 # ===================================================================
-# Visualization
-# ===================================================================
-
-def save_visualization(image_path, spots, output_path):
-    """Save a copy of the image with red circles at detected spots."""
-    img = cv2.imread(str(image_path))
-    if img is None:
-        return
-
-    for spot in spots:
-        cx = int(round(spot["cx"]))
-        cy = int(round(spot["cy"]))
-        r = max(1, int(round(spot["brush_radius_px"])))
-        cv2.circle(img, (cx, cy), r, (0, 0, 255), 2)
-
-    cv2.imwrite(str(output_path), img)
-
-
 # ===================================================================
 # Results output
 # ===================================================================
@@ -1034,7 +1016,7 @@ def process_one_image(args):
     Must be a top-level function (not nested inside main) so multiprocessing
     can pickle it on Windows, which uses the 'spawn' start method.
     """
-    image_path, transforms, save_vis, collect_rejects = args
+    image_path, transforms, collect_rejects = args
     filename = Path(image_path).stem
 
     buf = io.StringIO()
@@ -1088,11 +1070,6 @@ def process_one_image(args):
                     f"exSat={spot['excess_sat']:.1f}{src_str}"
                 )
 
-            if save_vis and spots:
-                vis_path = Path(image_path).with_name(f"{filename}_dust_overlay.jpg")
-                save_visualization(image_path, spots, vis_path)
-                print(f"  Visualization saved: {vis_path}")
-
             if spots:
                 t = transforms.get(filename, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0)})
                 print(f"  Transform: flip={t['flip']}, crop={t['crop']}")
@@ -1114,14 +1091,10 @@ def process_one_image(args):
 def main():
     args = sys.argv[1:]
     if not args:
-        print("Usage: detect_dust.py [--no-vis] [--debug-ui] <image1.jpg> [image2.jpg ...]")
+        print("Usage: detect_dust.py [--debug-ui] <image1.jpg> [image2.jpg ...]")
         sys.exit(1)
 
-    save_vis = True
     debug_ui = False
-    if "--no-vis" in args:
-        save_vis = False
-        args.remove("--no-vis")
     if "--debug-ui" in args:
         debug_ui = True
         args.remove("--debug-ui")
@@ -1159,7 +1132,7 @@ def main():
     n_workers = min(cpu_count(), len(image_paths))
     print(f"Running {n_workers} parallel worker(s) for {len(image_paths)} image(s)", flush=True)
 
-    args_list = [(p, transforms, save_vis, debug_ui) for p in image_paths]
+    args_list = [(p, transforms, debug_ui) for p in image_paths]
 
     with Pool(processes=n_workers) as pool:
         for i, result in enumerate(pool.imap_unordered(process_one_image, args_list), 1):
