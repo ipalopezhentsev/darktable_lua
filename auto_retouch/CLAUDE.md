@@ -10,6 +10,10 @@
 6. Lua parses results, injects retouch history entry + mask entries into each source image's XMP sidecar
 7. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 
+### Testing approach
+There is folder `tests` with saved baseline of 'reasonably good detection' and `tests/run_quality_tests.py` script which runs the current algorithm and compares how different it is from the baseline.
+If you make any change to algorithm in `detect_dust.py` you must test yourself via the run_quality_tests.py that your proposed changes do not create large regression.
+
 ### Canonical Data Principle (auto_retouch)
 
 The spot dicts produced by `detect_spots()` are the **single source of truth** for all detected data (location, radius, etc.). Any algorithm change — whether to detection logic, brush sizing, coordinate transforms, whatever — must be reflected in the spot dict fields themselves. All four consumers read from the same dict and must stay in sync automatically:

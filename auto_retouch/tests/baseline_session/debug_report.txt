@@ -7,6 +7,7 @@ Detection constants:
   BRUSH_DENSITY = 1.0
   BRUSH_HARDNESS = 0.66
   BRUSH_STATE_NORMAL = 1
+  EMULSION_EXCESS_SAT_THRESHOLD = 9
   HEAL_SOURCE_OFFSET_X = 0.01
   HEAL_SOURCE_OFFSET_Y = 0.01
   ISOLATION_RADIUS = 250
@@ -26,6 +27,7 @@ Detection constants:
   MAX_NEARBY_ACCEPTED = 3
   MAX_SPOTS = 200
   MAX_SPOT_AREA = 800
+  MAX_SPOT_SATURATION = 230
   MIN_ABSOLUTE_THRESHOLD = 15.0
   MIN_ASPECT_RATIO = 0.3
   MIN_BRIGHTNESS_FRAC_LARGE = 0.8
@@ -73,7 +75,7 @@ Per-image results:
   DSC_0018 (5701x3773): 23 spots detected
   DSC_0019 (5589x3754): 0 spots detected
   DSC_0020 (5721x3788): 0 spots detected
-  DSC_0021 (5691x3767): 73 spots detected
+  DSC_0021 (5691x3767): 71 spots detected
   DSC_0022 (5693x3782): 64 spots detected
   DSC_0023 (5679x3780): 34 spots detected
   DSC_0024 (2670x4032): 5 spots detected
@@ -91,4 +93,4 @@ Per-image results:
   DSC_0036 (2655x4031): 0 spots detected
   DSC_0037 (5515x3709): 6 spots detected
 
-Total: 1005 spots across 36 images
+Total: 1003 spots across 36 images

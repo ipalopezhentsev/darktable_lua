@@ -48,9 +48,11 @@ MAX_DARK_BG_TEXTURE = 10.0     # max texture in ring around spot on dark backgro
 MIN_CONTRAST_TEXTURE_RATIO = 5.5  # contrast/texture — reject spots hidden in grain
 MAX_BG_GRADIENT_RATIO = 0.09   # max bg_gradient/contrast — reject edge halo artifacts
 MAX_EXCESS_SATURATION = 10     # max (spot_sat - surround_sat) — dust matches local color cast
-# NOTE: No MIN_EXCESS_SATURATION — dust on colorful content is genuinely desaturated (excess_sat can reach -100+)
-# NOTE: No MAX_SPOT_SATURATION — color film negatives produce dust spots with spot_sat 100-230 (film emulsion
-#       color characteristics), so absolute saturation is not a reliable discriminator.
+MAX_SPOT_SATURATION = 230      # compound check lower bound: spot_sat above this + positive excess_sat
+EMULSION_EXCESS_SAT_THRESHOLD = 9  # excess_sat above this (when spot_sat > 230) = emulsion artifact:
+                               # dust is achromatic → less colorful than surroundings; a spot that is
+                               # both extremely colorful (>230) AND more saturated than its surroundings
+                               # (>9) is a film emulsion feature, not dust
 MAX_CONTEXT_TEXTURE = 9.0      # max median local_std across a 200px radius from spot center.
                                # Dust sits on smooth backgrounds (sky, walls: median ≈ 2-7).
                                # Crowd/foliage FPs sit in texured scenes (median ≈ 10-25).
@@ -182,7 +184,8 @@ def detect_dust_spots(image_path, collect_rejects=False):
     rejected_candidates = []  # structured rejects, only populated when collect_rejects=True
     rejected = {"too_small": 0, "too_large": 0, "shape": 0, "contrast": 0,
                 "large_dim": 0, "dim": 0, "dark_bg": 0, "embedded": 0, "edge": 0,
-                "texture": 0, "ratio": 0, "context": 0, "votes": 0, "color": 0,
+                "texture": 0, "ratio": 0, "context": 0,
+                "votes": 0, "color": 0, "sat_high": 0,
                 "isolation": 0}
     debug_rejects = []  # track rejected candidates with high contrast for diagnostics
 
@@ -496,6 +499,18 @@ def detect_dust_spots(image_path, collect_rejects=False):
                 debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=color(exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION})")
             log_reject(cx, cy, area, contrast, "color", f"exSat={excess_sat:.1f}>{MAX_EXCESS_SATURATION}")
             continue
+
+        # Reject high-saturation emulsion artifacts: dust is achromatic and less colorful than
+        # its surroundings (negative excess_sat). A spot that is both extremely colorful
+        # (spot_sat > 230) AND more saturated than its immediate surroundings (excess_sat > 9)
+        # is a film emulsion feature, not dust — even on highly saturated color film.
+        if spot_sat > MAX_SPOT_SATURATION and excess_sat > EMULSION_EXCESS_SAT_THRESHOLD:
+            rejected["sat_high"] += 1
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=sat_high(spotSat={spot_sat:.0f}>{MAX_SPOT_SATURATION} exSat={excess_sat:.1f}>{EMULSION_EXCESS_SAT_THRESHOLD})")
+            log_reject(cx, cy, area, contrast, "sat_high", f"spot_sat={spot_sat:.1f}>{MAX_SPOT_SATURATION} excess_sat={excess_sat:.1f}>{EMULSION_EXCESS_SAT_THRESHOLD}")
+            continue
+
         brush_radius_px = max(MIN_BRUSH_PX, enc_r / BRUSH_HARDNESS)
         spots.append({
             "cx": float(cx),

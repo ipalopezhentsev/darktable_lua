@@ -13,6 +13,10 @@ Usage:
     conda run -n autocrop python auto_retouch/tests/run_quality_tests.py
     conda run -n autocrop python auto_retouch/tests/run_quality_tests.py --image DSC_0025
     conda run -n autocrop python auto_retouch/tests/run_quality_tests.py --open-ui
+
+    # Use an annotation session as baseline (filters out user-confirmed FPs):
+    conda run -n autocrop python auto_retouch/tests/run_quality_tests.py SESSION_DIR
+    conda run -n autocrop python auto_retouch/tests/run_quality_tests.py SESSION_DIR --open-ui
 """
 
 import os
@@ -180,6 +184,81 @@ def load_baseline():
     return {img["stem"]: img for img in data["images"]}
 
 
+def load_baseline_from_session(session_dir):
+    """Load baseline from an annotation session directory.
+
+    Reads debug_spots.json as the reference detection, then for each image
+    loads *_annotations.json (if present) and removes spots listed as
+    false_positives so the corrected baseline reflects the user's ground truth.
+    Returns a dict keyed by stem, same shape as load_baseline().
+    """
+    session_dir = Path(session_dir)
+    baseline_json = session_dir / "debug_spots.json"
+    if not baseline_json.exists():
+        print(f"ERROR: No debug_spots.json found in {session_dir}")
+        sys.exit(1)
+    with open(baseline_json) as f:
+        data = json.load(f)
+
+    result = {}
+    missed_dust_by_stem = {}
+    for img in data["images"]:
+        stem = img["stem"]
+        detected = list(img.get("detected", []))
+
+        # Load annotation file and filter out confirmed false positives;
+        # also collect missed_dust annotations as expected recoveries.
+        ann_path = session_dir / f"{stem}_annotations.json"
+        if ann_path.exists():
+            with open(ann_path) as f:
+                ann = json.load(f)
+            fp_list = ann.get("false_positives", [])
+            if fp_list:
+                fp_indices = set()
+                for fp in fp_list:
+                    for i, spot in enumerate(detected):
+                        d = math.sqrt((fp["cx"] - spot["cx"]) ** 2
+                                      + (fp["cy"] - spot["cy"]) ** 2)
+                        if d <= MATCH_RADIUS:
+                            fp_indices.add(i)
+                            break
+                detected = [s for i, s in enumerate(detected)
+                            if i not in fp_indices]
+                if fp_indices:
+                    print(f"  [{stem}] removed {len(fp_indices)} confirmed FP(s) from baseline")
+            missed_dust = ann.get("missed_dust", [])
+            if missed_dust:
+                missed_dust_by_stem[stem] = missed_dust
+
+        result[stem] = dict(img, detected=detected)
+    return result, missed_dust_by_stem
+
+
+def _filter_recoveries(new_fps, missed_dust_spots, radius=MATCH_RADIUS):
+    """Split new_fps into true false positives and recovered missed-dust spots.
+
+    A new spot is a 'recovery' if it falls within radius of a user-annotated
+    missed_dust position — meaning the algorithm now correctly finds real dust
+    that the old baseline missed.  These should not penalise the pass/fail score.
+
+    Returns (true_fps, recovered).
+    """
+    if not missed_dust_spots:
+        return new_fps, []
+    recovered = []
+    true_fps = []
+    for fp in new_fps:
+        matched = any(
+            math.sqrt((fp["cx"] - md["cx"]) ** 2 + (fp["cy"] - md["cy"]) ** 2) <= radius
+            for md in missed_dust_spots
+        )
+        if matched:
+            recovered.append(fp)
+        else:
+            true_fps.append(fp)
+    return true_fps, recovered
+
+
 def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
     """Write debug_spots.json + per-image annotations.json to session_dir."""
     session_dir = Path(session_dir)
@@ -226,23 +305,37 @@ def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
 
 def main():
     parser = argparse.ArgumentParser(description="Dust detection quality regression test")
+    parser.add_argument("session", nargs="?", metavar="SESSION_DIR",
+                        help="Annotation session directory — uses its images and debug_spots.json "
+                             "as baseline, filtering out user-confirmed false positives")
     parser.add_argument("--image", metavar="STEM",
                         help="Test only this image (e.g. DSC_0025)")
     parser.add_argument("--open-ui", action="store_true",
                         help="Launch debug_ui.py on the generated diff session when done")
     args = parser.parse_args()
 
-    baseline = load_baseline()
+    missed_dust_by_stem = {}
+    if args.session:
+        session_dir = Path(args.session)
+        if not session_dir.is_dir():
+            print(f"ERROR: SESSION_DIR not found: {session_dir}")
+            sys.exit(1)
+        print(f"Using annotation session: {session_dir}")
+        baseline, missed_dust_by_stem = load_baseline_from_session(session_dir)
+        images_dir = session_dir
+    else:
+        baseline = load_baseline()
+        images_dir = IMAGES_DIR
 
-    image_paths = sorted(IMAGES_DIR.glob("*.jpg")) + sorted(IMAGES_DIR.glob("*.jpeg"))
+    image_paths = sorted(images_dir.glob("*.jpg")) + sorted(images_dir.glob("*.jpeg"))
     if args.image:
         image_paths = [p for p in image_paths if p.stem == args.image]
         if not image_paths:
-            print(f"ERROR: Image '{args.image}' not found in {IMAGES_DIR}")
+            print(f"ERROR: Image '{args.image}' not found in {images_dir}")
             sys.exit(1)
 
     if not image_paths:
-        print(f"No images found in {IMAGES_DIR}")
+        print(f"No images found in {images_dir}")
         sys.exit(1)
 
     print(f"Running detection on {len(image_paths)} image(s)...")
@@ -263,12 +356,12 @@ def main():
         baseline_entry = baseline.get(stem)
 
         if error:
-            verdicts.append(("FAIL", stem, 0, 0, [], [], [], [], [], [], error))
+            verdicts.append(("FAIL", stem, 0, 0, [], [], [], [], [], [], [], error))
             diff_by_stem[stem] = ([], [], [], [])
             continue
 
         if baseline_entry is None:
-            verdicts.append(("WARN", stem, len(new_spots), 0, [], [], new_spots, [], [], [],
+            verdicts.append(("WARN", stem, len(new_spots), 0, [], [], new_spots, [], [], [], [],
                              "not in baseline"))
             diff_by_stem[stem] = ([], new_spots, [], [])
             continue
@@ -280,11 +373,16 @@ def main():
             baseline_has_sources = True
 
         matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches = _match_spots(baseline_spots, new_spots)
+
+        # Split new FPs: spots matching user-annotated missed_dust are recoveries, not true FPs
+        true_fps, recovered = _filter_recoveries(new_fps, missed_dust_by_stem.get(stem, []))
+
         verdict, match_rate, new_ratio = _verdict(
-            len(baseline_spots), len(new_spots), matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches)
+            len(baseline_spots), len(new_spots), matched_pairs, missing, true_fps, source_issues, source_mismatches, radius_mismatches)
         verdicts.append((verdict, stem, len(new_spots), len(baseline_spots),
-                         matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches, None))
-        diff_by_stem[stem] = (missing, new_fps, source_mismatches, radius_mismatches)
+                         matched_pairs, missing, true_fps, source_issues, source_mismatches, radius_mismatches, recovered, None))
+        # Write only true FPs to diff session (recoveries are expected improvements)
+        diff_by_stem[stem] = (missing, true_fps, source_mismatches, radius_mismatches)
 
     # --- Print summary ---
     counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
@@ -293,7 +391,7 @@ def main():
     total_radius_mismatches = 0
 
     for entry in verdicts:
-        verdict, stem, new_count, baseline_count, matched, missing, new_fps, source_issues, source_mismatches, radius_mismatches, note = entry
+        verdict, stem, new_count, baseline_count, matched, missing, new_fps, source_issues, source_mismatches, radius_mismatches, recovered, note = entry
         counts[verdict] += 1
         total_source_issues += len(source_issues)
         total_source_mismatches += len(source_mismatches)
@@ -304,12 +402,13 @@ def main():
                           if baseline_count else "")
         miss_str = f"  missing={len(missing)}" if missing else ""
         fp_str = f"  new_fps={len(new_fps)}" if new_fps else ""
+        rec_str = f"  recovered={len(recovered)}" if recovered else ""
         src_str = f"  src_issues={len(source_issues)}" if source_issues else ""
         mismatch_str = f"  src_mismatch={len(source_mismatches)}" if source_mismatches else ""
         radius_str = f"  radius_mismatch={len(radius_mismatches)}" if radius_mismatches else ""
         note_str = f"  ({note})" if note else ""
         print(f"[{verdict}] {stem:<12} baseline={baseline_count:>3}  new={new_count:>3}"
-              f"{match_rate_str}{miss_str}{fp_str}{src_str}{mismatch_str}{radius_str}{note_str}")
+              f"{match_rate_str}{miss_str}{fp_str}{rec_str}{src_str}{mismatch_str}{radius_str}{note_str}")
 
     print(f"\nOverall: {counts['PASS']} PASS, {counts['WARN']} WARN, {counts['FAIL']} FAIL")
 
