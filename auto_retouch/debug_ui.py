@@ -8,9 +8,9 @@ debug_report.txt readable by Claude Code for algorithm tuning.
 Usage:
     python debug_ui.py <export_dir>
 
-Reads:  {export_dir}/debug_spots.json
-Writes: {export_dir}/{stem}_annotations.json  (auto-saved per image)
-        {export_dir}/debug_report.txt          (on window close)
+Reads:  {export_dir}/{stem}_debug_spots.json  (per-image detection data)
+Writes: {export_dir}/{stem}_annotations.json   (auto-saved per image)
+        {export_dir}/debug_report.txt           (on window close)
 """
 
 import sys
@@ -52,21 +52,17 @@ class DebugUI:
         self.root.title("Dust Detection Debug UI")
         self.root.geometry("1400x900")
 
-        # Load data
-        json_path = os.path.join(export_dir, "debug_spots.json")
-        if not os.path.exists(json_path):
-            messagebox.showerror("Error", f"debug_spots.json not found in:\n{export_dir}")
+        # Load per-image debug_spots files
+        sys.path.insert(0, str(Path(__file__).parent))
+        import detect_dust
+        images, constants = detect_dust.load_debug_spots_dir(export_dir)
+        if not images:
+            messagebox.showerror("Error", f"No *_debug_spots.json files found in:\n{export_dir}")
             root.destroy()
             return
 
-        with open(json_path, "r") as f:
-            self.data = json.load(f)
-
-        self.images = self.data.get("images", [])
-        if not self.images:
-            messagebox.showerror("Error", "No images found in debug_spots.json")
-            root.destroy()
-            return
+        self.data = {"images": images, "constants": constants}
+        self.images = images
 
         # Per-image annotation state: {stem: {"false_positives": set(), "missed_dust": []}}
         self.annotations = {}

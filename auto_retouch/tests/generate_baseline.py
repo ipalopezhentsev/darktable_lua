@@ -29,7 +29,7 @@ BASELINE_DIR = TESTS_DIR / "baseline_session"
 
 
 def _worker(image_path):
-    """Run detection on one image; returns result tuple for write_debug_spots_json."""
+    """Run detection on one image; returns result tuple for write_debug_spots_json()."""
     stem = Path(image_path).stem
     img_path = str(image_path)
 
@@ -64,7 +64,7 @@ def main():
 
     image_paths_by_stem = {Path(p).stem: str(p) for p in image_paths}
 
-    # Write debug_spots.json (same format as detect_dust.write_debug_spots_json)
+    # Write per-image {stem}_debug_spots.json files
     detect_dust.write_debug_spots_json(raw_results, image_paths_by_stem, str(BASELINE_DIR))
 
     # Write empty annotations.json per image (no human annotations yet)

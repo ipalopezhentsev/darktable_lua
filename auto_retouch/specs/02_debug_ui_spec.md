@@ -18,10 +18,11 @@ Two kinds of errors:
 
 - `detect_dust.py` is called with `--debug-ui` flag by the `AutoRetouch_Debug`
   action in `auto_retouch.lua`.
-- After detection finishes, `detect_dust.py` writes `debug_spots.json` to the
-  export dir, then launches `debug_ui.py <export_dir>` as a non-blocking
-  subprocess (`Popen`) and exits. The UI runs independently.
-- The UI reads `debug_spots.json` and on close writes `debug_report.txt`.
+- After detection finishes, `detect_dust.py` writes per-image
+  `{stem}_debug_spots.json` files to the export dir, then launches
+  `debug_ui.py <export_dir>` as a non-blocking subprocess (`Popen`) and exits.
+  The UI runs independently.
+- The UI reads `{stem}_debug_spots.json` files and on close writes `debug_report.txt`.
 
 ---
 
@@ -29,7 +30,7 @@ Two kinds of errors:
 
 | File | When | Contents |
 |------|------|----------|
-| `debug_spots.json` | detect_dust.py with `--debug-ui` | detected + rejected spots per image, detection constants |
+| `{stem}_debug_spots.json` | detect_dust.py with `--debug-ui` | per-image detected + rejected spots, detection constants |
 | `{stem}_annotations.json` | debug_ui.py on each annotation change | per-image false_positives + missed_dust (auto-saved) |
 | `debug_report.txt` | debug_ui.py on window close | human-readable summary for Claude Code |
 

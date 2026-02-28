@@ -19,7 +19,7 @@ If you make any change to algorithm in `detect_dust.py` you must test yourself v
 
 The spot dicts produced by `detect_spots()` are the **single source of truth** for all detected data (location, radius, etc.). Any algorithm change — whether to detection logic, brush sizing, coordinate transforms, whatever — must be reflected in the spot dict fields themselves. All four consumers read from the same dict and must stay in sync automatically:
 
-1. **`debug_spots.json`** — serializes spot dicts wholesale; new fields appear for free
+1. **`{stem}_debug_spots.json`** — serializes spot dicts wholesale per image; new fields appear for free
 2. **`_dust_overlay.jpg`** — `save_visualization()` draws from spot dict fields
 3. **Debug UI** — `debug_ui.py` draws circles and shows info from spot dict fields
 4. **XMP output** — `generate_xmp_data_for_spots()` reads spot dict fields

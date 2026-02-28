@@ -13,7 +13,7 @@ Usage:
 
 The debug_dir must contain:
     debug_report.txt  — annotations (FPs and missed spots) per image
-    debug_spots.json  — full rejected candidates list with reasons
+    {stem}_debug_spots.json  — per-image rejected candidates with reasons
 """
 
 import sys
@@ -29,12 +29,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def load_json(debug_dir):
-    path = Path(debug_dir) / "debug_spots.json"
-    if not path.exists():
-        print(f"[warn] No debug_spots.json in {debug_dir}")
+    """Load per-image debug_spots files, returning the combined structure."""
+    sys.path.insert(0, str(Path(__file__).parent))
+    import detect_dust
+    images, constants = detect_dust.load_debug_spots_dir(debug_dir)
+    if not images:
+        print(f"[warn] No *_debug_spots.json in {debug_dir}")
         return None
-    with open(path) as f:
-        return json.load(f)
+    return {"images": images, "constants": constants}
 
 
 def load_report(debug_dir):
@@ -144,7 +146,7 @@ def load_report(debug_dir):
 # ---------------------------------------------------------------------------
 
 def find_spot(debug_dir, cx, cy, stem_filter=None, radius=200):
-    """Search debug_spots.json for rejected candidates near (cx, cy)."""
+    """Search debug_spots files for rejected candidates near (cx, cy)."""
     data = load_json(debug_dir)
     if data is None:
         return

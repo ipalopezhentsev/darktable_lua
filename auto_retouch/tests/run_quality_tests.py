@@ -31,20 +31,6 @@ from datetime import datetime
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 
-import numpy as np
-
-
-class NumpyEncoder(json.JSONEncoder):
-    """Convert numpy scalars to plain Python types for JSON serialization."""
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
-
 TESTS_DIR = Path(__file__).parent
 AUTO_RETOUCH_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(AUTO_RETOUCH_DIR))
@@ -53,7 +39,6 @@ import detect_dust
 
 IMAGES_DIR = TESTS_DIR / "images"
 BASELINE_DIR = TESTS_DIR / "baseline_session"
-BASELINE_JSON = BASELINE_DIR / "debug_spots.json"
 
 # Comparison thresholds
 MATCH_RADIUS = 15          # px: baseline/new spot closer than this = same spot
@@ -196,35 +181,31 @@ def _verdict(baseline_count, new_count, matched, missing, new_fps, source_issues
 
 
 def load_baseline():
-    if not BASELINE_JSON.exists():
-        print(f"ERROR: Baseline not found at {BASELINE_JSON}")
+    images, _constants = detect_dust.load_debug_spots_dir(str(BASELINE_DIR))
+    if not images:
+        print(f"ERROR: No *_debug_spots.json files in {BASELINE_DIR}")
         print("Run generate_baseline.py first.")
         sys.exit(1)
-    with open(BASELINE_JSON) as f:
-        data = json.load(f)
-    # Index by stem
-    return {img["stem"]: img for img in data["images"]}
+    return {img["stem"]: img for img in images}
 
 
 def load_baseline_from_session(session_dir):
     """Load baseline from an annotation session directory.
 
-    Reads debug_spots.json as the reference detection, then for each image
-    loads *_annotations.json (if present) and removes spots listed as
-    false_positives so the corrected baseline reflects the user's ground truth.
-    Returns a dict keyed by stem, same shape as load_baseline().
+    Reads per-image {stem}_debug_spots.json files as the reference detection,
+    then for each image loads *_annotations.json (if present) and removes spots
+    listed as false_positives so the corrected baseline reflects the user's
+    ground truth.  Returns a dict keyed by stem, same shape as load_baseline().
     """
     session_dir = Path(session_dir)
-    baseline_json = session_dir / "debug_spots.json"
-    if not baseline_json.exists():
-        print(f"ERROR: No debug_spots.json found in {session_dir}")
+    images, _constants = detect_dust.load_debug_spots_dir(str(session_dir))
+    if not images:
+        print(f"ERROR: No *_debug_spots.json files found in {session_dir}")
         sys.exit(1)
-    with open(baseline_json) as f:
-        data = json.load(f)
 
     result = {}
     missed_dust_by_stem = {}
-    for img in data["images"]:
+    for img in images:
         stem = img["stem"]
         detected = list(img.get("detected", []))
 
@@ -282,7 +263,7 @@ def _filter_recoveries(new_fps, missed_dust_spots, radius=MATCH_RADIUS):
 
 
 def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
-    """Write debug_spots.json + per-image annotations.json to session_dir."""
+    """Write per-image debug_spots + annotations.json to session_dir."""
     session_dir = Path(session_dir)
     session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -322,14 +303,14 @@ def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
         }
         ann_path = session_dir / f"{stem}_annotations.json"
         with open(ann_path, "w") as f:
-            json.dump(ann, f, indent=2, cls=NumpyEncoder)
+            json.dump(ann, f, indent=2, cls=detect_dust.NumpyEncoder)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Dust detection quality regression test")
     parser.add_argument("session", nargs="?", metavar="SESSION_DIR",
-                        help="Annotation session directory — uses its images and debug_spots.json "
-                             "as baseline, filtering out user-confirmed false positives")
+                        help="Annotation session directory — uses its images and "
+                             "*_debug_spots.json as baseline, filtering out user-confirmed false positives")
     parser.add_argument("--image", metavar="STEM",
                         help="Test only this image (e.g. DSC_0025)")
     parser.add_argument("--open-ui", action="store_true",

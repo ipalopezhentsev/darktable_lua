@@ -18,6 +18,7 @@ import math
 import struct
 import zlib
 import base64
+import json
 import time
 import random
 from contextlib import redirect_stdout
@@ -1183,7 +1184,7 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
 
         # Brush border: darktable renders as border * MIN(pipe_w, pipe_h)
         border = spot["brush_radius_px"] / border_scale
-        spot["radius_norm"] = border   # persisted to debug_spots.json for UI display
+        spot["radius_norm"] = border   # persisted to {stem}_debug_spots.json for UI display
 
         # Heal source: use auto-detected optimal position if available, else fixed offset
         if "src_cx" in spot and "src_cy" in spot:
@@ -1234,43 +1235,65 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
 # Results output
 # ===================================================================
 
+class NumpyEncoder(json.JSONEncoder):
+    """Convert numpy scalars to plain Python types for JSON serialization."""
+    def default(self, o):
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        return super().default(o)
+
+
 def write_debug_spots_json(results, image_paths_by_stem, output_dir):
-    """Write debug_spots.json for the debug UI.
+    """Write per-image {stem}_debug_spots.json files for the debug UI.
 
     results: list of (filename_no_ext, spots_or_None, rejected_candidates, img_dims,
                       error_or_None, xmp_data_or_None).
     """
-    import json
+    constants = {k: v for k, v in globals().items()
+                 if k.isupper() and isinstance(v, (int, float))}
 
-    class NumpyEncoder(json.JSONEncoder):
-        """Convert numpy scalars to plain Python types for JSON serialization."""
-        def default(self, obj):
-            if isinstance(obj, np.integer):
-                return int(obj)
-            if isinstance(obj, np.floating):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return super().default(obj)
-
-    images_out = []
     for filename, spots, rejected_candidates, img_dims, error, xmp_data in results:
         w, h = img_dims if img_dims else (0, 0)
-        images_out.append({
+        data = {
             "stem": filename,
             "image_path": str(image_paths_by_stem.get(filename, "")),
             "width": int(w),
             "height": int(h),
             "detected": spots or [],
             "rejected": rejected_candidates or [],
-        })
-    constants = {k: v for k, v in globals().items()
-                 if k.isupper() and isinstance(v, (int, float))}
-    data = {"images": images_out, "constants": constants}
-    out_path = os.path.join(output_dir, "debug_spots.json")
-    with open(out_path, "w") as f:
-        json.dump(data, f, indent=2, cls=NumpyEncoder)
-    print(f"Debug spots written to: {out_path}")
+            "constants": constants,
+        }
+        out_path = os.path.join(output_dir, f"{filename}_debug_spots.json")
+        with open(out_path, "w") as f:
+            json.dump(data, f, indent=2, cls=NumpyEncoder)
+
+    print(f"Debug spots written to: {output_dir} ({len(results)} file(s))")
+
+
+def load_debug_spots_dir(directory):
+    """Load all per-image {stem}_debug_spots.json files from a directory.
+
+    Returns (images_list, constants_dict) matching the old monolithic format
+    so callers can iterate images_list the same way they iterated data["images"].
+    """
+    directory = Path(directory)
+    files = sorted(directory.glob("*_debug_spots.json"))
+    if not files:
+        return [], {}
+
+    images = []
+    constants = {}
+    for f in files:
+        with open(f) as fh:
+            data = json.load(fh)
+        if not constants:
+            constants = data.get("constants", {})
+        images.append({k: v for k, v in data.items() if k != "constants"})
+    return images, constants
 
 
 def write_dust_results(results, output_dir):

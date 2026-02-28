@@ -5,8 +5,8 @@ The model is a post-filter: it runs AFTER the rule-based pipeline and removes
 false positives from the set of accepted spots.  It can also help surface missed
 dust via a lower-threshold recovery pass in detect_dust_spots_ml().
 
-Training data comes directly from debug_spots.json (the saved detection results),
-so no image reprocessing is needed — training is fast.
+Training data comes directly from per-image {stem}_debug_spots.json files
+(the saved detection results), so no image reprocessing is needed — training is fast.
 
   Positive (label=1): accepted spots NOT marked as false positives
   Negative (label=0): accepted spots marked as false positives in annotations
@@ -54,20 +54,17 @@ def build_dataset(session_dir):
       info — dict with per-image stats
     """
     session_dir = Path(session_dir)
-    spots_json_path = session_dir / "debug_spots.json"
-    if not spots_json_path.exists():
-        print(f"ERROR: {spots_json_path} not found")
+    images, _constants = _dd.load_debug_spots_dir(str(session_dir))
+    if not images:
+        print(f"ERROR: No *_debug_spots.json files in {session_dir}")
         sys.exit(1)
-
-    with open(spots_json_path) as f:
-        data = json.load(f)
 
     all_X = []
     all_y = []
     total_pos = total_neg = total_no_ann = 0
     images_info = []
 
-    for img_data in data["images"]:
+    for img_data in images:
         stem = img_data["stem"]
         detected = img_data.get("detected", [])
 
@@ -108,7 +105,7 @@ def build_dataset(session_dir):
     print(f"  Images without FP annot. : {total_no_ann}")
 
     if not all_X:
-        print("ERROR: no spots found in debug_spots.json — check the session")
+        print("ERROR: no spots found in debug_spots files — check the session")
         sys.exit(1)
 
     if total_neg == 0:
@@ -186,10 +183,10 @@ def train_model(X, y):
 def main():
     parser = argparse.ArgumentParser(
         description="Train dust post-filter ML model from an annotation session.\n"
-                    "Reads features directly from debug_spots.json — no image reprocessing.")
+                    "Reads features directly from per-image debug_spots files — no image reprocessing.")
     parser.add_argument("session_dir", metavar="SESSION_DIR",
                         help="Path to annotation session directory (must contain "
-                             "debug_spots.json and *_annotations.json files)")
+                             "*_debug_spots.json and *_annotations.json files)")
     parser.add_argument("--output", metavar="PATH",
                         default=str(_HERE / "dust_ml_model.pkl"),
                         help="Output path for the trained model pickle "
@@ -207,7 +204,7 @@ def main():
     print(f"Output model : {output_path}")
     print()
 
-    print("Building labeled dataset from debug_spots.json ...")
+    print("Building labeled dataset from debug_spots files ...")
     X, y, info = build_dataset(session_dir)
 
     model, scaler = train_model(X, y)
