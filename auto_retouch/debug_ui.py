@@ -185,13 +185,14 @@ class DebugUI:
                  font=("", 8, "bold")).pack(anchor="w", padx=6, pady=(6, 1))
         for symbol, color, label in [
             ("●", "#00cc44", "Detected spot"),
+            ("●", "#ff44cc", "Radius mismatch vs baseline"),
             ("✕", "#ff3333", "False positive"),
             ("●", "#ff8800", "Rejected candidate"),
             ("✚", "#00ffff", "Missed dust (added)"),
             ("□", "#00cc44", "Heal source (- - line)"),
             ("○", "#00cc44", "Source brush (dashed)"),
             ("□", "#ff4444", "Baseline source (mismatch)"),
-            ("○", "#ff9900", "Baseline radius (mismatch)"),
+            ("○", "#ff9900", "Baseline radius (dashed, zoom in)"),
             ("○", "#00ddff", "Corrected radius (annotated)"),
         ]:
             row = tk.Frame(left, bg="#484848")
@@ -490,21 +491,26 @@ class DebugUI:
             is_fp = i in ann["false_positives"]
             is_sel = i in self.selected_detected
             is_src_sel = (self.selected_source == i)
+            rm = radius_mismatch_by_idx.get(i)
             color = "#00cc44"
             lw = 2
             if is_sel:
                 color = "#ffff00"
                 lw = 3
+            elif rm is not None:
+                color = "#ff44cc"  # magenta: radius differs from baseline
+                lw = 2
             self.canvas.create_oval(cx - rad, cy - rad, cx + rad, cy + rad,
                                     outline=color, width=lw, tags="detected")
-            # Baseline radius circle (dashed orange) when brush_radius_px differs from baseline
-            rm = radius_mismatch_by_idx.get(i)
+            # Baseline radius circle (dashed orange) — drawn at true pixel size (no min clamp)
+            # so the size difference is always visible when zoomed in
             if rm is not None:
-                baseline_rad = max(5, rm["baseline_brush_radius_px"] * self.zoom)
-                self.canvas.create_oval(cx - baseline_rad, cy - baseline_rad,
-                                        cx + baseline_rad, cy + baseline_rad,
-                                        outline="#ff9900", width=1, dash=(4, 3),
-                                        tags="detected")
+                baseline_rad = rm["baseline_brush_radius_px"] * self.zoom
+                if baseline_rad >= 2:
+                    self.canvas.create_oval(cx - baseline_rad, cy - baseline_rad,
+                                            cx + baseline_rad, cy + baseline_rad,
+                                            outline="#ff9900", width=1, dash=(4, 3),
+                                            tags="detected")
             # User radius correction circle (dashed cyan)
             if i in radius_overrides:
                 corr_rad = max(3, radius_overrides[i] * self.zoom)

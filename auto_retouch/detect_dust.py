@@ -60,6 +60,8 @@ MAX_CONTEXT_TEXTURE = 9.0      # max median local_std across a 200px radius from
                                # Threshold at 9 separates smooth-background dust from busy-scene FPs.
 LARGE_SPOT_AREA_THRESHOLD = 300  # spots larger than this require higher contrast
 LARGE_SPOT_MIN_CONTRAST = 60     # min contrast for large spots — avoids pale foggy blobs
+ENC_RADIUS_SCALE = 3          # multiplicative scale factor for enclosing circle radius (helps darktable 
+                                #to correct better while on zoomed out view)
 ISOLATION_RADIUS = 250         # pixel radius for neighbor density check
 MAX_NEARBY_ACCEPTED = 3        # reject if more than this many accepted spots within ISOLATION_RADIUS
                                # Real dust is sparse; crowd/foliage FPs form dense clusters.
@@ -129,7 +131,7 @@ BRUSH_STATE_NORMAL = 1
 BRUSH_DELTA = 0.00001          # offset between 2 brush points (forms a "dot")
 BRUSH_CTRL_OFFSET = 0.000003   # bezier control handle offset from corner
 MIN_BRUSH_PX         = 5.0   # minimum brush radius in pixels (darktable effectiveness floor)
-                              # brush_radius_px = max(MIN_BRUSH_PX, enc_r)
+                              # brush_radius_px = max(MIN_BRUSH_PX, enc_r * ENC_RADIUS_SCALE)
                               # where enc_r is the min enclosing circle radius of the spot contour
 HEAL_SOURCE_OFFSET_X = 0.01   # heal source offset from spot center (right)
 HEAL_SOURCE_OFFSET_Y = 0.01   # positive = down (darktable default is right+down)
@@ -555,7 +557,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
             log_reject(cx, cy, area, contrast, "sat_high", f"spot_sat={spot_sat:.1f}>{MAX_SPOT_SATURATION} excess_sat={excess_sat:.1f}>{EMULSION_EXCESS_SAT_THRESHOLD}")
             continue
 
-        brush_radius_px = max(MIN_BRUSH_PX, enc_r)
+        brush_radius_px = max(MIN_BRUSH_PX, enc_r * ENC_RADIUS_SCALE)
         spots.append({
             "cx": float(cx),
             "cy": float(cy),
@@ -863,7 +865,7 @@ def _compute_candidate_features(label_id, labels, stats, centroids,
     if local_texture > 0 and contrast / local_texture > SOFT_RATIO_VOTE_THRESHOLD:
         dust_votes += 1
 
-    brush_radius_px = max(MIN_BRUSH_PX, enc_r)
+    brush_radius_px = max(MIN_BRUSH_PX, enc_r * ENC_RADIUS_SCALE)
     return {
         # Spot-dict fields expected by the rest of the pipeline
         "cx": float(cx), "cy": float(cy),
