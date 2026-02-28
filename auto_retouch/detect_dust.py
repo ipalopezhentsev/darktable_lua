@@ -77,15 +77,58 @@ MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious on
 REJECT_LOG_CONTRAST_MIN = 15  # minimum contrast to include in debug reject candidate list
 
 # ---------------------------------------------------------------------------
+# ML detection constants
+# ---------------------------------------------------------------------------
+ML_RECOVERY_THRESHOLD_MULT = 2.5  # lower threshold for recovery pass (find missed dust)
+ML_POSTFILTER_THRESHOLD = 0.5     # min ML probability to keep a spot (post-filter)
+ML_RECOVERY_THRESHOLD = 0.85      # higher bar for accepting recovery candidates
+
+# Feature names used by the post-filter ML model (derived from the spot dict).
+# These match what detect_dust_spots() returns — no extra image processing required.
+# Must match train_dust_model.py.
+SPOT_FEATURE_NAMES = [
+    "contrast",
+    "contrast_ratio",           # contrast / threshold
+    "log_area",                 # log1p(area)
+    "radius_px",
+    "texture",
+    "context_texture",
+    "contrast_texture_ratio",   # contrast / max(texture, 0.1)
+    "excess_sat",
+    "spot_sat",
+]
+
+# Extended feature names for recovery-candidate classification (all fields from
+# _compute_candidate_features; used only when ML recovery is requested).
+FEATURE_NAMES = [
+    "contrast",
+    "contrast_ratio",          # contrast / threshold
+    "log_area",                # log1p(area)
+    "radius_px",
+    "texture",
+    "context_texture",
+    "contrast_texture_ratio",  # contrast / max(texture, 0.1)
+    "excess_sat",
+    "spot_sat",
+    "local_bg_frac",           # local_bg_brightness / bright_ref
+    "is_dark_bg",
+    "grad_ratio",
+    "aspect_ratio",
+    "compactness",
+    "surround_ratio",
+    "dust_votes",
+]
+
+# ---------------------------------------------------------------------------
 # Darktable binary format constants
 # ---------------------------------------------------------------------------
 BRUSH_DENSITY = 1.0
-BRUSH_HARDNESS = 0.66
+BRUSH_HARDNESS = 1.0
 BRUSH_STATE_NORMAL = 1
 BRUSH_DELTA = 0.00001          # offset between 2 brush points (forms a "dot")
 BRUSH_CTRL_OFFSET = 0.000003   # bezier control handle offset from corner
 MIN_BRUSH_PX         = 5.0   # minimum brush radius in pixels (darktable effectiveness floor)
-                              # brush_radius_px = max(MIN_BRUSH_PX, enc_r / BRUSH_HARDNESS)
+                              # brush_radius_px = max(MIN_BRUSH_PX, enc_r)
                               # where enc_r is the min enclosing circle radius of the spot contour
 HEAL_SOURCE_OFFSET_X = 0.01   # heal source offset from spot center (right)
 HEAL_SOURCE_OFFSET_Y = 0.01   # positive = down (darktable default is right+down)
@@ -511,7 +554,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
             log_reject(cx, cy, area, contrast, "sat_high", f"spot_sat={spot_sat:.1f}>{MAX_SPOT_SATURATION} excess_sat={excess_sat:.1f}>{EMULSION_EXCESS_SAT_THRESHOLD}")
             continue
 
-        brush_radius_px = max(MIN_BRUSH_PX, enc_r / BRUSH_HARDNESS)
+        brush_radius_px = max(MIN_BRUSH_PX, enc_r)
         spots.append({
             "cx": float(cx),
             "cy": float(cy),
@@ -678,6 +721,255 @@ def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, loca
     masked = np.where(valid, result, 2.0)
     best_ry, best_rx = np.unravel_index(int(np.argmin(masked)), result.shape)
     return (float(sb_x1 + best_rx + t_icx), float(sb_y1 + best_ry + t_icy))
+
+
+# ===================================================================
+# ML detection helpers
+# ===================================================================
+
+def _compute_candidate_features(label_id, labels, stats, centroids,
+                                 diff, gray, local_bg, bg_gradient, local_std, saturation,
+                                 threshold, bright_ref, width, height):
+    """Compute all features for a single connected component without soft-filter decisions.
+
+    Applies only hard gates (size 6-800, shape aspect/compactness/solidity/circularity,
+    minimum contrast floor, excess saturation).  All soft filters (texture, ratio, context,
+    votes, dim, embedded, edge, dark_bg) are intentionally skipped so the ML classifier
+    can make those decisions.
+
+    Returns a feature dict (keys = FEATURE_NAMES + cx/cy/area/radius_px/brush_radius_px/
+    threshold/contrast/excess_sat/spot_sat/context_texture/texture), or None on hard-filter
+    rejection.
+    """
+    area = stats[label_id, cv2.CC_STAT_AREA]
+    w = stats[label_id, cv2.CC_STAT_WIDTH]
+    h = stats[label_id, cv2.CC_STAT_HEIGHT]
+
+    if area < MIN_SPOT_AREA or area > MAX_SPOT_AREA:
+        return None
+
+    aspect_ratio = min(w, h) / max(w, h) if max(w, h) > 0 else 0.0
+    if aspect_ratio < MIN_ASPECT_RATIO:
+        return None
+
+    bbox_area = w * h
+    compactness = area / bbox_area if bbox_area > 0 else 0.0
+    if area < SHAPE_CHECK_MIN_AREA and compactness < MIN_COMPACTNESS:
+        return None
+
+    cx, cy = centroids[label_id]
+    bx = stats[label_id, cv2.CC_STAT_LEFT]
+    by = stats[label_id, cv2.CC_STAT_TOP]
+    component_mask = labels[by:by+h, bx:bx+w] == label_id
+    component_diff = diff[by:by+h, bx:bx+w]
+    contrast = float(np.max(component_diff[component_mask]))
+
+    # Very generous floor — let the ML decide on borderline contrast
+    if contrast < threshold * 0.3:
+        return None
+
+    # Shape checks for large spots (hard: blob shape is a prerequisite)
+    enc_r = math.sqrt(area / math.pi)
+    if area >= SHAPE_CHECK_MIN_AREA:
+        mask_u8 = component_mask.astype(np.uint8) * 255
+        contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            hull = cv2.convexHull(contours[0])
+            hull_area = cv2.contourArea(hull)
+            solidity = area / hull_area if hull_area > 0 else 1.0
+            if solidity < MIN_SOLIDITY:
+                return None
+            perimeter = cv2.arcLength(contours[0], closed=True)
+            if perimeter > 0:
+                circularity = 4 * math.pi * area / (perimeter * perimeter)
+                if circularity < MIN_CIRCULARITY:
+                    return None
+            _, enc_r_c = cv2.minEnclosingCircle(contours[0])
+            enc_r = float(enc_r_c)
+    else:
+        mask_u8_enc = component_mask.astype(np.uint8) * 255
+        enc_contours, _ = cv2.findContours(mask_u8_enc, cv2.RETR_EXTERNAL,
+                                            cv2.CHAIN_APPROX_SIMPLE)
+        if enc_contours:
+            _, enc_r_c = cv2.minEnclosingCircle(enc_contours[0])
+            enc_r = float(enc_r_c)
+
+    icx = max(0, min(int(round(cx)), width - 1))
+    icy = max(0, min(int(round(cy)), height - 1))
+    local_bg_brightness = float(local_bg[icy, icx])
+    is_dark_bg = local_bg_brightness < bright_ref * MIN_LOCAL_BG_FRACTION
+
+    local_bg_grad = float(bg_gradient[icy, icx])
+    grad_ratio = min(local_bg_grad / contrast if contrast > 0 else 999.0, 5.0)
+
+    # Surrounding ring for texture and saturation
+    ring_inner = max(int(enc_r * 1.5), 2)
+    ring_outer = max(int(enc_r * 3), ring_inner + TEXTURE_KERNEL)
+    y1 = max(0, icy - ring_outer)
+    y2 = min(height, icy + ring_outer + 1)
+    x1 = max(0, icx - ring_outer)
+    x2 = min(width, icx + ring_outer + 1)
+    patch_std = local_std[y1:y2, x1:x2]
+    py_o, px_o = np.ogrid[y1-icy:y2-icy, x1-icx:x2-icx]
+    dist_sq = px_o*px_o + py_o*py_o
+    ring_mask = (dist_sq >= ring_inner**2) & (dist_sq <= ring_outer**2)
+    local_texture = (float(np.median(patch_std[ring_mask]))
+                     if ring_mask.any() else float(local_std[icy, icx]))
+
+    # Context texture (200px radius excluding the immediate ring)
+    ctx_r = 200
+    ctx_y1 = max(0, icy - ctx_r); ctx_y2 = min(height, icy + ctx_r + 1)
+    ctx_x1 = max(0, icx - ctx_r); ctx_x2 = min(width, icx + ctx_r + 1)
+    ctx_patch = local_std[ctx_y1:ctx_y2, ctx_x1:ctx_x2]
+    ctx_py, ctx_px = np.ogrid[ctx_y1 - icy:ctx_y2 - icy, ctx_x1 - icx:ctx_x2 - icx]
+    ctx_dist_sq = ctx_px * ctx_px + ctx_py * ctx_py
+    ctx_excl_r = ring_outer + TEXTURE_KERNEL // 2
+    ctx_mask = (ctx_dist_sq <= ctx_r ** 2) & (ctx_dist_sq > ctx_excl_r ** 2)
+    context_texture = (float(np.median(ctx_patch[ctx_mask]))
+                       if ctx_mask.any() else float(np.median(ctx_patch)))
+
+    # Surround ratio (embedded-window check), 1.0 on dark backgrounds
+    radius_px = math.sqrt(area / math.pi)
+    if not is_dark_bg:
+        check_r = max(int(radius_px * 3), 8)
+        ny1 = max(0, icy - check_r); ny2 = min(height, icy + check_r + 1)
+        nx1 = max(0, icx - check_r); nx2 = min(width, icx + check_r + 1)
+        neighborhood = gray[ny1:ny2, nx1:nx2]
+        local_low = float(np.percentile(neighborhood, 5))
+        surround_ratio = local_low / local_bg_brightness if local_bg_brightness > 0 else 1.0
+    else:
+        surround_ratio = 1.0
+
+    # Saturation
+    component_sat = saturation[by:by+h, bx:bx+w]
+    spot_sat = float(np.mean(component_sat[component_mask]))
+    patch_sat = saturation[y1:y2, x1:x2]
+    surround_sat = float(np.median(patch_sat[ring_mask])) if ring_mask.any() else spot_sat
+    excess_sat = spot_sat - surround_sat
+
+    # Hard color filter: clearly colored features are never dust
+    if excess_sat > MAX_EXCESS_SATURATION:
+        return None
+    if spot_sat > MAX_SPOT_SATURATION and excess_sat > EMULSION_EXCESS_SAT_THRESHOLD:
+        return None
+
+    # Soft voting signals (kept as a numeric feature)
+    dust_votes = 0
+    if context_texture < SOFT_CONTEXT_VOTE_THRESHOLD:
+        dust_votes += 1
+    if local_texture < SOFT_TEXTURE_VOTE_THRESHOLD:
+        dust_votes += 1
+    if local_texture > 0 and contrast / local_texture > SOFT_RATIO_VOTE_THRESHOLD:
+        dust_votes += 1
+
+    brush_radius_px = max(MIN_BRUSH_PX, enc_r)
+    return {
+        # Spot-dict fields expected by the rest of the pipeline
+        "cx": float(cx), "cy": float(cy),
+        "area": area,
+        "radius_px": enc_r,
+        "brush_radius_px": brush_radius_px,
+        "threshold": threshold,
+        "contrast": contrast,
+        "texture": local_texture,
+        "excess_sat": excess_sat,
+        "spot_sat": spot_sat,
+        "context_texture": context_texture,
+        # ML feature fields (matching FEATURE_NAMES)
+        "contrast_ratio": contrast / threshold,
+        "log_area": math.log1p(area),
+        "contrast_texture_ratio": contrast / max(local_texture, 0.1),
+        "local_bg_brightness": local_bg_brightness,
+        "local_bg_frac": local_bg_brightness / max(bright_ref, 1.0),
+        "is_dark_bg": float(is_dark_bg),
+        "grad_ratio": grad_ratio,
+        "aspect_ratio": aspect_ratio,
+        "compactness": compactness,
+        "surround_ratio": surround_ratio,
+        "dust_votes": float(dust_votes),
+    }
+
+
+def _collect_candidates_with_features(gray, diff, local_bg, bg_gradient, local_std, saturation,
+                                       threshold, bright_ref, width, height):
+    """Threshold image and extract full feature vectors for all candidates.
+
+    Applies hard filters only (size, shape, color).  Skips all soft filters so
+    the ML classifier can make final accept/reject decisions.
+
+    Returns list of candidate dicts (all FEATURE_NAMES fields present).
+    """
+    binary = (diff > threshold).astype(np.uint8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        binary, connectivity=8)
+    candidates = []
+    for label_id in range(1, num_labels):
+        feat = _compute_candidate_features(
+            label_id, labels, stats, centroids,
+            diff, gray, local_bg, bg_gradient, local_std, saturation,
+            threshold, bright_ref, width, height)
+        if feat is not None:
+            candidates.append(feat)
+    return candidates
+
+
+def _spot_to_features(spot):
+    """Extract the SPOT_FEATURE_NAMES vector from a standard spot dict.
+
+    Works on spot dicts produced by detect_dust_spots() and by
+    _compute_candidate_features() — both contain the required keys.
+    """
+    contrast = spot["contrast"]
+    threshold = spot.get("threshold", 1.0)
+    texture = spot["texture"]
+    return [
+        contrast,
+        contrast / threshold if threshold > 0 else 0.0,
+        math.log1p(spot["area"]),
+        spot["radius_px"],
+        texture,
+        spot["context_texture"],
+        contrast / max(texture, 0.1),
+        spot["excess_sat"],
+        spot["spot_sat"],
+    ]
+
+
+def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False):
+    """ML-assisted dust detection (post-filter mode).
+
+    Strategy:
+      1. Run the standard rule-based pipeline (detect_dust_spots) to get high-precision
+         accepted spots.  This handles the bulk of detection and filtering.
+      2. Apply the ML post-filter to those accepted spots to remove false positives
+         that slipped through the rule-based filters.  The ML model was trained on
+         user-annotated FPs (label=0) and confirmed dust (label=1).
+
+    Returns (spots, rejected_candidates, error_msg, local_std) — same signature as
+    detect_dust_spots().  Healing source positions are NOT set here;
+    process_one_image() adds them.
+    """
+    # --- Phase 1: standard rule-based detection ---
+    std_spots, std_rejects, error, local_std = detect_dust_spots(image_path, collect_rejects)
+    if error:
+        return None, std_rejects, error, local_std
+    if std_spots is None:
+        std_spots = []
+
+    # --- Phase 2: ML post-filter on accepted spots ---
+    if std_spots:
+        X_std = np.array([_spot_to_features(s) for s in std_spots], dtype=np.float32)
+        X_std_scaled = scaler.transform(X_std)
+        probas_std = ml_model.predict_proba(X_std_scaled)[:, 1]
+        spots = [s for s, p in zip(std_spots, probas_std) if p >= ML_POSTFILTER_THRESHOLD]
+        n_removed = len(std_spots) - len(spots)
+        if n_removed > 0:
+            print(f"  [ML] post-filter: removed {n_removed}/{len(std_spots)} FPs "
+                  f"(threshold={ML_POSTFILTER_THRESHOLD})")
+    else:
+        spots = []
+
+    return spots, std_rejects, None, local_std
 
 
 # ===================================================================
@@ -873,6 +1165,14 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
     brushes = []
     brush_ids = []
 
+    # Reconstruct original (pre-crop) image dimensions from export dims + crop.
+    # darktable scales brush border by MIN(pipe_w, pipe_h) at the retouch module,
+    # where pipe dimensions are the original image size (before crop).
+    crop_l, crop_t, crop_r, crop_b = crop
+    orig_w = image_width / max(crop_r - crop_l, 1e-6)
+    orig_h = image_height / max(crop_b - crop_t, 1e-6)
+    border_scale = min(orig_w, orig_h)
+
     for spot in spots:
         # Normalize coordinates to [0, 1] in export space
         norm_cx = spot["cx"] / image_width
@@ -881,8 +1181,9 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
         # Transform to original image space (undo crop + flip)
         norm_cx, norm_cy = _export_to_original(norm_cx, norm_cy, flip, crop)
 
-        # Brush border: normalize brush_radius_px exactly — spot dict is the canonical size
-        border = spot["brush_radius_px"] / max(image_width, image_height)
+        # Brush border: darktable renders as border * MIN(pipe_w, pipe_h)
+        border = spot["brush_radius_px"] / border_scale
+        spot["radius_norm"] = border   # persisted to debug_spots.json for UI display
 
         # Heal source: use auto-detected optimal position if available, else fixed offset
         if "src_cx" in spot and "src_cy" in spot:
@@ -1031,7 +1332,7 @@ def process_one_image(args):
     Must be a top-level function (not nested inside main) so multiprocessing
     can pickle it on Windows, which uses the 'spawn' start method.
     """
-    image_path, transforms, collect_rejects = args
+    image_path, transforms, collect_rejects, ml_model_path = args
     filename = Path(image_path).stem
 
     buf = io.StringIO()
@@ -1047,7 +1348,15 @@ def process_one_image(args):
             print(f"Processing: {filename}")
             print(f"{'='*60}")
 
-            spots, rejected_candidates, error, local_std = detect_dust_spots(image_path, collect_rejects)
+            if ml_model_path:
+                import pickle
+                with open(ml_model_path, "rb") as _f:
+                    _bundle = pickle.load(_f)
+                spots, rejected_candidates, error, local_std = detect_dust_spots_ml(
+                    image_path, _bundle["model"], _bundle["scaler"])
+            else:
+                spots, rejected_candidates, error, local_std = detect_dust_spots(
+                    image_path, collect_rejects)
             if error:
                 print(f"  ERROR: {error}")
                 return (filename, None, [], (0, 0), error, None, buf.getvalue())
@@ -1106,13 +1415,26 @@ def process_one_image(args):
 def main():
     args = sys.argv[1:]
     if not args:
-        print("Usage: detect_dust.py [--debug-ui] <image1.jpg> [image2.jpg ...]")
+        print("Usage: detect_dust.py [--debug-ui] [--ml-model PATH] <image1.jpg> [image2.jpg ...]")
         sys.exit(1)
 
     debug_ui = False
     if "--debug-ui" in args:
         debug_ui = True
         args.remove("--debug-ui")
+
+    ml_model_path = None
+    if "--ml-model" in args:
+        idx = args.index("--ml-model")
+        if idx + 1 >= len(args):
+            print("Error: --ml-model requires a path argument")
+            sys.exit(1)
+        ml_model_path = args[idx + 1]
+        args = args[:idx] + args[idx + 2:]
+        if not os.path.isfile(ml_model_path):
+            print(f"Error: ML model file not found: {ml_model_path}")
+            sys.exit(1)
+        print(f"ML mode: using model {ml_model_path}")
 
     image_paths = args
     if not image_paths:
@@ -1147,7 +1469,7 @@ def main():
     n_workers = min(cpu_count(), len(image_paths))
     print(f"Running {n_workers} parallel worker(s) for {len(image_paths)} image(s)", flush=True)
 
-    args_list = [(p, transforms, debug_ui) for p in image_paths]
+    args_list = [(p, transforms, debug_ui, ml_model_path) for p in image_paths]
 
     with Pool(processes=n_workers) as pool:
         for i, result in enumerate(pool.imap_unordered(process_one_image, args_list), 1):

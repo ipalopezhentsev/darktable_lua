@@ -6,7 +6,8 @@
 2. Lua reads each image's XMP sidecar to extract flip/crop transform params, writes `transform_params.txt`
 3. Lua calls `auto_retouch/detect_dust.py` via `conda run -n autocrop` with file paths as arguments
 4. Python detects bright dust spots using local background subtraction (OpenCV), generates darktable retouch module binary data (brush masks, group mask, retouch params, blendop params), writes `dust_results.txt`
-5. Python applies inverse coordinate transforms (undo crop, undo flip) so mask coords are in darktable's original image space
+5. Python applies inverse coordinate transforms (undo crop, undo flip)
+ so mask coords are in darktable's original image space
 6. Lua parses results, injects retouch history entry + mask entries into each source image's XMP sidecar
 7. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 

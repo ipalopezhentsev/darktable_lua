@@ -9,3 +9,4 @@ dependencies:
   - numpy
   - pip:
     - opencv-python
+    - scikit-learn

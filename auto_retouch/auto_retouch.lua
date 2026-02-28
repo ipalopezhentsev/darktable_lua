@@ -416,7 +416,7 @@ end
 -- ===================================================================
 
 -- Export images at full resolution and run Python dust detection
-local function export_and_detect(images, save_visualization, debug_ui_mode)
+local function export_and_detect(images, debug_ui_mode)
   -- Create temp folder
   local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
   local export_dir = temp_dir .. "/darktable_autoretouch_" .. os.time()
@@ -513,10 +513,11 @@ local function export_and_detect(images, save_visualization, debug_ui_mode)
   end
 
   local log_file = export_dir .. "/processing.log"
-  local vis_flag = save_visualization and "" or " --no-vis"
   local debug_flag = debug_ui_mode and " --debug-ui" or ""
+  local ml_model_path = script_dir .. "dust_ml_model.pkl"
+  local ml_flag = df.check_if_file_exists(ml_model_path) and (' --ml-model "' .. ml_model_path .. '"') or ""
   local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s',
-                                 python_script, vis_flag, debug_flag, file_args)
+                                 python_script, debug_flag, ml_flag, file_args)
 
   -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
   if debug_ui_mode then
@@ -601,7 +602,7 @@ local function export_and_detect_dust_debug()
     return
   end
 
-  export_and_detect(images, true, true)
+  export_and_detect(images, true)
 end
 
 -- Full pipeline: export, detect, apply retouch to source images
@@ -616,7 +617,7 @@ local function export_detect_and_apply_retouch_inplace()
     return
   end
 
-  local dust_results, filename_to_image, export_dir = export_and_detect(images, false, false)
+  local dust_results, filename_to_image, export_dir = export_and_detect(images, false)
   if not dust_results then
     return
   end

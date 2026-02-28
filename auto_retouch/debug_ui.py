@@ -409,7 +409,8 @@ class DebugUI:
         detected = img_dict.get("detected") or []
         rejected_list = img_dict.get("rejected") or []
         self.status_label.config(
-            text=f"{len(detected)} detected\n{len(rejected_list)} rejected candidates")
+            text=f"{img_dict['width']} × {img_dict['height']} px\n"
+                 f"{len(detected)} detected\n{len(rejected_list)} rejected candidates")
 
         self._redraw()
         self._update_count_label()
@@ -1006,9 +1007,11 @@ class DebugUI:
                                   f"  scroll to adjust")
                     else:
                         rc_str = "\n  Scroll to annotate correct radius"
+                    rn = s.get("radius_norm")
+                    bn_str = f"  radius_norm={rn:.5f}" if rn is not None else ""
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
-                        f"enc_r={s['radius_px']:.1f}px  area={s['area']}\n"
+                        f"enc_r={s['radius_px']:.1f}px{bn_str}  area={s['area']}\n"
                         f"  contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
                         f"excess_sat={s['excess_sat']:.1f}  status={status}"
                         f"{src_str}{rm_str}{rc_str}")
