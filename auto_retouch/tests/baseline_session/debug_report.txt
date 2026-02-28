@@ -59,41 +59,41 @@ Detection constants:
   TEXTURE_KERNEL = 31
 
 Per-image results:
-  DSC_0002 (5726x3783): 89 spots detected
+  DSC_0002 (5726x3783): 88 spots detected
   DSC_0003 (5682x3703): 0 spots detected
-  DSC_0004 (5708x3786): 3 spots detected
+  DSC_0004 (5708x3786): 2 spots detected
   DSC_0005 (5613x3773): 0 spots detected
   DSC_0006 (5551x3764): 1 spots detected
   DSC_0007 (5516x3769): 1 spots detected
   DSC_0008 (5609x3722): 8 spots detected
   DSC_0009 (5679x3731): 23 spots detected
   DSC_0010 (5668x3762): 8 spots detected
-  DSC_0011 (5677x3724): 14 spots detected
-  DSC_0012 (5694x3745): 128 spots detected
+  DSC_0011 (5677x3724): 13 spots detected
+  DSC_0012 (5694x3745): 122 spots detected
   DSC_0013 (5683x3742): 34 spots detected
   DSC_0014 (5761x3747): 3 spots detected
-  DSC_0015 (5692x3769): 37 spots detected
-  DSC_0016 (5664x3773): 11 spots detected
+  DSC_0015 (5692x3769): 34 spots detected
+  DSC_0016 (5664x3773): 9 spots detected
   DSC_0017 (5707x3730): 0 spots detected
   DSC_0018 (5701x3773): 23 spots detected
   DSC_0019 (5589x3754): 0 spots detected
   DSC_0020 (5721x3788): 0 spots detected
-  DSC_0021 (5691x3767): 71 spots detected
+  DSC_0021 (5691x3767): 69 spots detected
   DSC_0022 (5693x3782): 64 spots detected
   DSC_0023 (5679x3780): 34 spots detected
   DSC_0024 (2670x4032): 5 spots detected
   DSC_0025 (5688x3779): 74 spots detected
-  DSC_0026 (5617x3748): 45 spots detected
-  DSC_0027 (5708x3772): 53 spots detected
+  DSC_0026 (5617x3748): 44 spots detected
+  DSC_0027 (5708x3772): 51 spots detected
   DSC_0028 (5662x3786): 7 spots detected
-  DSC_0029 (5689x3776): 76 spots detected
-  DSC_0030 (5702x3782): 57 spots detected
+  DSC_0029 (5689x3776): 50 spots detected
+  DSC_0030 (5702x3782): 54 spots detected
   DSC_0031 (5689x3779): 18 spots detected
-  DSC_0032 (5676x3765): 10 spots detected
-  DSC_0033 (5536x3780): 77 spots detected
+  DSC_0032 (5676x3765): 9 spots detected
+  DSC_0033 (5536x3780): 76 spots detected
   DSC_0034 (5696x3714): 5 spots detected
   DSC_0035 (5695x3757): 18 spots detected
   DSC_0036 (2655x4031): 0 spots detected
   DSC_0037 (5515x3709): 6 spots detected
 
-Total: 1003 spots across 36 images
+Total: 953 spots across 36 images

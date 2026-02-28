@@ -11,7 +11,6 @@ Run:
 After running, commit the contents of auto_retouch/tests/baseline_session/.
 """
 
-import os
 import sys
 import json
 from pathlib import Path
@@ -27,19 +26,18 @@ import detect_dust
 IMAGES_DIR = TESTS_DIR / "images"
 BASELINE_DIR = TESTS_DIR / "baseline_session"
 
-
 def _worker(image_path):
     """Run detection on one image; returns result tuple for write_debug_spots_json()."""
     stem = Path(image_path).stem
-    img_path = str(image_path)
 
     import cv2
-    img = cv2.imread(img_path)
+    img = cv2.imread(str(image_path))
     if img is None:
-        return (stem, None, [], (0, 0), f"Failed to load: {img_path}", None)
+        return (stem, None, [], (0, 0), f"Failed to load: {image_path}", None)
     height, width = img.shape[:2]
 
-    spots, rejected, error, local_std = detect_dust.detect_dust_spots(img_path, collect_rejects=True)
+    spots, rejected, error, local_std = detect_dust.detect(
+        str(image_path), collect_rejects=True)
     return (stem, spots, rejected, (width, height), error, None)
 
 
@@ -57,7 +55,7 @@ def main():
     print(f"Running detection with {n_workers} worker(s)...")
 
     with Pool(processes=n_workers) as pool:
-        raw_results = pool.map(_worker, image_paths)
+        raw_results = pool.map(_worker, [str(p) for p in image_paths])
 
     # Sort deterministically
     raw_results.sort(key=lambda r: r[0])

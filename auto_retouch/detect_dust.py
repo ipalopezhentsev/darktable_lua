@@ -973,6 +973,40 @@ def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False):
     return spots, std_rejects, None, local_std
 
 
+# Default ML model path: dust_ml_model.pkl next to this script
+_DEFAULT_ML_MODEL_PATH = str(Path(__file__).parent / "dust_ml_model.pkl")
+
+
+def load_ml_model(path=None):
+    """Load ML model bundle from a .pkl file.
+
+    Returns (model, scaler) or (None, None) if the file doesn't exist.
+    """
+    import pickle
+    path = path or _DEFAULT_ML_MODEL_PATH
+    if not os.path.isfile(path):
+        return None, None
+    with open(path, "rb") as f:
+        bundle = pickle.load(f)
+    return bundle["model"], bundle["scaler"]
+
+
+def detect(image_path, collect_rejects=False, ml_model_path=None):
+    """Unified detection entry point — uses ML post-filter by default.
+
+    If ml_model_path is given, loads that model.  Otherwise loads the default
+    dust_ml_model.pkl next to this script.  Falls back to pure rule-based
+    detection when no model file exists.
+
+    Returns (spots, rejected_candidates, error_msg, local_std).
+    """
+    model, scaler = load_ml_model(ml_model_path)
+    if model is not None:
+        return detect_dust_spots_ml(image_path, model, scaler,
+                                    collect_rejects=collect_rejects)
+    return detect_dust_spots(image_path, collect_rejects=collect_rejects)
+
+
 # ===================================================================
 # Binary data generation for darktable XMP
 # ===================================================================
@@ -1371,15 +1405,9 @@ def process_one_image(args):
             print(f"Processing: {filename}")
             print(f"{'='*60}")
 
-            if ml_model_path:
-                import pickle
-                with open(ml_model_path, "rb") as _f:
-                    _bundle = pickle.load(_f)
-                spots, rejected_candidates, error, local_std = detect_dust_spots_ml(
-                    image_path, _bundle["model"], _bundle["scaler"])
-            else:
-                spots, rejected_candidates, error, local_std = detect_dust_spots(
-                    image_path, collect_rejects)
+            spots, rejected_candidates, error, local_std = detect(
+                image_path, collect_rejects=collect_rejects,
+                ml_model_path=ml_model_path)
             if error:
                 print(f"  ERROR: {error}")
                 return (filename, None, [], (0, 0), error, None, buf.getvalue())

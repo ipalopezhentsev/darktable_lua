@@ -19,7 +19,6 @@ Usage:
     conda run -n autocrop python auto_retouch/tests/run_quality_tests.py SESSION_DIR --open-ui
 """
 
-import os
 import sys
 import json
 import math
@@ -51,39 +50,17 @@ SOURCE_MISMATCH_RADIUS = 20  # px: baseline/new source differ by more than this 
 RADIUS_MISMATCH_THRESHOLD = 3.0  # px: brush_radius_px difference to flag as mismatch
 
 
-# Module-level cache so the ML model is loaded once per worker process,
-# not once per image (the Pool initializer sets these before map() starts).
-_worker_ml_model = None
-_worker_ml_scaler = None
-
-
-def _init_worker(ml_model_path):
-    """Pool initializer: load ML model once per worker process."""
-    global _worker_ml_model, _worker_ml_scaler
-    if ml_model_path:
-        import pickle
-        with open(ml_model_path, "rb") as f:
-            bundle = pickle.load(f)
-        _worker_ml_model = bundle["model"]
-        _worker_ml_scaler = bundle["scaler"]
-
-
 def _worker(image_path):
     stem = Path(image_path).stem
-    img_path = str(image_path)
 
     import cv2
-    img = cv2.imread(img_path)
+    img = cv2.imread(str(image_path))
     if img is None:
-        return (stem, None, [], (0, 0), f"Failed to load: {img_path}", None)
+        return (stem, None, [], (0, 0), f"Failed to load: {image_path}", None)
     height, width = img.shape[:2]
 
-    if _worker_ml_model is not None:
-        spots, rejected, error, local_std = detect_dust.detect_dust_spots_ml(
-            img_path, _worker_ml_model, _worker_ml_scaler, collect_rejects=True)
-    else:
-        spots, rejected, error, local_std = detect_dust.detect_dust_spots(
-            img_path, collect_rejects=True)
+    spots, rejected, error, local_std = detect_dust.detect(
+        str(image_path), collect_rejects=True)
     return (stem, spots, rejected, (width, height), error, None)
 
 
@@ -315,9 +292,6 @@ def main():
                         help="Test only this image (e.g. DSC_0025)")
     parser.add_argument("--open-ui", action="store_true",
                         help="Launch debug_ui.py on the generated diff session when done")
-    parser.add_argument("--ml-model", metavar="PATH", default=None,
-                        help="Use ML model for detection instead of the rule-based pipeline "
-                             "(path to .pkl file produced by train_dust_model.py)")
     args = parser.parse_args()
 
     missed_dust_by_stem = {}
@@ -344,17 +318,9 @@ def main():
         print(f"No images found in {images_dir}")
         sys.exit(1)
 
-    if args.ml_model and not os.path.isfile(args.ml_model):
-        print(f"ERROR: ML model file not found: {args.ml_model}")
-        sys.exit(1)
-    if args.ml_model:
-        print(f"ML mode: {args.ml_model}")
-
     print(f"Running detection on {len(image_paths)} image(s)...")
     n_workers = min(cpu_count(), len(image_paths))
-    with Pool(processes=n_workers,
-              initializer=_init_worker,
-              initargs=(args.ml_model,)) as pool:
+    with Pool(processes=n_workers) as pool:
         raw_results = pool.map(_worker, [str(p) for p in image_paths])
     raw_results.sort(key=lambda r: r[0])
 
