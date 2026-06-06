@@ -1073,7 +1073,8 @@ def make_brush_mask_points(cx, cy, border_radius):
 def parse_transform_params(params_file):
     """Read transform_params.txt written by Lua.
 
-    Returns dict: filename -> {"flip": int, "crop": (L, T, R, B)}.
+    Returns dict: filename -> {"flip": int, "crop": (L, T, R, B), "ashift": dict|None}.
+    Format: filename|flip=N|crop=L,T,R,B[|ashift=<gz16-base64-without-prefix>]
     """
     transforms = {}
     if not os.path.isfile(params_file):
@@ -1084,13 +1085,13 @@ def parse_transform_params(params_file):
             line = line.strip()
             if not line:
                 continue
-            # Format: filename|flip=N|crop=L,T,R,B
             parts = line.split("|")
             if len(parts) < 3:
                 continue
             filename = parts[0]
             flip = 0
             crop = (0.0, 0.0, 1.0, 1.0)
+            ashift = None
             for part in parts[1:]:
                 if part.startswith("flip="):
                     flip = int(part[5:])
@@ -1098,7 +1099,9 @@ def parse_transform_params(params_file):
                     vals = part[5:].split(",")
                     if len(vals) == 4:
                         crop = tuple(float(v) for v in vals)
-            transforms[filename] = {"flip": flip, "crop": crop}
+                elif part.startswith("ashift="):
+                    ashift = _decode_ashift_params(part[7:])
+            transforms[filename] = {"flip": flip, "crop": crop, "ashift": ashift}
 
     return transforms
 
@@ -1166,36 +1169,229 @@ def make_blendop_params(group_mask_id):
     return dt_xmp_encode(bytes(raw))
 
 
-def _export_to_original(cx, cy, flip, crop):
-    """Transform coordinates from export space to original image space.
+def _decode_ashift_params(b64_str):
+    """Decode a darktable gz16 base64-encoded ashift params blob.
 
-    Pipeline order: original -> flip -> crop -> export.
-    Inverse: undo crop, then undo flip.
+    Returns dict with keys: rotation, lensshift_v, lensshift_h, shear,
+    f_length_kb, orthocorr, aspect, cl, cr, ct, cb.
+    Returns None on any failure (treat as identity transform).
+    """
+    try:
+        raw = zlib.decompress(base64.b64decode(b64_str))
+        if len(raw) < 56:
+            return None
+        return {
+            "rotation":    struct.unpack_from("<f", raw,  0)[0],
+            "lensshift_v": struct.unpack_from("<f", raw,  4)[0],
+            "lensshift_h": struct.unpack_from("<f", raw,  8)[0],
+            "shear":       struct.unpack_from("<f", raw, 12)[0],
+            "f_length_kb": struct.unpack_from("<f", raw, 16)[0],
+            # offset 20: crop_factor (unused here)
+            "orthocorr":   struct.unpack_from("<f", raw, 24)[0],
+            "aspect":      struct.unpack_from("<f", raw, 28)[0],
+            # offset 32: mode (int32), offset 36: toggle (int32)
+            "cl":          struct.unpack_from("<f", raw, 40)[0],
+            "cr":          struct.unpack_from("<f", raw, 44)[0],
+            "ct":          struct.unpack_from("<f", raw, 48)[0],
+            "cb":          struct.unpack_from("<f", raw, 52)[0],
+        }
+    except Exception:
+        return None
+
+
+def _compute_ashift_homography(rotation_deg, lensshift_v, lensshift_h, shear,
+                                f_length_kb, orthocorr, aspect, width, height):
+    """Compute the forward 3x3 ashift homography matrix in pixel coordinates.
+
+    Implements darktable's _homography() function (10-step pipeline).
+    width, height: ashift module input buffer dimensions (buf_in).
+    Returns H such that (x_out*w, y_out*w, w) = H @ (x_in, y_in, 1).
+    """
+    u = float(width)
+    v = float(height)
+    rot_rad = math.radians(rotation_deg)
+    cosi = math.cos(rot_rad)
+    sini = math.sin(rot_rad)
+    horifac = 1.0 - orthocorr / 100.0
+    ascale = math.sqrt(max(1e-6, aspect))
+
+    # Vertical shift params
+    exppa_v = math.exp(lensshift_v)
+    fdb_v = f_length_kb / (14.4 + (v / u - 1.0) * 7.2)
+    rad_v = fdb_v * (exppa_v - 1.0) / (exppa_v + 1.0)
+    alpha_v = max(-1.5, min(1.5, math.atan(rad_v)))
+    rt_v = math.sin(0.5 * alpha_v)
+    r_v = max(0.1, 2.0 * (horifac - 1.0) * rt_v * rt_v + 1.0)
+
+    # Horizontal shift params
+    exppa_h = math.exp(lensshift_h)
+    fdb_h = f_length_kb / (14.4 + (u / v - 1.0) * 7.2)
+    rad_h = fdb_h * (exppa_h - 1.0) / (exppa_h + 1.0)
+    alpha_h = max(-1.5, min(1.5, math.atan(rad_h)))
+    rt_h = math.sin(0.5 * alpha_h)
+    r_h = max(0.1, 2.0 * (horifac - 1.0) * rt_h * rt_h + 1.0)
+
+    def mat(r0, r1, r2):
+        return np.array([r0, r1, r2], dtype=np.float64)
+
+    # Step 1: flip x <-> y
+    M = mat([0, 1, 0], [1, 0, 0], [0, 0, 1])
+    # Step 2: rotation around centre (v/2, u/2) in flipped space
+    tx = -0.5*v*cosi + 0.5*u*sini + 0.5*v
+    ty = -0.5*v*sini - 0.5*u*cosi + 0.5*u
+    M = mat([cosi, -sini, tx], [sini, cosi, ty], [0, 0, 1]) @ M
+    # Step 3: shear
+    M = mat([1, shear, 0], [shear, 1, 0], [0, 0, 1]) @ M
+    # Step 4: vertical lens shift (in flipped space, perspective along x = y_orig)
+    M = mat(
+        [exppa_v, 0, 0],
+        [0.5*(exppa_v-1)*u/v,  2*exppa_v/(exppa_v+1),  -0.5*(exppa_v-1)*u/(exppa_v+1)],
+        [(exppa_v-1)/v, 0, 1],
+    ) @ M
+    # Step 5: horizontal compression in flipped space (y = x_orig, range u)
+    M = mat([1, 0, 0], [0, r_v, 0.5*u*(1-r_v)], [0, 0, 1]) @ M
+    # Step 6: flip x <-> y back
+    M = mat([0, 1, 0], [1, 0, 0], [0, 0, 1]) @ M
+    # Step 7: horizontal lens shift (in original space, perspective along x, range u)
+    M = mat(
+        [exppa_h, 0, 0],
+        [0.5*(exppa_h-1)*v/u,  2*exppa_h/(exppa_h+1),  -0.5*(exppa_h-1)*v/(exppa_h+1)],
+        [(exppa_h-1)/u, 0, 1],
+    ) @ M
+    # Step 8: vertical compression in original space (y = y_orig, range v)
+    M = mat([1, 0, 0], [0, r_h, 0.5*v*(1-r_h)], [0, 0, 1]) @ M
+    # Step 9: aspect ratio
+    M = mat([ascale, 0, 0], [0, 1.0/ascale, 0], [0, 0, 1]) @ M
+    # Step 10: translate so minimum corner coordinate is at (0, 0)
+    corners = np.array([[0, 0, 1], [u, 0, 1], [0, v, 1], [u, v, 1]], dtype=np.float64).T
+    p = M @ corners
+    min_x = (p[0] / p[2]).min()
+    min_y = (p[1] / p[2]).min()
+    M = mat([1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]) @ M
+    return M
+
+
+def _undo_ashift(cx, cy, ashift_params, export_w, export_h, crop, flip):
+    """Invert the darktable ashift module's coordinate transform.
+
+    cx, cy: normalized [0,1] coords in post-flip / ashift-output space.
+    ashift_params: dict from _decode_ashift_params().
+    Returns (cx, cy) in pre-ashift / raw-sensor normalized [0,1] space.
+
+    The forward pipeline is: raw -> ashift -> flip -> crop -> export.
+    After undoing crop and flip we are in ashift-output space.
+    This function maps those coords back through ashift to raw space.
     """
     crop_l, crop_t, crop_r, crop_b = crop
 
-    # 1. Undo crop (export [0,1] -> pre-crop space)
+    # Ashift output dimensions (pixel space, in landscape/sensor orientation).
+    # We know the export dimensions and crop; undoing crop gives post-flip size.
+    # Undoing SWAP_XY (if any) gives ashift output size.
+    w_post_flip = export_w / max(crop_r - crop_l, 1e-6)
+    h_post_flip = export_h / max(crop_b - crop_t, 1e-6)
+    if flip & 4:   # SWAP_XY was applied: portrait image from landscape sensor
+        W_out = h_post_flip
+        H_out = w_post_flip
+    else:
+        W_out = w_post_flip
+        H_out = h_post_flip
+
+    cl = ashift_params["cl"]
+    cr = ashift_params["cr"]
+    ct = ashift_params["ct"]
+    cb = ashift_params["cb"]
+
+    # "full" output: the homography output before the ashift internal crop
+    fullwidth  = W_out / max(cr - cl, 1e-6)
+    fullheight = H_out / max(cb - ct, 1e-6)
+    # pixel offset from buf_out origin to full-output origin
+    cx_clip = fullwidth  * cl
+    cy_clip = fullheight * ct
+
+    # ashift input dims ≈ fullwidth × fullheight (exact when correction is small)
+    W_in = fullwidth
+    H_in = fullheight
+
+    H_mat = _compute_ashift_homography(
+        ashift_params["rotation"],
+        ashift_params["lensshift_v"],
+        ashift_params["lensshift_h"],
+        ashift_params["shear"],
+        ashift_params["f_length_kb"],
+        ashift_params["orthocorr"],
+        ashift_params["aspect"],
+        W_in, H_in,
+    )
+    H_inv = np.linalg.inv(H_mat)
+
+    # Convert normalized ashift-output coords to pixels
+    px_out = cx * W_out
+    py_out = cy * H_out
+
+    # Shift from buf_out space to full-output space (undo internal crop offset)
+    px_full = px_out + cx_clip
+    py_full = py_out + cy_clip
+
+    # Apply inverse homography → input pixel coords
+    p_in = H_inv @ np.array([px_full, py_full, 1.0])
+    px_in = p_in[0] / p_in[2]
+    py_in = p_in[1] / p_in[2]
+
+    # Normalize by input dimensions → raw-sensor [0,1] coords
+    return px_in / W_in, py_in / H_in
+
+
+def _export_to_original(cx, cy, flip, crop, ashift_params=None, export_w=None, export_h=None):
+    """Transform coordinates from export space to original image space.
+
+    Pipeline order: raw -> [ashift(15)] -> flip(16) -> crop(24.5) -> export.
+    Inverse: undo crop, undo flip, undo ashift.
+
+    flip is the darktable orientation bitmask (dt_image_orientation_t):
+        FLIP_X  = 1  (flip around X axis = vertical mirror,   cy = 1-cy)
+        FLIP_Y  = 2  (flip around Y axis = horizontal mirror, cx = 1-cx)
+        SWAP_XY = 4  (transpose x and y)
+    Common combinations:
+        3 = 180° rotation
+        5 = CCW 90° (SWAP_XY | FLIP_X)
+        6 = CW  90° (SWAP_XY | FLIP_Y)
+        7 = portrait (SWAP_XY | FLIP_X | FLIP_Y)
+    ashift_params: dict from _decode_ashift_params(), or None for identity.
+    export_w, export_h: pixel dimensions of the exported image (needed for ashift).
+    """
+    crop_l, crop_t, crop_r, crop_b = crop
+
+    # 1. Undo crop (export [0,1] -> post-flip / post-ashift space)
     cx = crop_l + cx * (crop_r - crop_l)
     cy = crop_t + cy * (crop_b - crop_t)
 
-    # 2. Undo flip (pre-crop -> original space)
-    if flip == 1:    # vertical
-        cy = 1.0 - cy
-    elif flip == 2:  # horizontal
+    # 2. Undo flip (post-flip -> ashift-output space).
+    # Forward transform applies: SWAP_XY, then FLIP_X, then FLIP_Y.
+    # Inverse reverses that order: FLIP_Y, then FLIP_X, then SWAP_XY.
+    if flip & 2:   # FLIP_Y: horizontal mirror (flip around Y axis)
         cx = 1.0 - cx
+    if flip & 1:   # FLIP_X: vertical mirror (flip around X axis)
+        cy = 1.0 - cy
+    if flip & 4:   # SWAP_XY: transpose
+        cx, cy = cy, cx
+
+    # 3. Undo ashift (ashift-output -> raw-sensor space)
+    if ashift_params is not None and export_w is not None and export_h is not None:
+        cx, cy = _undo_ashift(cx, cy, ashift_params, export_w, export_h, crop, flip)
 
     return cx, cy
 
 
 def generate_xmp_data_for_spots(spots, image_width, image_height,
-                                flip=0, crop=(0.0, 0.0, 1.0, 1.0)):
+                                flip=0, crop=(0.0, 0.0, 1.0, 1.0), ashift_params=None):
     """Generate all XMP-ready data for a list of detected spots.
 
     Returns dict with keys: brushes, group, retouch_params, blendop_params.
     Each brush: {mask_id, mask_points, mask_src, mask_nb}.
 
-    flip: 0=none, 1=vertical, 2=horizontal
-    crop: (left, top, right, bottom) in original image [0,1] space
+    flip: darktable orientation bitmask (FLIP_X=1, FLIP_Y=2, SWAP_XY=4)
+    crop: (left, top, right, bottom) in post-flip [0,1] space
+    ashift_params: dict from _decode_ashift_params(), or None if ashift is absent/disabled
     """
     id_gen = MaskIdGenerator()
 
@@ -1215,8 +1411,9 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
         norm_cx = spot["cx"] / image_width
         norm_cy = spot["cy"] / image_height
 
-        # Transform to original image space (undo crop + flip)
-        norm_cx, norm_cy = _export_to_original(norm_cx, norm_cy, flip, crop)
+        # Transform to original image space (undo crop, flip, ashift)
+        norm_cx, norm_cy = _export_to_original(
+            norm_cx, norm_cy, flip, crop, ashift_params, image_width, image_height)
 
         # Brush border: darktable renders as border * MIN(pipe_w, pipe_h)
         border = spot["brush_radius_px"] / border_scale
@@ -1226,7 +1423,8 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
         if "src_cx" in spot and "src_cy" in spot:
             src_norm_x = spot["src_cx"] / image_width
             src_norm_y = spot["src_cy"] / image_height
-            src_x, src_y = _export_to_original(src_norm_x, src_norm_y, flip, crop)
+            src_x, src_y = _export_to_original(
+                src_norm_x, src_norm_y, flip, crop, ashift_params, image_width, image_height)
             src_x = max(0.0, min(1.0, src_x))
             src_y = max(0.0, min(1.0, src_y))
         else:
@@ -1448,10 +1646,12 @@ def process_one_image(args):
                 )
 
             if spots:
-                t = transforms.get(filename, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0)})
-                print(f"  Transform: flip={t['flip']}, crop={t['crop']}")
+                t = transforms.get(filename, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0), "ashift": None})
+                ashift = t.get("ashift")
+                print(f"  Transform: flip={t['flip']}, crop={t['crop']}, ashift={'yes' if ashift else 'no'}")
                 xmp_data = generate_xmp_data_for_spots(
-                    spots, width, height, flip=t["flip"], crop=t["crop"])
+                    spots, width, height,
+                    flip=t["flip"], crop=t["crop"], ashift_params=ashift)
                 print(f"  Generated XMP data: {len(xmp_data['brushes'])} brush masks")
 
     except Exception as e:

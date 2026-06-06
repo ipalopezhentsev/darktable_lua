@@ -41,5 +41,5 @@ For auto_retouch feature:
 - [ ] Add ability to heal thread(fiber)-like dust
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
-- [ ] I see it writes just one flip to transform_params, i.e. ignores that flip can be different in two axes
+- [x] Orientation/rotation not handled: fixed by treating flip as a full darktable bitmask (FLIP_X=1, FLIP_Y=2, SWAP_XY=4) and applying the inverse in reverse order in `_export_to_original`
 - [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass. But currently, second application to xmp does not add new shapes but replaces previous ones. Consider adding second retouch instance. 

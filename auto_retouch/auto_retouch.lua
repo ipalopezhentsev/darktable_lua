@@ -130,6 +130,18 @@ local function parse_flip_param(xmp_content, history_end)
   return flip_val
 end
 
+-- Extract the ashift gz16 base64 blob from XMP content.
+-- Returns the base64 string (without the "gz16" prefix), or nil if absent/disabled.
+local function parse_ashift_params(xmp_content, history_end)
+  local params_str = find_last_enabled_params(xmp_content, history_end, "ashift")
+  if not params_str then
+    return nil
+  end
+  -- darktable encodes compressed blobs as "gz16<base64>"; strip the prefix
+  local b64 = params_str:match("^gz16(.+)$")
+  return b64  -- nil if prefix not found (unexpected format)
+end
+
 -- Parse the effective crop parameters from XMP content.
 -- Returns L, T, R, B floats. Default 0,0,1,1 if no crop.
 local function parse_crop_params(xmp_content, history_end)
@@ -473,6 +485,7 @@ local function export_and_detect(images, debug_ui_mode)
       local flip_val = 0
       local cl, ct, cr, cb = 0.0, 0.0, 1.0, 1.0
 
+      local ashift_b64 = nil
       if xmp_path then
         local xf = io.open(xmp_path, "r")
         if xf then
@@ -481,9 +494,10 @@ local function export_and_detect(images, debug_ui_mode)
           local history_end = tonumber(xmp:match('darktable:history_end="(%d+)"')) or 999
           flip_val = parse_flip_param(xmp, history_end)
           cl, ct, cr, cb = parse_crop_params(xmp, history_end)
+          ashift_b64 = parse_ashift_params(xmp, history_end)
           dlog.msg(dlog.info, "export_and_detect",
-            string.format("Transform for %s: flip=%d crop=%.4f,%.4f,%.4f,%.4f",
-              safe_name, flip_val, cl, ct, cr, cb))
+            string.format("Transform for %s: flip=%d crop=%.4f,%.4f,%.4f,%.4f ashift=%s",
+              safe_name, flip_val, cl, ct, cr, cb, ashift_b64 and "yes" or "no"))
         end
       end
 
@@ -491,8 +505,12 @@ local function export_and_detect(images, debug_ui_mode)
       local function fmt_float(val)
         return (string.format("%.6f", val):gsub(",", "."))
       end
-      tf:write(string.format("%s|flip=%d|crop=%s,%s,%s,%s\n",
-        safe_name, flip_val, fmt_float(cl), fmt_float(ct), fmt_float(cr), fmt_float(cb)))
+      local line = string.format("%s|flip=%d|crop=%s,%s,%s,%s",
+        safe_name, flip_val, fmt_float(cl), fmt_float(ct), fmt_float(cr), fmt_float(cb))
+      if ashift_b64 then
+        line = line .. "|ashift=" .. ashift_b64
+      end
+      tf:write(line .. "\n")
     end
     tf:close()
   end
@@ -678,8 +696,9 @@ end
 local function destroy()
     dt.gui.libs.image.destroy_action("AutoRetouch_Debug")
     dt.gui.libs.image.destroy_action("AutoRetouch_InPlace")
-    dt.destroy_event("AutoRetouch_Debug", "shortcut")
-    dt.destroy_event("AutoRetouch_InPlace", "shortcut")
+    -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
+    pcall(dt.destroy_event, "AutoRetouch_Debug", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch_InPlace", "shortcut")
 end
 
 -- Debug action
