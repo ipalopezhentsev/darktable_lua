@@ -27,6 +27,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy.spatial import cKDTree
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +163,20 @@ BLENDOP_TEMPLATE_ENCODED = "gz08eJxjYGBgYAFiCQYYOOEEIjd6dmXCRFgZMAEjFjEGhgZ7CB6p
 SENSOR_SIGMA_INNER_FRAC   = 0.004  # DoG inner Gaussian sigma as fraction of min(w,h)
 SENSOR_SIGMA_OUTER_FRAC   = 0.04   # DoG outer Gaussian sigma (large enough to see around blobs,
                                     # small enough to stay within the same sky region)
-SENSOR_DOG_MIN_CONTRAST   = 4.0    # minimum DoG peak value to consider as candidate
+SENSOR_DOG_MIN_CONTRAST   = 2.0    # minimum DoG peak value; low enough to catch faint dust
 SENSOR_MIN_RADIUS_FRAC    = 0.003  # min blob radius as fraction of min(w,h)
-SENSOR_MAX_RADIUS_FRAC    = 0.12   # grid cell size (one candidate per this many px)
 SENSOR_MAX_BLOB_RADIUS_FRAC = 0.01 # maximum accepted blob radius (% of min_dim); sensor dust is small
-SENSOR_CLUSTER_RADIUS_NORM = 0.02  # cluster radius in normalized full-frame coords
+SENSOR_CLUSTER_RADIUS_NORM = 0.01  # cluster radius in normalized full-frame coords
 SENSOR_DUST_MIN_FRAMES    = 2      # min frames a cluster must appear in to confirm sensor dust
 SENSOR_BRUSH_SCALE        = 1.0    # brush_radius_px = max(MIN_BRUSH_PX, radius_px * this)
+SENSOR_MAX_CANDIDATE_TEXTURE = 12.0   # pre-filter: reject candidates in busy areas before consensus
+                                       # Uses local-std in a 3×max_blob_r neighborhood at the peak.
+                                       # Sky/smooth areas: texture ≈ 2-7; busy content: 15-40.
+                                       # 12.0 keeps slightly-textured sky while excluding clearly-busy areas.
+SENSOR_MAX_CANDIDATES_FOR_CONSENSUS = 300  # per-frame cap before union-find; frames with more candidates
+                                           # keep only the top-N by DoG contrast. Limits chain-clustering:
+                                           # weak-contrast smooth-area peaks propagate long chains that merge
+                                           # distinct dust clusters into one diffuse super-cluster.
 SENSOR_MAX_CORRECTION_TEXTURE = 8.0   # skip correction if dust spot lands on a busy area in this frame
 SENSOR_MAX_SOURCE_TEXTURE = 8.0       # skip correction if no clean healing source found in any direction
 
@@ -1736,7 +1744,6 @@ def detect_sensor_dust_candidates(image_path):
     sigma_inner = max(2.0, min_dim * SENSOR_SIGMA_INNER_FRAC)
     sigma_outer = max(20.0, min_dim * SENSOR_SIGMA_OUTER_FRAC)
     min_radius = max(5, int(min_dim * SENSOR_MIN_RADIUS_FRAC))
-    max_radius = int(min_dim * SENSOR_MAX_RADIUS_FRAC)
     max_blob_r = max(min_radius + 1, int(min_dim * SENSOR_MAX_BLOB_RADIUS_FRAC))
 
     # Inner blur: small sigma preserves individual dust blob peaks
@@ -1757,14 +1764,14 @@ def detect_sensor_dust_candidates(image_path):
           f"blob_radius=[{min_radius},{max_blob_r}]px "
           f"dog range: [{dog.min():.1f},{dog.max():.1f}]")
 
-    # Local maxima with NMS window = min_radius*4: finds peaks separated by at least 2*min_radius
+    # Strict local maxima: each pixel must be the maximum in a (min_radius*4) window.
+    # Strict NMS (tolerance -0.1 rather than -0.5) gives one pixel per true peak instead of
+    # extended plateau regions, so peak count equals the number of distinct blobs.
     nms_diam = max(5, min_radius * 4) | 1
     nms_se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (nms_diam, nms_diam))
     dog_dilated = cv2.dilate(dog, nms_se)
-    peak_mask = (dog >= dog_dilated - 0.5) & (dog > SENSOR_DOG_MIN_CONTRAST)
+    peak_mask = (dog >= dog_dilated - 0.1) & (dog > SENSOR_DOG_MIN_CONTRAST)
     peak_ys, peak_xs = np.where(peak_mask)
-
-    print(f"  DoG peaks above {SENSOR_DOG_MIN_CONTRAST}: {len(peak_ys)}")
 
     if len(peak_ys) == 0:
         return [], None
@@ -1782,17 +1789,41 @@ def detect_sensor_dust_candidates(image_path):
     if len(peak_ys) == 0:
         return [], None
 
-    # Grid-based peak selection: keep the strongest DoG peak per max_radius-sized cell.
-    # max_radius controls grid density (~96 cells for typical images), decoupled from the
-    # blob size limit (max_blob_r) so we get a manageable candidate count.
-    grid_rows = max(1, h // max_radius)
-    grid_cols = max(1, w // max_radius)
+    # Context texture pre-filter: reject candidates in busy areas before consensus.
+    # Sensor dust is only visible (and only meaningful to match) in smooth regions like
+    # sky, bokeh, or walls. Peaks in high-texture content (people, foliage, buildings)
+    # produce false cross-frame matches and must be excluded here.
+    #
+    # Compute local-std texture map with kernel = 3×max_blob_r (captures the local
+    # character of the area, not just the dust spot itself). Sample at each peak.
+    ctx_k = max(3, max_blob_r * 3) | 1
+    lm_ctx = cv2.blur(gray, (ctx_k, ctx_k))
+    lsm_ctx = cv2.blur(gray ** 2, (ctx_k, ctx_k))
+    ctx_tex_map = np.sqrt(np.maximum(lsm_ctx - lm_ctx ** 2, 0))
+    ctx_at_peaks = ctx_tex_map[peak_ys, peak_xs]
+    smooth_mask = ctx_at_peaks <= SENSOR_MAX_CANDIDATE_TEXTURE
+    n_before = len(peak_ys)
+    peak_ys = peak_ys[smooth_mask]
+    peak_xs = peak_xs[smooth_mask]
+    peak_vals = peak_vals[smooth_mask]
+    print(f"  Texture pre-filter: {smooth_mask.sum()}/{n_before} peaks in smooth areas "
+          f"(threshold={SENSOR_MAX_CANDIDATE_TEXTURE})")
+
+    if len(peak_ys) == 0:
+        return [], None
+
+    # Spatial grid: one strongest peak per max_blob_r-sized cell.
+    nms_cell = max_blob_r
+    grid_rows = max(1, h // nms_cell)
+    grid_cols = max(1, w // nms_cell)
     cell_idx = (np.minimum((peak_ys * grid_rows // h).astype(np.int32), grid_rows - 1)
                 * grid_cols
                 + np.minimum((peak_xs * grid_cols // w).astype(np.int32), grid_cols - 1))
-    order = np.lexsort((-peak_vals, cell_idx))  # sort: primary=cell, secondary=strongest first
+    order = np.lexsort((-peak_vals, cell_idx))
     _, first_in_cell = np.unique(cell_idx[order], return_index=True)
     sel = order[first_in_cell]
+
+    print(f"  DoG peaks above {SENSOR_DOG_MIN_CONTRAST}: {len(sel)}")
 
     candidates = []
     for k in sel:
@@ -1800,9 +1831,11 @@ def detect_sensor_dust_candidates(image_path):
         peak_val = float(peak_vals[k])
 
         blob_r = _sensor_blob_radius(dog, cx, cy, min_radius, max_blob_r, peak_val)
-        # Reject if ring sampling never found the drop (not a genuine small bounded blob)
-        if blob_r < min_radius or blob_r >= max_blob_r:
+        if blob_r < min_radius:
             continue
+        # blob_r == max_blob_r means the ring walk hit the limit without finding the edge —
+        # in dense dust fields, neighboring spots keep DoG elevated and the walk never drops.
+        # Accept with max_blob_r as the radius; cross-frame consensus handles false positives.
 
         area = int(math.pi * blob_r ** 2)
         brush_r = max(MIN_BRUSH_PX, blob_r * SENSOR_BRUSH_SCALE)
@@ -1830,7 +1863,9 @@ def find_sensor_dust_consensus(per_image_results, transforms):
     """
     from collections import defaultdict
 
-    all_pts = []  # (cx_ff, cy_ff, radius_norm, stem_idx)
+    stems = [r[0] for r in per_image_results]
+    n_images = len(per_image_results)
+    all_pts = []  # (cx_ff, cy_ff, radius_norm, stem_idx, contrast)
     for stem_idx, (stem, candidates, img_w, img_h) in enumerate(per_image_results):
         if not candidates or not img_w or not img_h:
             continue
@@ -1840,18 +1875,27 @@ def find_sensor_dust_consensus(per_image_results, transforms):
         crop_l, crop_t, crop_r, crop_b = crop
         crop_scale = min(crop_r - crop_l, crop_b - crop_t)
         min_export = min(img_w, img_h)
-        for c in candidates:
+        # Limit high-candidate-count frames to prevent excessive union-find chaining.
+        # High-contrast peaks are real blobs; weak-contrast peaks are often smooth-area
+        # noise that creates long chains merging distinct sensor-dust clusters.
+        # Only apply for large batches (>15 images): small batches have fewer frames to
+        # vote down FPs, so we need broader candidate coverage to avoid missing real dust.
+        use_cands = candidates
+        if n_images > 15 and len(candidates) > SENSOR_MAX_CANDIDATES_FOR_CONSENSUS:
+            use_cands = sorted(candidates, key=lambda c: c["contrast"],
+                               reverse=True)[:SENSOR_MAX_CANDIDATES_FOR_CONSENSUS]
+        for c in use_cands:
             cx_n = c["cx"] / img_w
             cy_n = c["cy"] / img_h
             cx_ff, cy_ff = _export_to_original(cx_n, cy_n, flip, crop)
             # Radius in full-frame normalized: scale from export pixels
             r_norm = c["radius_px"] / max(min_export, 1) * max(crop_scale, 1e-6)
-            all_pts.append((cx_ff, cy_ff, r_norm, stem_idx))
+            all_pts.append((cx_ff, cy_ff, r_norm, stem_idx, c["contrast"]))
 
     if not all_pts:
         return []
 
-    # Union-find clustering
+    # Union-find clustering — vectorized pair search via numpy broadcast
     n = len(all_pts)
     parent = list(range(n))
 
@@ -1864,29 +1908,63 @@ def find_sensor_dust_consensus(per_image_results, transforms):
     def union(i, j):
         parent[find(i)] = find(j)
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            dx = all_pts[i][0] - all_pts[j][0]
-            dy = all_pts[i][1] - all_pts[j][1]
-            if math.sqrt(dx * dx + dy * dy) < SENSOR_CLUSTER_RADIUS_NORM:
-                union(i, j)
+    # cKDTree pair search — O(n log n), handles large candidate sets efficiently.
+    # Cross-frame-only unions: never link two candidates from the same frame.
+    # This prevents same-frame chaining (dense sky FPs flooding into mega-clusters).
+    coords = np.array([(p[0], p[1]) for p in all_pts], dtype=np.float64)
+    tree = cKDTree(coords)
+    for i, j in tree.query_pairs(SENSOR_CLUSTER_RADIUS_NORM):
+        if all_pts[i][3] != all_pts[j][3]:  # different frames only
+            union(i, j)
 
     clusters = defaultdict(list)
     for i, pt in enumerate(all_pts):
         clusters[find(i)].append(pt)
 
-    min_frames = SENSOR_DUST_MIN_FRAMES
+    # Require more frames for larger batches: 2 frames is too permissive when there
+    # are 30+ images — coincidental position overlaps produce many spurious 2-frame
+    # clusters.  Scale to ~10% of batch size (minimum 2).
+    min_frames = max(SENSOR_DUST_MIN_FRAMES, n_images // 10)
     confirmed = []
     for members in clusters.values():
         frame_indices = {m[3] for m in members}
-        if len(frame_indices) >= min_frames:
-            cx_mean = sum(m[0] for m in members) / len(members)
-            cy_mean = sum(m[1] for m in members) / len(members)
-            r_mean  = sum(m[2] for m in members) / len(members)
-            confirmed.append({
-                "cx_norm": cx_mean, "cy_norm": cy_mean,
-                "radius_norm": r_mean, "n_frames": len(frame_indices),
-            })
+        if len(frame_indices) < min_frames:
+            continue
+
+        # Chain-cluster rescue: if any frame contributes more than one candidate, union-find
+        # has chained through multiple positions (different content in different frames linked
+        # via the same high-candidate-count smooth-area frame). Extract the tightest sub-cluster
+        # by taking the best-contrast candidate per frame, then computing the centroid from
+        # those representatives only.
+        max_per_frame = max(
+            sum(1 for m in members if m[3] == fi) for fi in frame_indices
+        )
+        if max_per_frame > 1:
+            # Deduplicate: keep highest-contrast candidate per frame
+            frame_best: dict = {}
+            for m in members:
+                fi = m[3]
+                if fi not in frame_best or m[4] > frame_best[fi][4]:  # m[4] = contrast
+                    frame_best[fi] = m
+            members = list(frame_best.values())
+            frame_indices = {m[3] for m in members}
+            if len(frame_indices) < min_frames:
+                continue
+
+        cx_mean = sum(m[0] for m in members) / len(members)
+        cy_mean = sum(m[1] for m in members) / len(members)
+        # Spread filter: real sensor dust maps to nearly identical positions across frames;
+        # cross-frame FP chains spread over many cluster radii. Reject diffuse clusters.
+        max_spread = max(math.sqrt((m[0] - cx_mean) ** 2 + (m[1] - cy_mean) ** 2)
+                         for m in members)
+        if max_spread > 2.0 * SENSOR_CLUSTER_RADIUS_NORM:
+            continue
+        r_mean = sum(m[2] for m in members) / len(members)
+        confirmed.append({
+            "cx_norm": cx_mean, "cy_norm": cy_mean,
+            "radius_norm": r_mean, "n_frames": len(frame_indices),
+            "stem_set": {stems[i] for i in frame_indices},
+        })
 
     return confirmed
 
@@ -1909,14 +1987,30 @@ def process_one_sensor_image(args):
             candidates, error = detect_sensor_dust_candidates(image_path)
             if error:
                 print(f"  ERROR: {error}")
-            else:
-                for c in candidates:
-                    print(f"    center=({c['cx']:.1f},{c['cy']:.1f}) "
-                          f"radius={c['radius_px']:.1f}px contrast={c['contrast']:.1f}")
     except Exception as e:
         error = str(e)
         buf.write(f"  EXCEPTION: {e}\n")
     return (filename, candidates, img_dims, error, buf.getvalue())
+
+
+def _compute_frame_pairwise_overlap(consensus_spots):
+    """Count shared consensus spots between each frame pair, weighted by n_frames.
+
+    Weighting by n_frames means spots confirmed in many frames contribute more to
+    the partner score, so the best partner is determined by reliably-seen dust rather
+    than incidental single-frame overlaps.
+
+    Returns dict mapping (frameA, frameB) → weighted score (A < B lexicographically).
+    """
+    from itertools import combinations as _comb
+    pairwise = {}
+    for sd in consensus_spots:
+        stems = sorted(sd["stem_set"])
+        weight = sd["n_frames"]
+        for a, b in _comb(stems, 2):
+            key = (a, b)
+            pairwise[key] = pairwise.get(key, 0) + weight
+    return pairwise
 
 
 def run_sensor_dust_mode(image_paths, transforms, output_dir):
@@ -1942,11 +2036,35 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
 
     consensus_spots = find_sensor_dust_consensus(per_image_results, transforms)
     print(f"\nSensor dust consensus: {len(consensus_spots)} spot(s) confirmed across frames")
+
     for sd in consensus_spots:
         print(f"  pos=({sd['cx_norm']:.4f},{sd['cy_norm']:.4f}) "
               f"radius_norm={sd['radius_norm']:.4f} seen_in={sd['n_frames']} frames")
 
     image_paths_by_stem = {Path(p).stem: p for p in image_paths}
+    all_stems = [r[0] for r in per_image_results]
+
+    # Pairwise frame correlation filter.
+    # Sensor dust appears in all frames that have smooth content at the dust position.
+    # Frames with many shared consensus positions have similar smooth-area distributions
+    # (same sky, same scene layout). For each frame, only apply consensus spots that also
+    # appear in its most-correlated partner — this eliminates coincidental matches from
+    # dissimilar frames while preserving all real sensor dust positions.
+    pairwise = _compute_frame_pairwise_overlap(consensus_spots)
+    best_partner = {}   # stem → most-correlated partner stem
+    for stem in all_stems:
+        best_other, best_count = None, 0
+        for other in all_stems:
+            if other == stem:
+                continue
+            key = (min(stem, other), max(stem, other))
+            c = pairwise.get(key, 0)
+            if c > best_count:
+                best_count = c
+                best_other = other
+        best_partner[stem] = best_other
+        if best_other:
+            print(f"  [{stem}] most correlated with {best_other} ({best_count} shared spots)")
 
     # Back-project consensus positions into each frame's export space and generate XMP
     results = []
@@ -1965,27 +2083,56 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
             if loaded is not None:
                 gray_export = cv2.cvtColor(loaded, cv2.COLOR_BGR2GRAY)
 
+        # Pre-pass: project consensus spots into this frame and compute spot texture.
+        # Only include spots that:
+        #   1. were detected in THIS frame (stem_set membership)
+        #   2. were ALSO detected in this frame's most-correlated partner (low-confidence),
+        #      OR appear in enough frames that partner corroboration is unnecessary.
+        # Spots seen in HIGH_CONFIDENCE_FRAMES or more are accepted without partner check:
+        # stable positions across that many diverse frames are overwhelmingly real sensor dust.
+        # Threshold scales with batch size (~25%) but is at least 10, so only truly
+        # exceptional spots bypass; this prevents n=6-9 coincidental clusters from slipping
+        # through while still allowing n=10+ real-dust mega-clusters.
+        required_partner = best_partner.get(stem)
+        high_confidence_frames = max(10, len(all_stems) // 4)
+        projected = []
+        for sd in consensus_spots:
+            if stem not in sd["stem_set"]:
+                continue  # not detected in this frame
+            if (required_partner and required_partner not in sd["stem_set"]
+                    and sd["n_frames"] < high_confidence_frames):
+                continue  # not shared with partner and too few frames — likely a coincidence
+            proj = _original_to_export(sd["cx_norm"], sd["cy_norm"], flip, crop, img_w, img_h)
+            if proj is None:
+                continue
+            cx_px, cy_px = proj
+            radius_px = sd["radius_norm"] * max(min_export, 1) / max(crop_scale, 1e-6)
+            spot_tex = (_sensor_spot_texture(gray_export, cx_px, cy_px, radius_px)
+                        if gray_export is not None else 0.0)
+            projected.append((spot_tex, sd, cx_px, cy_px, radius_px))
+
+        # Sort: smoothest area first; within same texture, higher n_frames first
+        projected.sort(key=lambda x: (x[0], -x[1]["n_frames"]))
+
         spots = []
         skipped_texture = 0
         skipped_no_source = 0
-        for sd in consensus_spots:
-            proj = _original_to_export(sd["cx_norm"], sd["cy_norm"], flip, crop, img_w, img_h)
-            if proj is None:
-                continue  # sensor dust falls outside this frame's crop
-            cx_px, cy_px = proj
-            radius_px = sd["radius_norm"] * max(min_export, 1) / max(crop_scale, 1e-6)
+        for spot_tex, sd, cx_px, cy_px, radius_px in projected:
+            if len(spots) >= MAX_FORMS:
+                remaining = len(projected) - len(spots) - skipped_texture - skipped_no_source
+                print(f"  [{stem}] reached MAX_FORMS={MAX_FORMS} limit, "
+                      f"{remaining} lower-priority spots not applied")
+                break
+
             brush_r = max(MIN_BRUSH_PX, radius_px * SENSOR_BRUSH_SCALE)
 
             if gray_export is not None:
-                # Skip if the spot landed on a busy area in this frame
-                spot_tex = _sensor_spot_texture(gray_export, cx_px, cy_px, radius_px)
                 if spot_tex > SENSOR_MAX_CORRECTION_TEXTURE:
                     skipped_texture += 1
                     print(f"  [{stem}] skip ({cx_px:.0f},{cy_px:.0f}) "
                           f"spot_texture={spot_tex:.1f} > {SENSOR_MAX_CORRECTION_TEXTURE}")
                     continue
 
-                # Find the smoothest healing source; skip if none is clean enough
                 src_result = _sensor_find_source(gray_export, cx_px, cy_px, radius_px)
                 if src_result is None:
                     skipped_no_source += 1
@@ -2005,7 +2152,7 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
                 "radius_px": radius_px, "brush_radius_px": brush_r,
                 "src_cx": src_cx, "src_cy": src_cy,
                 "contrast": 10.0, "area": 0,
-                "texture": 0.0, "context_texture": 0.0,
+                "texture": spot_tex, "context_texture": 0.0,
                 "excess_sat": 0.0, "spot_sat": 0.0,
             })
 
