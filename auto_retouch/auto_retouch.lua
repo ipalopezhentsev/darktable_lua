@@ -428,7 +428,7 @@ end
 -- ===================================================================
 
 -- Export images at full resolution and run Python dust detection
-local function export_and_detect(images, debug_ui_mode)
+local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
   -- Create temp folder
   local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
   local export_dir = temp_dir .. "/darktable_autoretouch_" .. os.time()
@@ -532,10 +532,11 @@ local function export_and_detect(images, debug_ui_mode)
 
   local log_file = export_dir .. "/processing.log"
   local debug_flag = debug_ui_mode and " --debug-ui" or ""
+  local sensor_dust_flag = sensor_dust_mode and " --sensor-dust" or ""
   local ml_model_path = script_dir .. "dust_ml_model.pkl"
   local ml_flag = df.check_if_file_exists(ml_model_path) and (' --ml-model "' .. ml_model_path .. '"') or ""
-  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s',
-                                 python_script, debug_flag, ml_flag, file_args)
+  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s%s',
+                                 python_script, debug_flag, sensor_dust_flag, ml_flag, file_args)
 
   -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
   if debug_ui_mode then
@@ -689,6 +690,74 @@ local function export_detect_and_apply_retouch_inplace()
   end
 end
 
+-- Sensor dust pipeline: detect dust common across all selected frames, apply to each image
+local function export_detect_and_apply_sensor_dust()
+  dlog.log_level(dlog.info)
+  math.randomseed(os.time() + os.clock() * 1000)
+
+  local images = dt.gui.selection()
+
+  if #images < 2 then
+    dt.print(_("Select 2 or more images from the same scanning session for sensor dust removal"))
+    return
+  end
+
+  local dust_results, filename_to_image, export_dir = export_and_detect(images, false, true)
+  if not dust_results then
+    return
+  end
+
+  dlog.msg(dlog.info, "export_detect_and_apply_sensor_dust", "Applying sensor dust retouch to images...")
+
+  local stats = {
+    applied = 0,
+    skipped = 0,
+    failed = 0
+  }
+
+  for filename, dust_data in pairs(dust_results) do
+    if dust_data.error then
+      stats.failed = stats.failed + 1
+      dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
+    elseif dust_data.count == 0 then
+      stats.skipped = stats.skipped + 1
+      dt.print(string.format(_("No sensor dust in crop of %s"), filename))
+    else
+      local original_image = filename_to_image[filename]
+      if original_image then
+        dt.print(string.format(_("Applying sensor dust retouch to %s (%d spot(s))..."),
+          original_image.filename, dust_data.count))
+
+        local success, error_msg = apply_retouch_in_place(original_image, dust_data)
+
+        if success then
+          stats.applied = stats.applied + 1
+        else
+          stats.failed = stats.failed + 1
+          dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), error_msg or "Unknown error"))
+        end
+      else
+        stats.failed = stats.failed + 1
+        dt.print(string.format(_("Warning: Could not find original image for %s"), filename))
+      end
+    end
+  end
+
+  dt.print(string.format(_("Sensor Dust Removal: %d applied, %d no dust in crop, %d failed"),
+    stats.applied, stats.skipped, stats.failed))
+
+  -- Keep temp dir whenever nothing was applied (applied==0) so the processing.log is available
+  -- for diagnosing detection failures. Only clean up when we actually healed something.
+  if stats.failed == 0 and stats.applied > 0 then
+    df.rmdir(export_dir)
+    dlog.msg(dlog.info, "export_detect_and_apply_sensor_dust", "Removed temp dir: " .. export_dir)
+  else
+    dt.print(string.format(_("Log kept for inspection: %s"), export_dir .. "/processing.log"))
+    dlog.msg(dlog.info, "export_detect_and_apply_sensor_dust",
+      "Keeping temp dir for inspection: " .. export_dir)
+  end
+end
+
 -- ===================================================================
 -- Plugin registration
 -- ===================================================================
@@ -696,9 +765,11 @@ end
 local function destroy()
     dt.gui.libs.image.destroy_action("AutoRetouch_Debug")
     dt.gui.libs.image.destroy_action("AutoRetouch_InPlace")
+    dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoRetouch_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_InPlace", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch_SensorDust", "shortcut")
 end
 
 -- Debug action
@@ -729,6 +800,21 @@ dt.register_event(
     "shortcut",
     function(event, shortcut) export_detect_and_apply_retouch_inplace() end,
     "AutoRetouch_InPlace"
+)
+
+-- Sensor dust action (cross-frame: select all frames from one scanning session)
+dt.gui.libs.image.register_action(
+    "AutoRetouch_SensorDust",
+    _("Auto retouch sensor dust (heal sensor dust)"),
+    function() export_detect_and_apply_sensor_dust() end,
+    _("Detect and heal DSLR sensor dust common across all selected frames")
+)
+
+dt.register_event(
+    "AutoRetouch_SensorDust",
+    "shortcut",
+    function(event, shortcut) export_detect_and_apply_sensor_dust() end,
+    "AutoRetouch_SensorDust"
 )
 
 script_data.destroy = destroy

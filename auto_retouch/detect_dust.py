@@ -156,6 +156,22 @@ MAX_FORMS = 300                # darktable's maximum form slots
 # Only the mask_id field at offset 24 needs to be replaced per-image
 BLENDOP_TEMPLATE_ENCODED = "gz08eJxjYGBgYAFiCQYYOOEEIjd6dmXCRFgZMAEjFjEGhgZ7CB6pfOygYtaVAyCMi48L/AcCEA0Ak0kpjg=="
 
+# ---------------------------------------------------------------------------
+# Sensor dust detection constants
+# ---------------------------------------------------------------------------
+SENSOR_SIGMA_INNER_FRAC   = 0.004  # DoG inner Gaussian sigma as fraction of min(w,h)
+SENSOR_SIGMA_OUTER_FRAC   = 0.04   # DoG outer Gaussian sigma (large enough to see around blobs,
+                                    # small enough to stay within the same sky region)
+SENSOR_DOG_MIN_CONTRAST   = 4.0    # minimum DoG peak value to consider as candidate
+SENSOR_MIN_RADIUS_FRAC    = 0.003  # min blob radius as fraction of min(w,h)
+SENSOR_MAX_RADIUS_FRAC    = 0.12   # grid cell size (one candidate per this many px)
+SENSOR_MAX_BLOB_RADIUS_FRAC = 0.01 # maximum accepted blob radius (% of min_dim); sensor dust is small
+SENSOR_CLUSTER_RADIUS_NORM = 0.02  # cluster radius in normalized full-frame coords
+SENSOR_DUST_MIN_FRAMES    = 2      # min frames a cluster must appear in to confirm sensor dust
+SENSOR_BRUSH_SCALE        = 1.0    # brush_radius_px = max(MIN_BRUSH_PX, radius_px * this)
+SENSOR_MAX_CORRECTION_TEXTURE = 8.0   # skip correction if dust spot lands on a busy area in this frame
+SENSOR_MAX_SOURCE_TEXTURE = 8.0       # skip correction if no clean healing source found in any direction
+
 
 # ===================================================================
 # Dust detection
@@ -1382,6 +1398,34 @@ def _export_to_original(cx, cy, flip, crop, ashift_params=None, export_w=None, e
     return cx, cy
 
 
+def _original_to_export(cx_norm, cy_norm, flip, crop, export_w, export_h):
+    """Transform normalized full-frame coords to export pixel space.
+
+    Inverse of _export_to_original. Ashift is not supported (sensor dust mode skips it).
+    Returns (cx_px, cy_px) or None if the point falls outside the crop region.
+
+    Forward pipeline order: raw -> [ashift] -> flip -> crop -> export.
+    """
+    crop_l, crop_t, crop_r, crop_b = crop
+
+    # 1. Apply flip (forward order: SWAP_XY → FLIP_X → FLIP_Y)
+    if flip & 4:  # SWAP_XY
+        cx_norm, cy_norm = cy_norm, cx_norm
+    if flip & 1:  # FLIP_X: vertical mirror
+        cy_norm = 1.0 - cy_norm
+    if flip & 2:  # FLIP_Y: horizontal mirror
+        cx_norm = 1.0 - cx_norm
+
+    # 2. Apply crop (map full-frame [0,1] → export [0,1])
+    cx_e = (cx_norm - crop_l) / max(crop_r - crop_l, 1e-6)
+    cy_e = (cy_norm - crop_t) / max(crop_b - crop_t, 1e-6)
+
+    if not (0.0 <= cx_e <= 1.0 and 0.0 <= cy_e <= 1.0):
+        return None  # outside this frame's crop
+
+    return cx_e * export_w, cy_e * export_h
+
+
 def generate_xmp_data_for_spots(spots, image_width, image_height,
                                 flip=0, crop=(0.0, 0.0, 1.0, 1.0), ashift_params=None):
     """Generate all XMP-ready data for a list of detected spots.
@@ -1580,6 +1624,408 @@ def write_dust_results(results, output_dir):
 
 
 # ===================================================================
+# Sensor dust detection
+# ===================================================================
+
+def _sensor_blob_radius(dog, cx, cy, min_r, max_r, peak_val):
+    """Walk outward from (cx, cy) in the DoG map until the mean sampled value
+    drops below 30% of peak_val. Returns the estimated blob radius in pixels."""
+    h, w = dog.shape
+    n_dirs = 8
+    cos_a = [math.cos(i * 2 * math.pi / n_dirs) for i in range(n_dirs)]
+    sin_a = [math.sin(i * 2 * math.pi / n_dirs) for i in range(n_dirs)]
+    threshold = 0.3 * peak_val
+    for r in range(max(1, min_r // 2), max_r + 1):
+        vals = []
+        for d in range(n_dirs):
+            sx = int(round(cx + r * cos_a[d]))
+            sy = int(round(cy + r * sin_a[d]))
+            if 0 <= sx < w and 0 <= sy < h:
+                vals.append(float(dog[sy, sx]))
+        if vals and (sum(vals) / len(vals)) < threshold:
+            return r
+    return max_r
+
+
+def _sensor_spot_texture(gray, cx_px, cy_px, radius_px):
+    """90th-percentile local-std texture in the ring between 1× and 8× blob radius.
+
+    The wide ring (up to 8× radius, min 200px) captures structural context like
+    window frames even when the dust sits in the centre of a smooth glass pane.
+    The 90th percentile catches sparse-but-strong edges that median would miss.
+    """
+    h, w = gray.shape
+    inner_r = max(int(radius_px), 5)
+    outer_r = max(inner_r * 8, 200)
+    y0, y1 = max(0, int(cy_px) - outer_r), min(h, int(cy_px) + outer_r)
+    x0, x1 = max(0, int(cx_px) - outer_r), min(w, int(cx_px) + outer_r)
+    if y1 <= y0 or x1 <= x0:
+        return 0.0
+    region = gray[y0:y1, x0:x1].astype(np.float32)
+    k = max(3, (inner_r // 2) | 1)
+    local_mean = cv2.blur(region, (k, k))
+    local_sq_mean = cv2.blur(region ** 2, (k, k))
+    local_std = np.sqrt(np.maximum(local_sq_mean - local_mean ** 2, 0))
+    cy_rel, cx_rel = int(cy_px) - y0, int(cx_px) - x0
+    ys, xs = np.ogrid[:region.shape[0], :region.shape[1]]
+    dist = np.sqrt((xs - cx_rel) ** 2 + (ys - cy_rel) ** 2)
+    ring_mask = (dist >= inner_r) & (dist <= outer_r)
+    if not np.any(ring_mask):
+        return 0.0
+    return float(np.percentile(local_std[ring_mask], 90))
+
+
+def _sensor_find_source(gray, cx_px, cy_px, radius_px):
+    """Find the smoothest healing source for a sensor dust spot.
+
+    Samples 8 directions at 2.5× radius distance from the spot centre and
+    picks the patch with the lowest median local-std texture.
+
+    Returns (src_cx, src_cy, texture) or None if every direction exceeds
+    SENSOR_MAX_SOURCE_TEXTURE (no clean source available).
+    """
+    h, w = gray.shape
+    step = max(int(radius_px * 2.5), 15)
+    patch_r = max(int(radius_px), 5)
+    k = max(3, (patch_r // 2) | 1)
+
+    best_src = None
+    best_tex = float('inf')
+
+    for d in range(8):
+        angle = d * math.pi / 4
+        sx = cx_px + step * math.cos(angle)
+        sy = cy_px + step * math.sin(angle)
+        sx = max(patch_r, min(w - patch_r - 1, sx))
+        sy = max(patch_r, min(h - patch_r - 1, sy))
+        y0, y1 = int(sy) - patch_r, int(sy) + patch_r
+        x0, x1 = int(sx) - patch_r, int(sx) + patch_r
+        if y0 < 0 or y1 >= h or x0 < 0 or x1 >= w:
+            continue
+        patch = gray[y0:y1, x0:x1].astype(np.float32)
+        lm = cv2.blur(patch, (k, k))
+        lsm = cv2.blur(patch ** 2, (k, k))
+        lst = np.sqrt(np.maximum(lsm - lm ** 2, 0))
+        tex = float(np.median(lst))
+        if tex < best_tex:
+            best_tex = tex
+            best_src = (float(sx), float(sy))
+
+    if best_src is None or best_tex > SENSOR_MAX_SOURCE_TEXTURE:
+        return None
+    return best_src[0], best_src[1], best_tex
+
+
+def detect_sensor_dust_candidates(image_path):
+    """Find sensor-dust candidate blobs using Difference-of-Gaussians + local maxima.
+
+    DoG cancels smooth background gradients (sky, bokeh) while preserving blob-scale
+    brightness peaks. Local maxima detection avoids the connected-component fusion
+    problem where an entire gradient region merges into one large blob.
+
+    Returns (candidates, error_msg) where candidates is a list of dicts with keys:
+      cx, cy (export pixels), radius_px, brush_radius_px, contrast, area, circularity.
+    """
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return [], f"Cannot read {image_path}"
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    min_dim = min(w, h)
+    sigma_inner = max(2.0, min_dim * SENSOR_SIGMA_INNER_FRAC)
+    sigma_outer = max(20.0, min_dim * SENSOR_SIGMA_OUTER_FRAC)
+    min_radius = max(5, int(min_dim * SENSOR_MIN_RADIUS_FRAC))
+    max_radius = int(min_dim * SENSOR_MAX_RADIUS_FRAC)
+    max_blob_r = max(min_radius + 1, int(min_dim * SENSOR_MAX_BLOB_RADIUS_FRAC))
+
+    # Inner blur: small sigma preserves individual dust blob peaks
+    blur_inner = cv2.GaussianBlur(gray, (0, 0), sigma_inner)
+    # Outer blur: sigma_outer ~= 4% of min_dim keeps background estimate within the same
+    # sky/bokeh region rather than spanning the full scene (sky+ground would pull the
+    # estimate down, making the entire sky appear elevated in DoG).
+    # Computed at 4x downscale so the kernel (≈6σ) stays manageable.
+    ds = 4
+    dw, dh = max(1, w // ds), max(1, h // ds)
+    gray_ds = cv2.resize(gray, (dw, dh), interpolation=cv2.INTER_AREA)
+    blur_outer_ds = cv2.GaussianBlur(gray_ds, (0, 0), max(3.0, sigma_outer / ds))
+    blur_outer = cv2.resize(blur_outer_ds, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    dog = blur_inner - blur_outer  # positive = brighter than local background
+
+    print(f"  sigma_inner={sigma_inner:.0f}px sigma_outer={sigma_outer:.0f}px "
+          f"blob_radius=[{min_radius},{max_blob_r}]px "
+          f"dog range: [{dog.min():.1f},{dog.max():.1f}]")
+
+    # Local maxima with NMS window = min_radius*4: finds peaks separated by at least 2*min_radius
+    nms_diam = max(5, min_radius * 4) | 1
+    nms_se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (nms_diam, nms_diam))
+    dog_dilated = cv2.dilate(dog, nms_se)
+    peak_mask = (dog >= dog_dilated - 0.5) & (dog > SENSOR_DOG_MIN_CONTRAST)
+    peak_ys, peak_xs = np.where(peak_mask)
+
+    print(f"  DoG peaks above {SENSOR_DOG_MIN_CONTRAST}: {len(peak_ys)}")
+
+    if len(peak_ys) == 0:
+        return [], None
+
+    peak_vals = dog[peak_ys, peak_xs]
+
+    # Exclude peaks within min_radius of the image border (film holder edge artifacts)
+    border = min_radius
+    interior = ((peak_xs >= border) & (peak_xs < w - border)
+                & (peak_ys >= border) & (peak_ys < h - border))
+    peak_ys = peak_ys[interior]
+    peak_xs = peak_xs[interior]
+    peak_vals = peak_vals[interior]
+
+    if len(peak_ys) == 0:
+        return [], None
+
+    # Grid-based peak selection: keep the strongest DoG peak per max_radius-sized cell.
+    # max_radius controls grid density (~96 cells for typical images), decoupled from the
+    # blob size limit (max_blob_r) so we get a manageable candidate count.
+    grid_rows = max(1, h // max_radius)
+    grid_cols = max(1, w // max_radius)
+    cell_idx = (np.minimum((peak_ys * grid_rows // h).astype(np.int32), grid_rows - 1)
+                * grid_cols
+                + np.minimum((peak_xs * grid_cols // w).astype(np.int32), grid_cols - 1))
+    order = np.lexsort((-peak_vals, cell_idx))  # sort: primary=cell, secondary=strongest first
+    _, first_in_cell = np.unique(cell_idx[order], return_index=True)
+    sel = order[first_in_cell]
+
+    candidates = []
+    for k in sel:
+        cx, cy = float(peak_xs[k]), float(peak_ys[k])
+        peak_val = float(peak_vals[k])
+
+        blob_r = _sensor_blob_radius(dog, cx, cy, min_radius, max_blob_r, peak_val)
+        # Reject if ring sampling never found the drop (not a genuine small bounded blob)
+        if blob_r < min_radius or blob_r >= max_blob_r:
+            continue
+
+        area = int(math.pi * blob_r ** 2)
+        brush_r = max(MIN_BRUSH_PX, blob_r * SENSOR_BRUSH_SCALE)
+        candidates.append({
+            "cx": cx, "cy": cy,
+            "radius_px": float(blob_r), "brush_radius_px": brush_r,
+            "contrast": peak_val, "area": area, "circularity": 1.0,
+        })
+
+    print(f"  Found {len(candidates)} candidate(s)")
+    return candidates, None
+
+
+def find_sensor_dust_consensus(per_image_results, transforms):
+    """Identify dust positions common across multiple frames (sensor dust signature).
+
+    per_image_results: list of (stem, candidates, img_w, img_h)
+    transforms: dict from parse_transform_params()
+
+    Candidates from each frame are mapped to normalized full-frame coordinates, then
+    clustered. Clusters present in >= SENSOR_DUST_MIN_FRAMES distinct frames are
+    confirmed as sensor dust.
+
+    Returns list of dicts: {cx_norm, cy_norm, radius_norm, n_frames} in full-frame space.
+    """
+    from collections import defaultdict
+
+    all_pts = []  # (cx_ff, cy_ff, radius_norm, stem_idx)
+    for stem_idx, (stem, candidates, img_w, img_h) in enumerate(per_image_results):
+        if not candidates or not img_w or not img_h:
+            continue
+        t = transforms.get(stem, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0), "ashift": None})
+        flip = t["flip"]
+        crop = t["crop"]
+        crop_l, crop_t, crop_r, crop_b = crop
+        crop_scale = min(crop_r - crop_l, crop_b - crop_t)
+        min_export = min(img_w, img_h)
+        for c in candidates:
+            cx_n = c["cx"] / img_w
+            cy_n = c["cy"] / img_h
+            cx_ff, cy_ff = _export_to_original(cx_n, cy_n, flip, crop)
+            # Radius in full-frame normalized: scale from export pixels
+            r_norm = c["radius_px"] / max(min_export, 1) * max(crop_scale, 1e-6)
+            all_pts.append((cx_ff, cy_ff, r_norm, stem_idx))
+
+    if not all_pts:
+        return []
+
+    # Union-find clustering
+    n = len(all_pts)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        parent[find(i)] = find(j)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = all_pts[i][0] - all_pts[j][0]
+            dy = all_pts[i][1] - all_pts[j][1]
+            if math.sqrt(dx * dx + dy * dy) < SENSOR_CLUSTER_RADIUS_NORM:
+                union(i, j)
+
+    clusters = defaultdict(list)
+    for i, pt in enumerate(all_pts):
+        clusters[find(i)].append(pt)
+
+    min_frames = SENSOR_DUST_MIN_FRAMES
+    confirmed = []
+    for members in clusters.values():
+        frame_indices = {m[3] for m in members}
+        if len(frame_indices) >= min_frames:
+            cx_mean = sum(m[0] for m in members) / len(members)
+            cy_mean = sum(m[1] for m in members) / len(members)
+            r_mean  = sum(m[2] for m in members) / len(members)
+            confirmed.append({
+                "cx_norm": cx_mean, "cy_norm": cy_mean,
+                "radius_norm": r_mean, "n_frames": len(frame_indices),
+            })
+
+    return confirmed
+
+
+def process_one_sensor_image(args):
+    """Detect sensor dust candidates in one image. Top-level for multiprocessing pickling."""
+    (image_path,) = args
+    filename = Path(image_path).stem
+    buf = io.StringIO()
+    candidates = []
+    error = None
+    img_dims = (0, 0)
+    try:
+        with redirect_stdout(buf):
+            print(f"\n{'='*60}")
+            print(f"Sensor dust candidates: {filename}")
+            img = cv2.imread(str(image_path))
+            if img is not None:
+                img_dims = (img.shape[1], img.shape[0])
+            candidates, error = detect_sensor_dust_candidates(image_path)
+            if error:
+                print(f"  ERROR: {error}")
+            else:
+                for c in candidates:
+                    print(f"    center=({c['cx']:.1f},{c['cy']:.1f}) "
+                          f"radius={c['radius_px']:.1f}px contrast={c['contrast']:.1f}")
+    except Exception as e:
+        error = str(e)
+        buf.write(f"  EXCEPTION: {e}\n")
+    return (filename, candidates, img_dims, error, buf.getvalue())
+
+
+def run_sensor_dust_mode(image_paths, transforms, output_dir):
+    """Full sensor dust pipeline: per-image candidates → cross-frame consensus → XMP data.
+
+    Returns True if any errors occurred.
+    """
+    n_workers = min(cpu_count(), len(image_paths))
+    print(f"Sensor dust mode: {len(image_paths)} image(s), {n_workers} worker(s)", flush=True)
+
+    per_image_results = []
+    any_errors = False
+    args_list = [(p,) for p in image_paths]
+
+    with Pool(processes=n_workers) as pool:
+        for i, result in enumerate(pool.imap_unordered(process_one_sensor_image, args_list), 1):
+            filename, candidates, img_dims, error, log_output = result
+            print(log_output, end="", flush=True)
+            if error:
+                any_errors = True
+            per_image_results.append((filename, candidates, img_dims[0], img_dims[1]))
+            print(f"PROGRESS|{i}|{len(image_paths)}", flush=True)
+
+    consensus_spots = find_sensor_dust_consensus(per_image_results, transforms)
+    print(f"\nSensor dust consensus: {len(consensus_spots)} spot(s) confirmed across frames")
+    for sd in consensus_spots:
+        print(f"  pos=({sd['cx_norm']:.4f},{sd['cy_norm']:.4f}) "
+              f"radius_norm={sd['radius_norm']:.4f} seen_in={sd['n_frames']} frames")
+
+    image_paths_by_stem = {Path(p).stem: p for p in image_paths}
+
+    # Back-project consensus positions into each frame's export space and generate XMP
+    results = []
+    for (stem, candidates, img_w, img_h) in per_image_results:
+        t = transforms.get(stem, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0), "ashift": None})
+        flip = t["flip"]
+        crop = t["crop"]
+        crop_scale = min(crop[2] - crop[0], crop[3] - crop[1])
+        min_export = min(img_w, img_h) if img_w and img_h else 1
+
+        # Load export image once for per-spot texture checks in this frame
+        gray_export = None
+        export_path = image_paths_by_stem.get(stem)
+        if export_path:
+            loaded = cv2.imread(str(export_path))
+            if loaded is not None:
+                gray_export = cv2.cvtColor(loaded, cv2.COLOR_BGR2GRAY)
+
+        spots = []
+        skipped_texture = 0
+        skipped_no_source = 0
+        for sd in consensus_spots:
+            proj = _original_to_export(sd["cx_norm"], sd["cy_norm"], flip, crop, img_w, img_h)
+            if proj is None:
+                continue  # sensor dust falls outside this frame's crop
+            cx_px, cy_px = proj
+            radius_px = sd["radius_norm"] * max(min_export, 1) / max(crop_scale, 1e-6)
+            brush_r = max(MIN_BRUSH_PX, radius_px * SENSOR_BRUSH_SCALE)
+
+            if gray_export is not None:
+                # Skip if the spot landed on a busy area in this frame
+                spot_tex = _sensor_spot_texture(gray_export, cx_px, cy_px, radius_px)
+                if spot_tex > SENSOR_MAX_CORRECTION_TEXTURE:
+                    skipped_texture += 1
+                    print(f"  [{stem}] skip ({cx_px:.0f},{cy_px:.0f}) "
+                          f"spot_texture={spot_tex:.1f} > {SENSOR_MAX_CORRECTION_TEXTURE}")
+                    continue
+
+                # Find the smoothest healing source; skip if none is clean enough
+                src_result = _sensor_find_source(gray_export, cx_px, cy_px, radius_px)
+                if src_result is None:
+                    skipped_no_source += 1
+                    print(f"  [{stem}] skip ({cx_px:.0f},{cy_px:.0f}) "
+                          f"no clean source (all directions > {SENSOR_MAX_SOURCE_TEXTURE})")
+                    continue
+                src_cx, src_cy, src_tex = src_result
+                print(f"  [{stem}] heal ({cx_px:.0f},{cy_px:.0f}) r={radius_px:.0f}px "
+                      f"brush={brush_r:.0f}px spot_tex={spot_tex:.1f} "
+                      f"src=({src_cx:.0f},{src_cy:.0f}) src_tex={src_tex:.1f}")
+            else:
+                src_cx = cx_px + brush_r * 2.0
+                src_cy = cy_px
+
+            spots.append({
+                "cx": cx_px, "cy": cy_px,
+                "radius_px": radius_px, "brush_radius_px": brush_r,
+                "src_cx": src_cx, "src_cy": src_cy,
+                "contrast": 10.0, "area": 0,
+                "texture": 0.0, "context_texture": 0.0,
+                "excess_sat": 0.0, "spot_sat": 0.0,
+            })
+
+        total_skipped = skipped_texture + skipped_no_source
+        if total_skipped:
+            print(f"  [{stem}] {total_skipped}/{len(consensus_spots)} skipped "
+                  f"({skipped_texture} busy area, {skipped_no_source} no clean source)")
+
+        xmp_data = None
+        if spots and img_w and img_h:
+            xmp_data = generate_xmp_data_for_spots(
+                spots, img_w, img_h, flip=flip, crop=crop, ashift_params=t.get("ashift"))
+        results.append((stem, spots, [], (img_w, img_h), None, xmp_data))
+
+    results.sort(key=lambda r: r[0])
+    write_dust_results(results, output_dir)
+    return any_errors
+
+
+# ===================================================================
 # Per-image worker (top-level so it's picklable on Windows spawn)
 # ===================================================================
 
@@ -1668,8 +2114,13 @@ def process_one_image(args):
 def main():
     args = sys.argv[1:]
     if not args:
-        print("Usage: detect_dust.py [--debug-ui] [--ml-model PATH] <image1.jpg> [image2.jpg ...]")
+        print("Usage: detect_dust.py [--debug-ui] [--sensor-dust] [--ml-model PATH] <image1.jpg> [image2.jpg ...]")
         sys.exit(1)
+
+    sensor_dust = False
+    if "--sensor-dust" in args:
+        sensor_dust = True
+        args.remove("--sensor-dust")
 
     debug_ui = False
     if "--debug-ui" in args:
@@ -1714,6 +2165,13 @@ def main():
         print(f"Loaded transform params for {len(transforms)} image(s)")
     else:
         print("No transform_params.txt found, using identity transform")
+
+    if sensor_dust:
+        if len(image_paths) < 2:
+            print("Error: --sensor-dust requires at least 2 images for cross-frame correlation")
+            sys.exit(1)
+        had_errors = run_sensor_dust_mode(image_paths, transforms, output_dir)
+        sys.exit(1 if had_errors else 0)
 
     image_paths_by_stem = {Path(p).stem: p for p in image_paths}
     results = []
