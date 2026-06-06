@@ -32,7 +32,7 @@ Enable the scripts in darktable:
 
 ### 2. Set Up Python Environment
 
-You must have **conda** (Anaconda or Miniconda) installed.
+You must have **conda** (Anaconda or Miniconda) installed and available in path.
 
 #### Create the conda environment:
 
