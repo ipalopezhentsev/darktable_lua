@@ -28,6 +28,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 from scipy.spatial import cKDTree
+from skimage.morphology import skeletonize
+from skimage.filters import sato
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +44,13 @@ MIN_ASPECT_RATIO = 0.3         # bounding box aspect ratio (reject elongated fib
 MIN_COMPACTNESS = 0.25         # area / bbox_area (reject irregular shapes)
 MIN_SOLIDITY = 0.5             # area / convex_hull_area (reject non-convex shapes like letters)
 MIN_CIRCULARITY = 0.15         # 4*pi*area/perimeter^2 (reject complex shapes like symbols)
+# A large, ELONGATED/irregular blob (e.g. a fragment of a twisted rope/cord) fills its
+# min-enclosing circle poorly, so the circular heal brush (3*enc_r) massively over-covers
+# it — "not a dot by any measure". Reject when the spot is both LARGE (big brush) and has a
+# low circle-fill. Small irregular specks (small brush) and round dots (high fill) are kept.
+# Measured: rope fragments fill 0.15-0.32 at enc_r 19-27; real dots are mostly ~0.9.
+DOT_MIN_CIRCLE_FILL = 0.40     # area / (pi*enc_r^2) below this counts as non-compact
+DOT_IRREGULAR_RADIUS_FRAC = 0.005  # ...and only when enc_r exceeds this * min_dim (~18px @ 3745)
 SHAPE_CHECK_MIN_AREA = 30      # only check solidity/circularity for spots larger than this
 TEXTURE_KERNEL = 31            # neighborhood size for local texture measurement
 MAX_LOCAL_TEXTURE_SMALL = 12.0 # max texture for tiny spots (area near MIN_SPOT_AREA)
@@ -79,6 +88,130 @@ MIN_SURROUND_BG_RATIO = 0.7   # immediate surround must be >= this fraction of l
                                # (rejects bright reflections inside dark features like windows)
 MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious ones
 REJECT_LOG_CONTRAST_MIN = 15  # minimum contrast to include in debug reject candidate list
+
+# ---------------------------------------------------------------------------
+# Stroke (thread / scratch) detection constants
+# ---------------------------------------------------------------------------
+# Thread/feather dust and film scratches are elongated defects that the circular
+# spot pipeline rejects (aspect/compactness/solidity filters). They are detected
+# separately and healed with a multi-node brush *stroke* following the centerline.
+# Pixel-sized thresholds are expressed as fractions of min(image_w, image_h) so the
+# algorithm behaves the same across different scan resolutions.
+DETECT_STROKES = True          # master switch for thread/scratch stroke detection (on by default)
+
+STROKE_MIN_LENGTH_FRAC   = 0.005  # min centerline length as fraction of min_dim (~19px @ 3786).
+                                   #   Short, high-contrast fibers are real dust; the ridge-drop,
+                                   #   elongation, texture and context gates are the FP guard, not
+                                   #   length. (0.012/45px was too long — missed clear short threads.)
+STROKE_MIN_ELONGATION    = 3.0    # min length/width — separates strokes from blobs
+STROKE_MAX_WIDTH_FRAC    = 0.0025 # max stroke width as fraction of min_dim (~9.5px @ 3786).
+                                   #   A thread/fiber/hair is THIN: measured real threads are
+                                   #   3-4px, the feather 4.4px. Wider bright elongated marks are
+                                   #   not fibers — printed text/frame numbers (10-19px), signs,
+                                   #   or structural smears. The stroke-width histogram is cleanly
+                                   #   bimodal with a gap at ~9px, so the cap sits in that gap.
+STROKE_MIN_WIDTH_PX      = 1.5    # floor for measured width (avoid div-by-zero on 1px ridges)
+STROKE_DP_EPS_FRAC       = 0.0015 # Douglas-Peucker epsilon as fraction of min_dim (path simplify)
+STROKE_BORDER_SCALE      = 1.6    # brush border (half-width) = stroke_width_px/2 * this.
+                                   #   >1 so the rendered brush fully covers the defect + margin.
+STROKE_MIN_BORDER_PX     = 4.0    # minimum per-node brush border in pixels (darktable floor)
+STROKE_MAX_KEYPOINTS     = 24     # cap nodes per stroke (darktable form is fine with many)
+
+# Ridge pass (faint scratches): Hessian-based bright-ridge filter (skimage sato).
+# DISABLED BY DEFAULT. Empirically, scratches faint enough to need this pass (below the
+# global detection threshold) sit at/near the image noise floor, and any sensitivity that
+# catches them floods false positives — the ridge response from genuine fine structure and
+# grain dominates. Threads and scratches bright enough to matter are already caught by the
+# threshold-binary pass (producer a). Truly sub-threshold scratches are added by the human
+# via the debug UI (missed stroke). The implementation is kept (and gated by the shared
+# stroke filters) for future re-enabling once real faint-scratch ground truth is available.
+STROKE_RIDGE_ENABLE      = False
+STROKE_RIDGE_SIGMAS      = (1.0, 2.0, 3.0)  # ridge scales in px (thin scratches/threads)
+STROKE_RIDGE_Z           = 8.0    # keep ridge response above median + this*MAD (robust z-score).
+                                   #   MAD (not global max) so one bright structure can't drown
+                                   #   out faint ridges elsewhere.
+STROKE_RIDGE_MIN_CONTRAST = 6.0   # min mean diff (gray-local_bg) along the ridge to accept
+STROKE_RIDGE_DOWNSCALE   = 0.5    # analyze ridge filter at this scale for speed (full-res too slow);
+                                   #   centerline is mapped back to full-res afterwards
+STROKE_RIDGE_MAX_CANDIDATES = 400 # cap ridge components processed (largest first) to bound cost
+
+# Shared stroke gating (mirrors the circular-dust philosophy, sampled along the path).
+# Texture is only a LOOSE BACKSTOP: dust floats over the whole photo — textured areas
+# included — so a busy background must not by itself reject a real thread. The decisive FP
+# guards are crispness (soft scene wires/reeds) and ridge symmetry (object outlines). An
+# earlier contrast-tiered texture scheme wrongly rejected crisp white threads that were only
+# moderate-contrast on grain/foliage (DSC_0009 A/B/C: band/ctx 6-8, crisp 0.61-0.73). All
+# known FPs are caught by crisp/asym/ridge, NOT texture (deck crisp 0.24, reed 0.28-0.31,
+# wire ridge_drop 3, crane asym 0.21), so the limits are now single and generous.
+STROKE_MAX_BAND_TEXTURE  = 9.0    # max median local_std in the band around the centerline.
+STROKE_MAX_CONTEXT_TEXTURE = 9.0  # max median local_std in a WIDE band. NOT contrast-tiered
+                                   #   anymore: crisp white threads land on grain/foliage too
+                                   #   (DSC_0009 A/B/C/D: band/ctx 5.8-8.1). But a busy STRUCTURE
+                                   #   region (a harbor shoreline of masts/cranes — each a crisp
+                                   #   symmetric ridge that crisp/asym/ridge can't reject) sits at
+                                   #   ctx 9-13, so this still earns its keep as the busy-region
+                                   #   guard. Set just above the real threads (8.1) and below the
+                                   #   structure cluster (9+).
+STROKE_CONTEXT_RADIUS_FRAC = 0.05 # wide-context band outer radius as fraction of min_dim (~190px)
+STROKE_MAX_EXCESS_SAT    = 12     # max (stroke_sat - surround_sat) — dust/scratch is achromatic
+STROKE_MIN_BRIGHTNESS_FRAC = 0.45 # mean stroke brightness >= this * bright_ref (bright bg only)
+# Ridge vs edge: a thread/scratch is a bright RIDGE (brighter than background on BOTH
+# sides) that "floats" over the photo, so its two sides are the SAME background and nearly
+# equal. A structural step-edge (bright winter sky meeting a dark crane/building outline)
+# is bright on one side and dark on the other — strongly ASYMMETRIC — and must be rejected;
+# this is the dominant false-positive mode. Measured: real threads asym 0.01-0.05 &
+# ridge_drop 21-153; a crane sky/structure edge asym 0.25 & ridge_drop 10 — clean gaps.
+STROKE_MIN_RIDGE_DROP    = 12.0   # core crest must beat the BRIGHTER side by this (gray levels)
+STROKE_MAX_SIDE_ASYMMETRY = 0.15  # |left_bg - right_bg| / core — reject one-sided (edge) profiles
+STROKE_SIDE_OFFSET_FACTOR = 1.5   # perpendicular sample offset = width * this + a few px
+# Field-isolation: real dust threads "float" alone over the photo; a crisp bright reed
+# stalk, a yacht mast or a piece of rigging is individually indistinguishable from a thread
+# (same crisp symmetric ridge), but they are embedded in a FIELD of many thin line-like
+# structures. Two signals, EITHER rejects: (1) many elongated bright line-candidates nearby
+# (most are sub-threshold for stroke acceptance); (2) many accepted strokes nearby. The user
+# prioritises PRECISION (few false positives) over recall — missing a thread is fine (handled
+# manually in darktable), an FP is not — so this gate is deliberately kept even though it can
+# also reject a real thread that happens to sit on a busy/dusty frame.
+STROKE_FIELD_RADIUS_FRAC = 0.15   # line-candidate outer annulus radius, fraction of min_dim (~560px)
+STROKE_FIELD_INNER_PX    = 60     # inner annulus radius (excludes the stroke's own fragments)
+STROKE_FIELD_MAX_LINE_CANDS = 24  # reject a stroke with >= this many line-candidates near it
+STROKE_FIELD_CAND_MIN_AREA = 12   # a line-candidate component must be at least this large
+STROKE_FIELD_CAND_MIN_DIM  = 10   # ...and at least this long on its major axis
+STROKE_FIELD_CAND_MAX_FILL = 0.45 # ...and thin (area/bbox below this)
+STROKE_FIELD_CAND_MIN_ELONG = 2.0 # ...and elongated (bbox long/short ratio at least this)
+STROKE_FIELD_NBR_RADIUS_FRAC = 0.12  # accepted-stroke neighbour radius, fraction of min_dim (~450px)
+STROKE_FIELD_MAX_NEIGHBORS = 2    # reject if more than this many accepted strokes are that near.
+                                   #   =2 lets a small cluster of up to 3 real threads survive
+                                   #   (each sees 2 neighbours) — e.g. 2-3 obvious dust threads on
+                                   #   clean sky — while dense fields (reeds, rigging: many more
+                                   #   neighbours each) are still rejected. The line-candidate gate
+                                   #   above is the primary field detector; this is the backstop.
+# Edge crispiness: dust sits ON the negative (in the scanner's focal plane) so its edges
+# are razor-sharp; a wire/hair in the photographed scene is usually slightly defocused
+# (soft, fuzzy edges). stroke_edge_crispness() = median(edge gradient / amplitude) along
+# the centerline: ~1.0 for crisp dust, ~0.3 for a soft wire. Measured: FP wires 0.19/0.28
+# vs real dust 0.50-0.61 (threads, feather, a hand-annotated missed fiber) — clean gap.
+STROKE_MIN_CRISPNESS     = 0.40   # reject strokes softer than this (out-of-focus scene wires)
+
+# Tail hysteresis: a thread often fades gradually at its ends, so the global detection
+# threshold clips the faint tail and the brush stops short of the real end. After finding
+# a confident seed component (high threshold), we re-threshold a padded window around it
+# at a lower level and keep the part still CONNECTED to the seed (Canny-style edge
+# linking), so the centerline tracks the thread to where it truly fades into background.
+STROKE_HYST_LOW_FACTOR   = 0.55   # tail/extension threshold = main threshold * this
+STROKE_HYST_PAD_FRAC     = 0.008  # search window pad around the seed bbox, fraction of min_dim
+
+# Blob -> stroke "weighing" (spec 1.2a): re-represent an elongated accepted blob as a
+# stroke when a single circle would heal far more clean background than a stroke would.
+STROKE_PREFER_RATIO      = 1.8    # convert if circle_healed_area / stroke_healed_area > this
+STROKE_MAX_FILL_RATIO    = 0.50   # area/bbox_area pre-filter: a thin thread fills little of its
+                                   # bounding box. Compact components above this are not stroke
+                                   # candidates (skips skeletonization cost). This is only a COST
+                                   # gate — build_stroke_spot's elongation/ridge gates are the real
+                                   # filter — so it is set loosely: a short straightish thread fills
+                                   # ~0.4 (a 4px-wide line in a 10px-wide bbox), while a round dot
+                                   # fills ~0.78. NOTE: do NOT use bbox aspect — a curvy thread's
+                                   # bbox is ~square.
 
 # ---------------------------------------------------------------------------
 # ML detection constants
@@ -361,6 +494,17 @@ def detect_dust_spots(image_path, collect_rejects=False):
             else:
                 enc_r = math.sqrt(area / math.pi)  # fallback, should not happen
 
+        # Reject large, elongated/irregular blobs (e.g. rope/cord fragments) that a circular
+        # brush would grossly over-cover — these are not circular dust dots.
+        circle_fill = area / (math.pi * enc_r * enc_r) if enc_r > 0 else 1.0
+        if (enc_r > DOT_IRREGULAR_RADIUS_FRAC * min(height, width)
+                and circle_fill < DOT_MIN_CIRCLE_FILL):
+            rejected["shape"] += 1
+            if contrast >= 40:
+                debug_rejects.append(f"    REJECTED({cx:.0f},{cy:.0f}) area={area} contrast={contrast:.0f} by=irregular(circle_fill={circle_fill:.2f} enc_r={enc_r:.0f})")
+            log_reject(cx, cy, area, contrast, "shape", f"circle_fill={circle_fill:.2f}<{DOT_MIN_CIRCLE_FILL} enc_r={enc_r:.0f}")
+            continue
+
         if contrast < threshold * 0.8:
             rejected["contrast"] += 1
             log_reject(cx, cy, area, contrast, "contrast", f"contrast={contrast:.1f}<{threshold*0.8:.1f}")
@@ -583,6 +727,8 @@ def detect_dust_spots(image_path, collect_rejects=False):
 
         brush_radius_px = max(MIN_BRUSH_PX, enc_r * ENC_RADIUS_SCALE)
         spots.append({
+            "kind": "dot",
+            "_label_id": int(label_id),
             "cx": float(cx),
             "cy": float(cy),
             "radius_px": enc_r,
@@ -625,14 +771,155 @@ def detect_dust_spots(image_path, collect_rejects=False):
         if len(debug_rejects) > 20:
             print(f"    ... and {len(debug_rejects) - 20} more")
 
+    # -----------------------------------------------------------------
+    # Stroke detection: elongated threads (from the threshold binary) and
+    # faint scratches (ridge pass), plus blob->stroke "weighing" for elongated
+    # accepted dots. Strokes are healed with a multi-node brush following the
+    # detected centerline. See the Stroke detection section for the helpers.
+    # -----------------------------------------------------------------
+    if DETECT_STROKES:
+        min_dim = min(width, height)
+        stroke_spots = []
+        dot_by_label = {s["_label_id"]: s for s in spots if s.get("kind") == "dot"}
+        accepted_labels = set(dot_by_label.keys())
+
+        # Minimum component area to consider as a stroke candidate: a thin fiber at the
+        # min length and min width. A 2px-wide, 25px-long crisp dust fiber has area ~43,
+        # so an absolute floor of 60 would silently drop it before skeletonization.
+        min_cand_area = STROKE_MIN_WIDTH_PX * STROKE_MIN_LENGTH_FRAC * min_dim
+
+        # Producer (a): elongated bright components from the threshold binary,
+        # reusing the connected components already computed for circular dust.
+        for lid in range(1, num_labels):
+            area = stats[lid, cv2.CC_STAT_AREA]
+            if area < min_cand_area:
+                continue
+            bw = stats[lid, cv2.CC_STAT_WIDTH]
+            bh = stats[lid, cv2.CC_STAT_HEIGHT]
+            bbox_area = bw * bh
+            fill = area / bbox_area if bbox_area > 0 else 1.0
+            is_dot = lid in accepted_labels
+            # A thread/scratch fills only a small fraction of its (often near-square,
+            # because curvy) bounding box. Compact components that aren't accepted dots
+            # aren't strokes — skip them to limit skeletonization cost.
+            if fill > STROKE_MAX_FILL_RATIO and not is_dot:
+                continue
+            bx = stats[lid, cv2.CC_STAT_LEFT]
+            by = stats[lid, cv2.CC_STAT_TOP]
+            comp = labels[by:by + bh, bx:bx + bw] == lid
+            cl = extract_stroke_centerline(comp, bx, by, min_dim)
+            if cl is None:
+                continue
+            # Validate on the confident high-threshold SEED (crispness/color/ridge are
+            # judged on the sharp core, not the faint, often colour-fringed tail).
+            spot, _reason = build_stroke_spot(
+                cl["path"], cl["width_px"], cl["length_px"],
+                gray, diff, local_std, saturation, bright_ref, min_dim, "thread")
+            if spot is None:
+                continue
+            # Accepted: grow the faint tail at a lower threshold purely to lengthen the
+            # healing brush so it covers the thread to its true end.
+            _extend_stroke_tail(spot, comp, bx, by, diff, threshold, min_dim, cl["length_px"])
+            if is_dot:
+                # Weighing (spec 1.2a): convert dot -> stroke only when a single
+                # circle would heal much more clean area than the stroke.
+                dot = dot_by_label[lid]
+                circle_area = math.pi * dot["brush_radius_px"] ** 2
+                stroke_area = (spot["length_px"] * (2 * spot["brush_radius_px"])
+                               + math.pi * spot["brush_radius_px"] ** 2)
+                if stroke_area > 0 and circle_area / stroke_area > STROKE_PREFER_RATIO:
+                    spot["_conv_label"] = lid   # this stroke replaces dot `lid`
+                    stroke_spots.append(spot)
+            else:
+                stroke_spots.append(spot)
+
+        # Producer (b): faint scratches via the ridge filter (below threshold).
+        existing_centers = list(spots) + stroke_spots
+        min_sep = max(STROKE_MIN_LENGTH_FRAC * min_dim * 0.5, 20)
+        for comp, cx_off, cy_off in detect_scratch_ridges(diff, min_dim):
+            cl = extract_stroke_centerline(comp, cx_off, cy_off, min_dim)
+            if cl is None:
+                continue
+            spot, _reason = build_stroke_spot(
+                cl["path"], cl["width_px"], cl["length_px"],
+                gray, diff, local_std, saturation, bright_ref, min_dim, "scratch")
+            if spot is None or spot["contrast"] < STROKE_RIDGE_MIN_CONTRAST:
+                continue
+            if _stroke_overlaps_existing(spot, existing_centers, min_sep):
+                continue
+            stroke_spots.append(spot)
+            existing_centers.append(spot)
+
+        # Field-isolation: drop strokes embedded in a FIELD of many thin line-structures
+        # (reed/grass fields, yacht masts & rigging). Each such line is individually
+        # thread-like, so only the surrounding density tells them apart. Count ALL elongated
+        # bright components nearby (most are sub-threshold for stroke acceptance). A
+        # converted-from-dot stroke dropped here simply restores its dot.
+        if stroke_spots:
+            line_cx, line_cy = [], []
+            for lid2 in range(1, num_labels):
+                a2 = stats[lid2, cv2.CC_STAT_AREA]
+                cw = stats[lid2, cv2.CC_STAT_WIDTH]
+                ch = stats[lid2, cv2.CC_STAT_HEIGHT]
+                longdim = max(cw, ch)
+                if a2 < STROKE_FIELD_CAND_MIN_AREA or longdim < STROKE_FIELD_CAND_MIN_DIM:
+                    continue
+                fillc = a2 / (cw * ch) if cw * ch else 1.0
+                if (fillc < STROKE_FIELD_CAND_MAX_FILL and
+                        longdim / max(1, min(cw, ch)) >= STROKE_FIELD_CAND_MIN_ELONG):
+                    cxy = centroids[lid2]
+                    line_cx.append(cxy[0]); line_cy.append(cxy[1])
+            if line_cx:
+                lcx = np.asarray(line_cx); lcy = np.asarray(line_cy)
+                inner = STROKE_FIELD_INNER_PX
+                outer = STROKE_FIELD_RADIUS_FRAC * min_dim
+                kept = []
+                for s in stroke_spots:
+                    dist = np.hypot(lcx - s["cx"], lcy - s["cy"])
+                    near = int(np.count_nonzero((dist > inner) & (dist < outer)))
+                    if near < STROKE_FIELD_MAX_LINE_CANDS:
+                        kept.append(s)
+                stroke_spots = kept
+
+        # Second field signal: dense cluster of ACCEPTED strokes (a tight reed/grass field).
+        if len(stroke_spots) > STROKE_FIELD_MAX_NEIGHBORS + 1:
+            Rn = STROKE_FIELD_NBR_RADIUS_FRAC * min_dim
+            cen = [(s["cx"], s["cy"]) for s in stroke_spots]
+            kept = []
+            for i, s in enumerate(stroke_spots):
+                xi, yi = cen[i]
+                nbr = sum(1 for j, (xj, yj) in enumerate(cen)
+                          if j != i and abs(xj - xi) < Rn and abs(yj - yi) < Rn)
+                if nbr <= STROKE_FIELD_MAX_NEIGHBORS:
+                    kept.append(s)
+            stroke_spots = kept
+
+        # Only the surviving converted strokes actually drop their dots.
+        labels_to_drop = {s.pop("_conv_label") for s in stroke_spots if "_conv_label" in s}
+        if labels_to_drop:
+            spots = [s for s in spots if s.get("_label_id") not in labels_to_drop]
+        if stroke_spots:
+            print(f"  Strokes detected: {len(stroke_spots)} "
+                  f"({len(labels_to_drop)} converted from dots)")
+        spots = spots + stroke_spots
+
+    # Strip internal-only fields not meant for serialization/consumers.
+    for spot in spots:
+        spot.pop("_label_id", None)
+
     # Find optimal healing sources for each spot
     if spots:
         img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
         L_f32 = img_lab[:, :, 0].astype(np.float32)
         for spot in spots:
-            src_cx, src_cy = find_healing_source(
-                spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
-                img_lab, L_f32, local_std, spots, width, height)
+            if spot.get("kind") == "stroke":
+                src_cx, src_cy = find_stroke_healing_source(
+                    spot["path"], spot["stroke_width_px"], spot["brush_radius_px"],
+                    local_std, spots, width, height)
+            else:
+                src_cx, src_cy = find_healing_source(
+                    spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
+                    img_lab, L_f32, local_std, spots, width, height)
             spot["src_cx"] = src_cx
             spot["src_cy"] = src_cy
 
@@ -748,6 +1035,540 @@ def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, loca
     masked = np.where(valid, result, 2.0)
     best_ry, best_rx = np.unravel_index(int(np.argmin(masked)), result.shape)
     return (float(sb_x1 + best_rx + t_icx), float(sb_y1 + best_ry + t_icy))
+
+
+# ===================================================================
+# Stroke (thread / scratch) detection
+# ===================================================================
+#
+# Threads (opaque filaments) and film scratches are elongated defects. They are
+# extracted as a *centerline path* and healed with a multi-node darktable brush
+# stroke (same brush form as a dot, just with N nodes). All data lives in the
+# spot dict under kind="stroke" so every consumer (debug JSON, overlay, debug UI,
+# XMP) stays in sync with the canonical-data principle.
+
+def _skeleton_longest_path(skel):
+    """Order a 1-px boolean skeleton into the longest geodesic path.
+
+    Uses double-BFS (tree-diameter): farthest pixel from an arbitrary start, then
+    farthest pixel from there, reconstructing the connecting path. Spurs/branches
+    are ignored. Returns a list of (x, y) integer pixel coords.
+    """
+    from collections import deque
+    ys, xs = np.nonzero(skel)
+    if len(xs) == 0:
+        return []
+    if len(xs) == 1:
+        return [(int(xs[0]), int(ys[0]))]
+    coords = list(zip(xs.tolist(), ys.tolist()))  # (x, y)
+    index = {p: i for i, p in enumerate(coords)}
+    nbrs8 = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    adj = [[] for _ in coords]
+    for i, (x, y) in enumerate(coords):
+        for dx, dy in nbrs8:
+            j = index.get((x + dx, y + dy))
+            if j is not None:
+                adj[i].append(j)
+
+    def bfs(src):
+        dist = [-1] * len(coords)
+        par = [-1] * len(coords)
+        dist[src] = 0
+        dq = deque([src])
+        while dq:
+            u = dq.popleft()
+            for v in adj[u]:
+                if dist[v] < 0:
+                    dist[v] = dist[u] + 1
+                    par[v] = u
+                    dq.append(v)
+        far = max(range(len(coords)), key=lambda k: dist[k])
+        return far, par
+
+    a, _ = bfs(0)
+    b, par = bfs(a)
+    path = []
+    cur = b
+    while cur != -1:
+        path.append(coords[cur])
+        cur = par[cur]
+    path.reverse()
+    return path
+
+
+def hysteresis_extend_component(comp_bool, bx, by, diff, threshold, min_dim):
+    """Grow a stroke seed component into its faint tail via local hysteresis.
+
+    A thread frequently fades below the global threshold at its ends, so the seed
+    component stops short of the real tip. Re-threshold a padded window around the seed
+    at STROKE_HYST_LOW_FACTOR * threshold and keep only the low-threshold component(s)
+    CONNECTED to the seed — so the result tracks the thread to where it fades into
+    background but cannot jump to a disconnected bright object.
+
+    comp_bool: bool mask of the seed in its own bbox (bw x bh).
+    bx, by: seed bbox origin in full-image coords.
+    Returns (extended_mask_bool, new_x_off, new_y_off).
+    """
+    h, w = diff.shape
+    bh, bw = comp_bool.shape
+    pad = int(max(STROKE_HYST_PAD_FRAC * min_dim, 8))
+    x0 = max(0, bx - pad); y0 = max(0, by - pad)
+    x1 = min(w, bx + bw + pad); y1 = min(h, by + bh + pad)
+
+    low = threshold * STROKE_HYST_LOW_FACTOR
+    low_bin = (diff[y0:y1, x0:x1] > low).astype(np.uint8)
+
+    seed_win = np.zeros(low_bin.shape, dtype=bool)
+    seed_win[(by - y0):(by - y0 + bh), (bx - x0):(bx - x0 + bw)] = comp_bool
+
+    _, lbl = cv2.connectedComponents(low_bin, connectivity=8)
+    keep = set(np.unique(lbl[seed_win]))
+    keep.discard(0)
+    if not keep:
+        return comp_bool, bx, by
+    ext = np.isin(lbl, list(keep))
+    return ext, x0, y0
+
+
+def _extend_stroke_tail(spot, seed_comp, bx, by, diff, threshold, min_dim, seed_length):
+    """Replace an accepted stroke's path with a tail-extended centerline (in place).
+
+    The stroke has already passed all gates on its confident seed; this only lengthens the
+    healing brush to reach the thread's faint end. Keeps the seed-measured width. Skips the
+    extension if it would more than ~2.5x the seed length (runaway growth on busy areas).
+    """
+    ext, ex0, ey0 = hysteresis_extend_component(seed_comp, bx, by, diff, threshold, min_dim)
+    cl = extract_stroke_centerline(ext, ex0, ey0, min_dim)
+    if cl is None:
+        return
+    if cl["length_px"] <= seed_length * 1.02 or cl["length_px"] > seed_length * 2.5:
+        return
+    path = cl["path"]
+    mid = path[len(path) // 2]
+    spot["path"] = [[float(p[0]), float(p[1])] for p in path]
+    spot["length_px"] = float(cl["length_px"])
+    spot["cx"] = float(mid[0])
+    spot["cy"] = float(mid[1])
+
+
+def extract_stroke_centerline(component_mask, x_off, y_off, min_dim):
+    """Extract a simplified centerline path and width from a binary component mask.
+
+    component_mask: bool 2D array cropped to the component bounding box.
+    x_off, y_off: bbox origin in full-image pixel coords.
+    Returns dict {path (full-image [x,y] key points), length_px, width_px} or None.
+    """
+    if int(component_mask.sum()) < 3:
+        return None
+    skel = skeletonize(component_mask)
+    if int(skel.sum()) < 2:
+        return None
+    path_local = _skeleton_longest_path(skel)
+    if len(path_local) < 2:
+        return None
+
+    length_px = float(sum(
+        math.hypot(path_local[i + 1][0] - path_local[i][0],
+                   path_local[i + 1][1] - path_local[i][1])
+        for i in range(len(path_local) - 1)))
+
+    # Width from distance transform sampled along the skeleton (2x = full width).
+    dt = cv2.distanceTransform(component_mask.astype(np.uint8), cv2.DIST_L2, 5)
+    sk_xs = np.array([p[0] for p in path_local])
+    sk_ys = np.array([p[1] for p in path_local])
+    width_px = max(float(np.median(dt[sk_ys, sk_xs]) * 2.0), STROKE_MIN_WIDTH_PX)
+
+    # Simplify to a few key points (Douglas-Peucker on the open polyline).
+    eps = max(1.0, STROKE_DP_EPS_FRAC * min_dim)
+    cnt = np.array(path_local, dtype=np.int32).reshape(-1, 1, 2)
+    simplified = cv2.approxPolyDP(cnt, eps, False).reshape(-1, 2)
+    if len(simplified) < 2:
+        simplified = np.array([path_local[0], path_local[-1]], dtype=np.int32)
+    if len(simplified) > STROKE_MAX_KEYPOINTS:
+        idxs = np.linspace(0, len(simplified) - 1, STROKE_MAX_KEYPOINTS).round().astype(int)
+        simplified = simplified[np.unique(idxs)]
+
+    path_full = [[float(px + x_off), float(py + y_off)] for px, py in simplified]
+    return {"path": path_full, "length_px": length_px, "width_px": width_px}
+
+
+def _stroke_band_masks(path_full, width_px, shape):
+    """Rasterize a stroke into (core, ring) boolean masks within a cropped bbox.
+
+    core: the stroke band (polyline of given width) — used for contrast/brightness.
+    ring: a surrounding annulus offset far enough from the core that the local-texture
+    kernel (TEXTURE_KERNEL) is not contaminated by the bright stroke itself — used for
+    sampling background texture/saturation.
+    Returns (core_bool, ring_bool, (x0, y0, x1, y1)) — masks are bbox-local.
+    """
+    h, w = shape
+    xs = [p[0] for p in path_full]
+    ys = [p[1] for p in path_full]
+    gap = int(TEXTURE_KERNEL // 2 + max(2, round(width_px / 2)))  # clear texture-kernel reach
+    ring_band = int(max(8, round(width_px)))
+    margin = gap + ring_band + 2
+    x0 = max(0, int(min(xs)) - margin)
+    x1 = min(w, int(max(xs)) + margin + 1)
+    y0 = max(0, int(min(ys)) - margin)
+    y1 = min(h, int(max(ys)) + margin + 1)
+    cw, ch = x1 - x0, y1 - y0
+    if cw <= 0 or ch <= 0:
+        return None, None, (x0, y0, x1, y1)
+    pts = np.array([[int(round(x)) - x0, int(round(y)) - y0] for x, y in path_full],
+                   dtype=np.int32).reshape(-1, 1, 2)
+    core = np.zeros((ch, cw), dtype=np.uint8)
+    cv2.polylines(core, [pts], False, 255, thickness=max(1, int(round(width_px))))
+
+    def _dil(m, r):
+        return cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+
+    inner = _dil(core, gap)
+    outer = _dil(core, gap + ring_band)
+    ring = cv2.subtract(outer, inner)
+    return core > 0, ring > 0, (x0, y0, x1, y1)
+
+
+def _stroke_context_texture(path_full, width_px, local_std, min_dim):
+    """Median local_std in a WIDE band around the centerline (excluding the near zone).
+
+    Measures how busy the broader surroundings are — a real hair sits in a genuinely
+    non-busy region, while a mark on locally-smooth-but-globally-busy structure does not.
+    Returns the median texture (lower = smoother), or 0.0 if no samples.
+    """
+    h, w = local_std.shape
+    xs = [p[0] for p in path_full]
+    ys = [p[1] for p in path_full]
+    gap = int(TEXTURE_KERNEL // 2 + max(2, round(width_px)))  # skip the near (already-checked) zone
+    R = int(max(gap + 20, STROKE_CONTEXT_RADIUS_FRAC * min_dim))
+    x0 = max(0, int(min(xs)) - R)
+    x1 = min(w, int(max(xs)) + R)
+    y0 = max(0, int(min(ys)) - R)
+    y1 = min(h, int(max(ys)) + R)
+    cw, ch = x1 - x0, y1 - y0
+    if cw <= 0 or ch <= 0:
+        return 0.0
+    core = np.zeros((ch, cw), dtype=np.uint8)
+    pts = np.array([[int(round(x)) - x0, int(round(y)) - y0] for x, y in path_full],
+                   dtype=np.int32).reshape(-1, 1, 2)
+    cv2.polylines(core, [pts], False, 255, thickness=max(1, int(round(width_px))))
+
+    def _dil(m, r):
+        return cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+
+    inner = _dil(core, gap)
+    outer = _dil(core, R)
+    ring = cv2.subtract(outer, inner) > 0
+    if not ring.any():
+        return 0.0
+    return float(np.median(local_std[y0:y1, x0:x1][ring]))
+
+
+def _stroke_side_brightness(path_full, width_px, gray):
+    """Sample mean brightness along the centerline and in two parallel bands offset
+    perpendicular to it (left/right). Used to tell a bright ridge (dust/scratch:
+    darker background on both sides) from a structural step-edge (bright on one side).
+
+    Returns (core_med, left_med, right_med) or None.
+    """
+    h, w = gray.shape
+    pts = np.array(path_full, dtype=np.float64)
+    if len(pts) < 2:
+        return None
+    off = max(width_px * STROKE_SIDE_OFFSET_FACTOR + 2.0, 4.0)
+    # The skeleton of a thin curvy thread can sit ~1px off the actual brightest line, so a
+    # single-pixel centerline sample UNDERESTIMATES the ridge crest — fatal on a bright
+    # background where the true drop is small in absolute terms. Take the crest = max
+    # brightness across the thread's width at each step instead.
+    crest_reach = max(int(round(width_px / 2.0)) + 1, 2)
+    core_vals, left_vals, right_vals = [], [], []
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        seg = b - a
+        L = math.hypot(seg[0], seg[1])
+        if L < 1e-6:
+            continue
+        d = seg / L
+        perp = np.array([d[1], -d[0]])
+        n = max(1, int(L // 3))
+        for t in range(n):
+            pt = a + seg * (t / n)
+            # core: ridge crest (max across width)
+            crest = None
+            for s in range(-crest_reach, crest_reach + 1):
+                ix, iy = int(round(pt[0] + perp[0] * s)), int(round(pt[1] + perp[1] * s))
+                if 0 <= ix < w and 0 <= iy < h:
+                    v = gray[iy, ix]
+                    if crest is None or v > crest:
+                        crest = v
+            if crest is not None:
+                core_vals.append(crest)
+            for dx, dy, arr in ((perp[0] * off, perp[1] * off, left_vals),
+                                (-perp[0] * off, -perp[1] * off, right_vals)):
+                ix, iy = int(round(pt[0] + dx)), int(round(pt[1] + dy))
+                if 0 <= ix < w and 0 <= iy < h:
+                    arr.append(gray[iy, ix])
+    if not core_vals or not left_vals or not right_vals:
+        return None
+    return (float(np.median(core_vals)), float(np.median(left_vals)),
+            float(np.median(right_vals)))
+
+
+def _bilinear(gray, x, y):
+    """Bilinear sample of a 2D array at float (x, y); NaN if out of bounds."""
+    h, w = gray.shape
+    if x < 0 or y < 0 or x >= w - 1 or y >= h - 1:
+        return np.nan
+    x0, y0 = int(x), int(y)
+    fx, fy = x - x0, y - y0
+    g = gray
+    return (g[y0, x0] * (1 - fx) * (1 - fy) + g[y0, x0 + 1] * fx * (1 - fy)
+            + g[y0 + 1, x0] * (1 - fx) * fy + g[y0 + 1, x0 + 1] * fx * fy)
+
+
+def stroke_edge_crispness(path_full, width_px, gray):
+    """Measure how sharp the stroke's edges are ("crispiness").
+
+    Dust on the negative is in the scanner's focal plane, so its edges are razor-sharp:
+    the perpendicular brightness profile jumps from background to peak in ~1px. A wire or
+    hair in the photographed SCENE is usually slightly defocused, so its edge is a soft
+    ramp spanning several px. We sample perpendicular profiles at points along the
+    centerline and return the median of (max edge gradient / bump amplitude), which is
+    ~1.0 for crisp dust and ~0.3 for a soft wire. Normalising by amplitude makes it
+    independent of contrast. Returns a float (0.0 if it cannot be measured).
+    """
+    gray = gray.astype(np.float32)
+    pts = np.array(path_full, dtype=np.float64)
+    if len(pts) < 2:
+        return 0.0
+    d = pts[-1] - pts[0]
+    Lp = math.hypot(d[0], d[1])
+    if Lp < 1e-6:
+        return 0.0
+    ux, uy = d[0] / Lp, d[1] / Lp
+    px, py = uy, -ux  # unit perpendicular
+
+    # Resample the centerline at ~6px spacing for the profile samples.
+    samples = []
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        seg_len = math.hypot(b[0] - a[0], b[1] - a[1])
+        n = max(1, int(seg_len / 6))
+        for k in range(n):
+            samples.append(a + (b - a) * (k / n))
+    samples.append(pts[-1])
+
+    reach = max(8.0, width_px * 2.5)
+    ts = np.arange(-reach, reach + 0.5, 0.5)
+    steeps = []
+    for c in samples:
+        prof = np.array([_bilinear(gray, c[0] + px * t, c[1] + py * t) for t in ts])
+        if np.isnan(prof).all():
+            continue
+        peak = np.nanmax(prof)
+        base = np.nanpercentile(prof, 10)
+        amp = peak - base
+        if amp < 5:
+            continue
+        grad = np.abs(np.diff(prof)) / 0.5
+        steeps.append(float(np.nanmax(grad)) / amp)
+    return float(np.median(steeps)) if steeps else 0.0
+
+
+def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
+                      saturation, bright_ref, min_dim, source_tag):
+    """Apply stroke acceptance gating and build a stroke spot dict.
+
+    Returns (spot_dict, None) on accept or (None, reason) on reject.
+    """
+    if length_px < STROKE_MIN_LENGTH_FRAC * min_dim:
+        return None, "short"
+    if width_px > STROKE_MAX_WIDTH_FRAC * min_dim:
+        return None, "wide"
+    if width_px > 0 and (length_px / width_px) < STROKE_MIN_ELONGATION:
+        return None, "stubby"
+
+    core, ring, (x0, y0, x1, y1) = _stroke_band_masks(path_full, width_px, gray.shape)
+    if core is None or not core.any():
+        return None, "empty"
+
+    sub_gray = gray[y0:y1, x0:x1]
+    sub_diff = diff[y0:y1, x0:x1]
+    sub_std = local_std[y0:y1, x0:x1]
+    sub_sat = saturation[y0:y1, x0:x1]
+
+    contrast = float(np.mean(sub_diff[core]))
+    stroke_brightness = float(np.mean(sub_gray[core]))
+    if stroke_brightness < STROKE_MIN_BRIGHTNESS_FRAC * bright_ref:
+        return None, "dim"
+
+    # Texture is only a loose BACKSTOP now: dust floats over the whole photo, textured or
+    # not, so a busy background must NOT by itself reject a thread. The real FP guards are
+    # crispness (soft scene wires/reeds) and ridge symmetry (object outlines) below. These
+    # limits only catch egregiously busy structure (e.g. a wire among rigging, band~20),
+    # which crispness/ridge also catch. Measured real threads sit at band/ctx 6-8.
+    band_texture = float(np.median(sub_std[ring])) if ring.any() else 0.0
+    if band_texture > STROKE_MAX_BAND_TEXTURE:
+        return None, "texture"
+
+    context_texture = _stroke_context_texture(path_full, width_px, local_std, min_dim)
+    if context_texture > STROKE_MAX_CONTEXT_TEXTURE:
+        return None, "context"
+
+    stroke_sat = float(np.mean(sub_sat[core]))
+    surround_sat = float(np.median(sub_sat[ring])) if ring.any() else stroke_sat
+    excess_sat = stroke_sat - surround_sat
+    if excess_sat > STROKE_MAX_EXCESS_SAT:
+        return None, "color"
+
+    # Ridge vs edge: reject structural step-edges (bright on one side only).
+    sides = _stroke_side_brightness(path_full, width_px, gray)
+    if sides is not None:
+        core_med, left_med, right_med = sides
+        bright_side = max(left_med, right_med)
+        if core_med - bright_side < STROKE_MIN_RIDGE_DROP:
+            return None, "edge"
+        asym = abs(left_med - right_med) / max(core_med, 1.0)
+        if asym > STROKE_MAX_SIDE_ASYMMETRY:
+            return None, "asym"
+
+    # Crispiness: reject soft, defocused scene wires/hairs (sharp dust only). See
+    # STROKE_MIN_CRISPNESS. Computed last as it is the most expensive gate.
+    crispness = stroke_edge_crispness(path_full, width_px, gray)
+    if crispness < STROKE_MIN_CRISPNESS:
+        return None, "soft"
+
+    mid = path_full[len(path_full) // 2]
+    brush_radius_px = max(STROKE_MIN_BORDER_PX, width_px / 2.0 * STROKE_BORDER_SCALE)
+    spot = {
+        "kind": "stroke",
+        "path": [[float(p[0]), float(p[1])] for p in path_full],
+        "stroke_width_px": float(width_px),
+        "length_px": float(length_px),
+        "cx": float(mid[0]),
+        "cy": float(mid[1]),
+        "radius_px": float(width_px / 2.0),
+        "brush_radius_px": float(brush_radius_px),
+        "threshold": float(STROKE_RIDGE_MIN_CONTRAST),
+        "area": int(core.sum()),
+        "contrast": contrast,
+        "texture": band_texture,
+        "context_texture": context_texture,
+        "crispness": crispness,
+        "excess_sat": excess_sat,
+        "spot_sat": stroke_sat,
+        "source": source_tag,
+    }
+    return spot, None
+
+
+def find_stroke_healing_source(path_full, width_px, brush_radius_px,
+                               local_std, all_spots, width, height):
+    """Find a single translation offset placing the whole stroke on clean background.
+
+    Searches perpendicular to the stroke's mean direction (both sides) at increasing
+    distance, scoring candidates by background smoothness under the translated path.
+    Returns (src_cx, src_cy) = first key point + best offset, in pixel coords.
+    """
+    path_arr = np.array(path_full, dtype=np.float64)
+    p0 = path_arr[0]
+    d = path_arr[-1] - p0
+    L = math.hypot(d[0], d[1])
+    if L < 1e-6:
+        ux, uy = 1.0, 0.0
+    else:
+        ux, uy = d[1] / L, -d[0] / L  # unit perpendicular
+
+    step = max(width_px, 4.0)
+    d_min = max(2.0 * brush_radius_px, 2.0 * width_px, 6.0)
+    d_max = d_min + 12.0 * step
+    dists = np.arange(d_min, d_max, step)
+
+    best = None
+    for sgn in (1.0, -1.0):
+        for dist in dists:
+            ox, oy = sgn * ux * dist, sgn * uy * dist
+            tp = path_arr + np.array([ox, oy])
+            if (tp[:, 0].min() < 1 or tp[:, 1].min() < 1 or
+                    tp[:, 0].max() >= width - 1 or tp[:, 1].max() >= height - 1):
+                continue
+            sx = np.clip(tp[:, 0].astype(int), 0, width - 1)
+            sy = np.clip(tp[:, 1].astype(int), 0, height - 1)
+            tex = float(np.median(local_std[sy, sx]))
+            if tex > STROKE_MAX_BAND_TEXTURE:
+                continue
+            score = tex + 0.01 * dist  # prefer smooth, then nearer
+            if best is None or score < best[0]:
+                best = (score, ox, oy)
+
+    if best is None:
+        ox, oy = ux * d_min, uy * d_min
+    else:
+        _, ox, oy = best
+    src_x = float(min(max(p0[0] + ox, 0.0), width - 1))
+    src_y = float(min(max(p0[1] + oy, 0.0), height - 1))
+    return src_x, src_y
+
+
+def detect_scratch_ridges(diff, min_dim):
+    """Ridge pass for faint scratches/threads using a Hessian bright-ridge filter.
+
+    Runs skimage.filters.sato on a downscaled background-subtracted image (full-res
+    is too slow), thresholds the response, and returns connected curvilinear masks
+    mapped back to full resolution as (component_mask_bool, x_off, y_off) tuples.
+    """
+    if not STROKE_RIDGE_ENABLE:
+        return []
+    s = STROKE_RIDGE_DOWNSCALE
+    h, w = diff.shape
+    small = cv2.resize(diff, (max(1, int(w * s)), max(1, int(h * s))),
+                       interpolation=cv2.INTER_AREA)
+    small = np.clip(small, 0, None).astype(np.float32)
+    # Bright ridges -> black_ridges=False. Sigmas scaled to the downscaled image.
+    sigmas = [max(1.0, sig * s * 4) for sig in STROKE_RIDGE_SIGMAS]
+    resp = sato(small, sigmas=sigmas, black_ridges=False)
+    if resp.max() <= 0:
+        return []
+    # Robust z-score threshold: median + Z*MAD. Using MAD (not global max) prevents a
+    # single very-bright structure from drowning out faint ridges elsewhere.
+    med = float(np.median(resp))
+    mad = float(np.median(np.abs(resp - med))) * 1.4826 + 1e-6
+    ridge_bin = (resp >= med + STROKE_RIDGE_Z * mad).astype(np.uint8)
+    if ridge_bin.sum() == 0:
+        return []
+    # Upscale binary mask back to full resolution.
+    ridge_full = cv2.resize(ridge_bin, (w, h), interpolation=cv2.INTER_NEAREST)
+    # Bridge tiny gaps along thin ridges.
+    ridge_full = cv2.morphologyEx(
+        ridge_full, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(ridge_full, connectivity=8)
+    min_area = int((STROKE_MIN_LENGTH_FRAC * min_dim))  # at least ~length px (thin -> area~length)
+    cands = []
+    for lid in range(1, num):
+        area = stats[lid, cv2.CC_STAT_AREA]
+        if area < min_area:
+            continue
+        cands.append((area, lid))
+    # Process the largest candidates first; cap to bound skeletonization cost.
+    cands.sort(reverse=True)
+    out = []
+    for area, lid in cands[:STROKE_RIDGE_MAX_CANDIDATES]:
+        bx = stats[lid, cv2.CC_STAT_LEFT]
+        by = stats[lid, cv2.CC_STAT_TOP]
+        bw = stats[lid, cv2.CC_STAT_WIDTH]
+        bh = stats[lid, cv2.CC_STAT_HEIGHT]
+        comp = labels[by:by + bh, bx:bx + bw] == lid
+        out.append((comp, bx, by))
+    return out
+
+
+def _stroke_overlaps_existing(spot, existing, min_sep):
+    """True if the stroke's midpoint is within min_sep px of any existing spot center."""
+    for e in existing:
+        if math.hypot(spot["cx"] - e["cx"], spot["cy"] - e["cy"]) < min_sep:
+            return True
+    return False
 
 
 # ===================================================================
@@ -984,17 +1805,22 @@ def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False):
         std_spots = []
 
     # --- Phase 2: ML post-filter on accepted spots ---
-    if std_spots:
-        X_std = np.array([_spot_to_features(s) for s in std_spots], dtype=np.float32)
+    # Strokes (threads/scratches) bypass the ML post-filter: the model was trained
+    # on circular-dust features only, so it cannot judge elongated forms.
+    dot_spots = [s for s in std_spots if s.get("kind") != "stroke"]
+    stroke_spots = [s for s in std_spots if s.get("kind") == "stroke"]
+    if dot_spots:
+        X_std = np.array([_spot_to_features(s) for s in dot_spots], dtype=np.float32)
         X_std_scaled = scaler.transform(X_std)
         probas_std = ml_model.predict_proba(X_std_scaled)[:, 1]
-        spots = [s for s, p in zip(std_spots, probas_std) if p >= ML_POSTFILTER_THRESHOLD]
-        n_removed = len(std_spots) - len(spots)
+        kept = [s for s, p in zip(dot_spots, probas_std) if p >= ML_POSTFILTER_THRESHOLD]
+        n_removed = len(dot_spots) - len(kept)
         if n_removed > 0:
-            print(f"  [ML] post-filter: removed {n_removed}/{len(std_spots)} FPs "
+            print(f"  [ML] post-filter: removed {n_removed}/{len(dot_spots)} FPs "
                   f"(threshold={ML_POSTFILTER_THRESHOLD})")
+        spots = kept + stroke_spots
     else:
-        spots = []
+        spots = stroke_spots
 
     return spots, std_rejects, None, local_std
 
@@ -1092,6 +1918,42 @@ def make_brush_mask_points(cx, cy, border_radius):
         points += struct.pack("<ffI", BRUSH_DENSITY, BRUSH_HARDNESS, BRUSH_STATE_NORMAL)
 
     return bytes(points).hex()
+
+
+def make_stroke_mask_points(points_norm, border):
+    """Generate mask_points hex for a multi-node brush stroke (44 bytes per node).
+
+    points_norm: list of (x, y) normalized [0,1] key points along the centerline.
+    border: brush border (half-width) in normalized coords, applied to every node.
+    Bezier control handles use Catmull-Rom tangents so darktable renders a smooth
+    spline through the key points. Returns the hex string; node count = len(points).
+    """
+    pts = [(float(x), float(y)) for x, y in points_norm]
+    n = len(pts)
+    if n == 1:
+        return make_brush_mask_points(pts[0][0], pts[0][1], border)
+
+    data = bytearray()
+    for i in range(n):
+        px, py = pts[i]
+        prev = pts[i - 1] if i > 0 else pts[i]
+        nxt = pts[i + 1] if i < n - 1 else pts[i]
+        tx = (nxt[0] - prev[0]) / 6.0
+        ty = (nxt[1] - prev[1]) / 6.0
+        if tx == 0.0 and ty == 0.0:
+            tx = ty = BRUSH_CTRL_OFFSET  # avoid zero-length control handles
+        # corner
+        data += struct.pack("<ff", px, py)
+        # ctrl1 (incoming handle)
+        data += struct.pack("<ff", px - tx, py - ty)
+        # ctrl2 (outgoing handle)
+        data += struct.pack("<ff", px + tx, py + ty)
+        # border (half-width)
+        data += struct.pack("<ff", border, border)
+        # density, hardness, state
+        data += struct.pack("<ffI", BRUSH_DENSITY, BRUSH_HARDNESS, BRUSH_STATE_NORMAL)
+
+    return bytes(data).hex()
 
 
 def parse_transform_params(params_file):
@@ -1458,33 +2320,50 @@ def generate_xmp_data_for_spots(spots, image_width, image_height,
     orig_h = image_height / max(crop_b - crop_t, 1e-6)
     border_scale = min(orig_w, orig_h)
 
+    def _to_orig(px_x, px_y):
+        """Pixel coords in export space -> normalized [0,1] original image space."""
+        nx, ny = px_x / image_width, px_y / image_height
+        return _export_to_original(nx, ny, flip, crop, ashift_params,
+                                   image_width, image_height)
+
     for spot in spots:
-        # Normalize coordinates to [0, 1] in export space
-        norm_cx = spot["cx"] / image_width
-        norm_cy = spot["cy"] / image_height
-
-        # Transform to original image space (undo crop, flip, ashift)
-        norm_cx, norm_cy = _export_to_original(
-            norm_cx, norm_cy, flip, crop, ashift_params, image_width, image_height)
-
         # Brush border: darktable renders as border * MIN(pipe_w, pipe_h)
         border = spot["brush_radius_px"] / border_scale
         spot["radius_norm"] = border   # persisted to {stem}_debug_spots.json for UI display
 
+        mask_id = id_gen.next_id()
+        brush_ids.append(mask_id)
+
+        if spot.get("kind") == "stroke":
+            # Multi-node brush stroke following the detected centerline.
+            path_norm = [_to_orig(px, py) for px, py in spot["path"]]
+            if "src_cx" in spot and "src_cy" in spot:
+                src_x, src_y = _to_orig(spot["src_cx"], spot["src_cy"])
+            else:
+                # Fallback: offset the first node diagonally.
+                src_x = path_norm[0][0] + HEAL_SOURCE_OFFSET_X
+                src_y = path_norm[0][1] + HEAL_SOURCE_OFFSET_Y
+            src_x = max(0.0, min(1.0, src_x))
+            src_y = max(0.0, min(1.0, src_y))
+            brushes.append({
+                "mask_id": mask_id,
+                "mask_points": make_stroke_mask_points(path_norm, border),
+                "mask_src": struct.pack("<ff", src_x, src_y).hex(),
+                "mask_nb": len(path_norm),
+            })
+            continue
+
+        # Circular "dot" brush (existing behavior)
+        norm_cx, norm_cy = _to_orig(spot["cx"], spot["cy"])
+
         # Heal source: use auto-detected optimal position if available, else fixed offset
         if "src_cx" in spot and "src_cy" in spot:
-            src_norm_x = spot["src_cx"] / image_width
-            src_norm_y = spot["src_cy"] / image_height
-            src_x, src_y = _export_to_original(
-                src_norm_x, src_norm_y, flip, crop, ashift_params, image_width, image_height)
+            src_x, src_y = _to_orig(spot["src_cx"], spot["src_cy"])
             src_x = max(0.0, min(1.0, src_x))
             src_y = max(0.0, min(1.0, src_y))
         else:
             src_x = max(0.0, min(1.0, norm_cx + HEAL_SOURCE_OFFSET_X))
             src_y = max(0.0, min(1.0, norm_cy + HEAL_SOURCE_OFFSET_Y))
-
-        mask_id = id_gen.next_id()
-        brush_ids.append(mask_id)
 
         brushes.append({
             "mask_id": mask_id,
@@ -2222,9 +3101,14 @@ def process_one_image(args):
                 img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
                 L_f32 = img_lab[:, :, 0].astype(np.float32)
                 for spot in spots:
-                    src_cx, src_cy = find_healing_source(
-                        spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
-                        img_lab, L_f32, local_std, spots, width, height)
+                    if spot.get("kind") == "stroke":
+                        src_cx, src_cy = find_stroke_healing_source(
+                            spot["path"], spot["stroke_width_px"], spot["brush_radius_px"],
+                            local_std, spots, width, height)
+                    else:
+                        src_cx, src_cy = find_healing_source(
+                            spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
+                            img_lab, L_f32, local_std, spots, width, height)
                     spot["src_cx"] = src_cx
                     spot["src_cy"] = src_cy
 

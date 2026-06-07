@@ -29,6 +29,10 @@ from tkinter import messagebox
 from PIL import Image, ImageTk
 
 
+# Default full width (px) assigned to a hand-drawn missed thread.
+DEFAULT_MISSED_STROKE_WIDTH = 8.0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -39,6 +43,26 @@ def canvas_to_image(cx, cy, offset_x, offset_y, zoom):
 
 def image_to_canvas(ix, iy, offset_x, offset_y, zoom):
     return ix * zoom + offset_x, iy * zoom + offset_y
+
+
+def _seg_dist(px, py, ax, ay, bx, by):
+    """Distance from point (px,py) to segment (ax,ay)-(bx,by)."""
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _point_to_path_dist(px, py, path):
+    """Minimum distance from point (px,py) to a polyline (list of [x,y])."""
+    if not path:
+        return float("inf")
+    if len(path) == 1:
+        return math.hypot(px - path[0][0], py - path[0][1])
+    return min(_seg_dist(px, py, path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+              for i in range(len(path) - 1))
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +97,8 @@ class DebugUI:
                 "missed_dust": [],
                 "source_overrides": {},   # {spot_idx: (src_cx, src_cy)}
                 "radius_overrides": {},   # {spot_idx: corrected_radius_px}
+                "path_overrides": {},     # {spot_idx: [[x,y],...]} edited stroke centerlines
+                "missed_strokes": [],     # [{"path":[[x,y],...], "stroke_width_px":w}] hand-drawn threads
                 "source_mismatches": [],  # list from quality test diff sessions
                 "radius_mismatches": [],  # list from quality test diff sessions
             }
@@ -94,6 +120,12 @@ class DebugUI:
         self.selected_rejected = set()   # set of int (rejected candidate indices)
         self.selected_missed = set()     # set of int (indices into missed_dust list)
         self.selected_source = None      # int or None: spot index whose source is selected
+        self.selected_keypoint = None    # (spot_idx, kp_idx) or None: selected stroke key point
+        self.selected_missed_stroke = None  # int or None: index into missed_strokes
+
+        # Thread-draw mode: click to place centerline points for a missed thread
+        self.thread_draw_mode = False
+        self.thread_draw_points = []     # list of [x,y] image coords (in-progress)
 
         # Visibility
         self.hide_markers = False
@@ -189,6 +221,7 @@ class DebugUI:
             ("✕", "#ff3333", "False positive"),
             ("●", "#ff8800", "Rejected candidate"),
             ("✚", "#00ffff", "Missed dust (added)"),
+            ("╱", "#00ffff", "Missed thread (drawn)"),
             ("□", "#00cc44", "Heal source (- - line)"),
             ("○", "#00cc44", "Source brush (dashed)"),
             ("□", "#ff4444", "Baseline source (mismatch)"),
@@ -217,6 +250,9 @@ class DebugUI:
             "Keys:\n"
             "  Space/B — next/prev image\n"
             "  R — rejected → missed\n"
+            "  T — draw missed thread\n"
+            "    (click pts, Enter=done,\n"
+            "     Esc=cancel)\n"
             "  M — mark false positive\n"
             "  C — clear FP mark\n"
             "  Del — remove missed marker\n"
@@ -274,6 +310,10 @@ class DebugUI:
         self.root.bind("<BackSpace>", lambda e: self._remove_missed())
         self.root.bind("<r>", lambda e: self._mark_rejected_as_missed())
         self.root.bind("<R>", lambda e: self._mark_rejected_as_missed())
+        self.root.bind("<t>", lambda e: self._toggle_thread_draw())
+        self.root.bind("<T>", lambda e: self._toggle_thread_draw())
+        self.root.bind("<Return>", lambda e: self._finish_thread())
+        self.root.bind("<Escape>", lambda e: self._cancel_thread())
         self.root.bind("<h>", lambda e: self._toggle_hide_markers())
         self.root.bind("<H>", lambda e: self._toggle_hide_markers())
         self.root.bind("<equal>", lambda e: self._zoom_step(2.0))    # + key (no shift)
@@ -398,6 +438,10 @@ class DebugUI:
         self.selected_rejected = set()
         self.selected_missed = set()
         self.selected_source = None
+        self.selected_keypoint = None
+        self.selected_missed_stroke = None
+        self.thread_draw_mode = False
+        self.thread_draw_points = []
         self.remove_missed_btn.config(state=tk.DISABLED)
         self._set_info_text("No marker selected.\n"
                             "Click a marker or Ctrl+Click to add missed dust.")
@@ -461,6 +505,73 @@ class DebugUI:
             return (src_cx, src_cy)
         return None
 
+    def _get_path(self, stem, spot_idx, spot):
+        """Return the stroke centerline key points (list of [x,y]) for a stroke spot —
+        user path override first, then the detected path. None for non-stroke spots."""
+        if spot.get("kind") != "stroke":
+            return None
+        overrides = self.annotations[stem].get("path_overrides", {})
+        if spot_idx in overrides:
+            return overrides[spot_idx]
+        return spot.get("path")
+
+    def _draw_stroke_marker(self, stem, ann, i, spot):
+        """Render a stroke spot: brush-width coverage band, bright centerline through the
+        key points (with draggable handles), and the translated healing-source polyline."""
+        path = self._get_path(stem, i, spot)
+        if not path or len(path) < 1:
+            return
+        is_fp = i in ann["false_positives"]
+        is_sel = i in self.selected_detected
+        is_src_sel = (self.selected_source == i)
+        sel_kp = getattr(self, "selected_keypoint", None)
+
+        pts_canvas = [image_to_canvas(px, py, self.offset_x, self.offset_y, self.zoom)
+                      for px, py in path]
+        flat = [c for pt in pts_canvas for c in pt]
+
+        color = "#ffff00" if is_sel else "#00cc44"
+        # Brush coverage band (dim, thick) = what darktable will heal.
+        if len(pts_canvas) >= 2:
+            band_w = max(2, int(round(spot.get("brush_radius_px", 4) * 2 * self.zoom)))
+            self.canvas.create_line(*flat, fill="#225522", width=band_w,
+                                    capstyle="round", joinstyle="round", tags="detected")
+            # Bright centerline.
+            self.canvas.create_line(*flat, fill=color, width=2, tags="detected")
+        # Key-point handles.
+        for k, (hx, hy) in enumerate(pts_canvas):
+            hr = 5 if (sel_kp == (i, k)) else 4
+            hcolor = "#ff00ff" if (sel_kp == (i, k)) else color
+            self.canvas.create_rectangle(hx - hr, hy - hr, hx + hr, hy + hr,
+                                         outline=hcolor, width=2, tags="detected")
+        # FP X mark at the midpoint.
+        if is_fp:
+            mx, my = pts_canvas[len(pts_canvas) // 2]
+            r2 = 8
+            self.canvas.create_line(mx - r2, my - r2, mx + r2, my + r2,
+                                    fill="#ff3333", width=2, tags="fp")
+            self.canvas.create_line(mx + r2, my - r2, mx - r2, my + r2,
+                                    fill="#ff3333", width=2, tags="fp")
+        # Source: translate the whole path by (src - path[0]).
+        src = self._get_source(stem, i, spot)
+        if src is not None and len(path) >= 1:
+            dx = src[0] - path[0][0]
+            dy = src[1] - path[0][1]
+            src_canvas = [image_to_canvas(px + dx, py + dy,
+                                          self.offset_x, self.offset_y, self.zoom)
+                          for px, py in path]
+            src_color = "#ffff00" if (is_sel or is_src_sel) else "#00cc44"
+            if len(src_canvas) >= 2:
+                sflat = [c for pt in src_canvas for c in pt]
+                self.canvas.create_line(*sflat, fill=src_color, width=1, dash=(4, 3),
+                                        tags="source")
+            # Square marker at the source anchor (first node).
+            sx, sy = src_canvas[0]
+            sq = max(3, int(2 * self.zoom))
+            self.canvas.create_rectangle(sx - sq, sy - sq, sx + sq, sy + sq,
+                                         outline=src_color,
+                                         width=2 if is_src_sel else 1, tags="source")
+
     def _redraw_markers(self):
         self.canvas.delete("detected", "rejected", "fp", "missed", "source", "sel", "rubberband")
         if self.pil_image is None or self.hide_markers:
@@ -485,6 +596,11 @@ class DebugUI:
 
         # Detected spots
         for i, spot in enumerate(img_dict.get("detected") or []):
+            # --- Stroke (thread/scratch): polyline through key points ---
+            if spot.get("kind") == "stroke":
+                self._draw_stroke_marker(stem, ann, i, spot)
+                continue
+
             cx, cy = image_to_canvas(spot["cx"], spot["cy"],
                                      self.offset_x, self.offset_y, self.zoom)
             rad = max(5, spot["brush_radius_px"] * self.zoom)
@@ -582,6 +698,35 @@ class DebugUI:
             self.canvas.create_line(cx, cy - r, cx, cy + r,
                                     fill=color, width=lw, tags="missed")
 
+        # Missed threads (hand-drawn, cyan polyline with handles)
+        for i, ms in enumerate(ann.get("missed_strokes", [])):
+            path = ms.get("path") or []
+            if not path:
+                continue
+            canv = [image_to_canvas(px, py, self.offset_x, self.offset_y, self.zoom)
+                    for px, py in path]
+            sel = (self.selected_missed_stroke == i)
+            color = "#ffffff" if sel else "#00ffff"
+            if len(canv) >= 2:
+                flat = [c for pt in canv for c in pt]
+                self.canvas.create_line(*flat, fill=color, width=3 if sel else 2,
+                                        capstyle="round", joinstyle="round", tags="missed")
+            for (hx, hy) in canv:
+                self.canvas.create_rectangle(hx - 4, hy - 4, hx + 4, hy + 4,
+                                             outline=color, width=2, tags="missed")
+
+        # In-progress thread being drawn (yellow, dashed)
+        if self.thread_draw_mode and self.thread_draw_points:
+            canv = [image_to_canvas(px, py, self.offset_x, self.offset_y, self.zoom)
+                    for px, py in self.thread_draw_points]
+            if len(canv) >= 2:
+                flat = [c for pt in canv for c in pt]
+                self.canvas.create_line(*flat, fill="#ffff00", width=2, dash=(5, 3),
+                                        tags="missed")
+            for (hx, hy) in canv:
+                self.canvas.create_oval(hx - 4, hy - 4, hx + 4, hy + 4,
+                                        outline="#ffff00", width=2, tags="missed")
+
     # ------------------------------------------------------------------
     # Mouse events
     # ------------------------------------------------------------------
@@ -672,7 +817,29 @@ class DebugUI:
         self.pan_start = None
         self.pan_offset_at_start = None
 
+    def _thread_add_point(self, canvas_x, canvas_y):
+        """Append a centerline point (from canvas coords) to the in-progress thread."""
+        ix, iy = canvas_to_image(canvas_x, canvas_y,
+                                 self.offset_x, self.offset_y, self.zoom)
+        img_dict = self.images[self.current_idx]
+        iw, ih = img_dict["width"], img_dict["height"]
+        ix = max(0, min(iw, ix))
+        iy = max(0, min(ih, iy))
+        self.thread_draw_points.append([float(ix), float(iy)])
+        self._set_info_text(
+            f"THREAD DRAW: {len(self.thread_draw_points)} point(s).\n"
+            f"  Click to add, or drag to draw freehand.\n"
+            f"  Enter = finish,  Esc / T = cancel.")
+        self._redraw_markers()
+
     def _on_left_press(self, event):
+        # Thread-draw mode: every mouse-down drops a centerline point (immune to
+        # accidental drag). Hold and drag to draw freehand (see _on_left_drag).
+        if self.thread_draw_mode:
+            self._thread_add_point(event.x, event.y)
+            self.drag_start = (event.x, event.y)  # last freehand sample point
+            self.is_dragging = False
+            return
         self.drag_start = (event.x, event.y)
         self.is_dragging = False
         self.ctrl_drag_mode = bool(event.state & 0x4)
@@ -680,6 +847,16 @@ class DebugUI:
     def _on_left_drag(self, event):
         if self.drag_start is None:
             return
+
+        # Thread-draw mode: freehand — sample a new point when moved enough.
+        if self.thread_draw_mode:
+            dx = event.x - self.drag_start[0]
+            dy = event.y - self.drag_start[1]
+            if (dx * dx + dy * dy) >= 64:  # ~8px on canvas
+                self._thread_add_point(event.x, event.y)
+                self.drag_start = (event.x, event.y)
+            return
+
         dx = event.x - self.drag_start[0]
         dy = event.y - self.drag_start[1]
         if not self.is_dragging and (abs(dx) > 5 or abs(dy) > 5):
@@ -694,6 +871,12 @@ class DebugUI:
                                          tags="rubberband")
 
     def _on_left_release(self, event):
+        # Thread-draw mode: points were already placed on press/drag; nothing to do.
+        if self.thread_draw_mode:
+            self.drag_start = None
+            self.is_dragging = False
+            return
+
         if self.drag_start is None:
             return
 
@@ -794,6 +977,25 @@ class DebugUI:
         iy = max(0, min(ih, iy))
         stem = img_dict["stem"]
 
+        # If a stroke key point is selected, move it (persist a full path override).
+        if self.selected_keypoint is not None:
+            spot_idx, kp_idx = self.selected_keypoint
+            spots = img_dict.get("detected") or []
+            if spot_idx < len(spots) and spots[spot_idx].get("kind") == "stroke":
+                overrides = self.annotations[stem].setdefault("path_overrides", {})
+                # Start from current effective path (existing override or detected path).
+                cur = overrides.get(spot_idx) or [list(p) for p in spots[spot_idx]["path"]]
+                cur = [list(p) for p in cur]
+                if kp_idx < len(cur):
+                    cur[kp_idx] = [float(ix), float(iy)]
+                    overrides[spot_idx] = cur
+                    self._auto_save(stem)
+                    self._redraw_markers()
+                    self._set_info_text(
+                        f"Stroke #{spot_idx} node {kp_idx} moved to ({ix:.0f}, {iy:.0f}).\n"
+                        f"Ctrl+Click to move it again, or click another node.")
+            return
+
         # If a source is selected, reposition it
         if self.selected_source is not None:
             self.annotations[stem].setdefault("source_overrides", {})[self.selected_source] = (
@@ -854,6 +1056,49 @@ class DebugUI:
             self._update_info_from_selection()
             self._redraw_markers()
 
+    def _toggle_thread_draw(self):
+        """Toggle thread-draw mode (T key): click to place centerline points."""
+        self.thread_draw_mode = not self.thread_draw_mode
+        self.thread_draw_points = []
+        if self.thread_draw_mode:
+            self._clear_selection()
+            self._set_info_text(
+                "THREAD DRAW MODE ON\n"
+                "  Click along the missing thread to place points.\n"
+                "  Enter = finish (needs >=2 points),  Esc / T = cancel.")
+        else:
+            self._set_info_text("Thread draw mode off.")
+        self._redraw_markers()
+
+    def _finish_thread(self):
+        """Commit the in-progress thread as a missed-thread annotation (Enter)."""
+        if not self.thread_draw_mode:
+            return
+        stem = self.images[self.current_idx]["stem"]
+        if len(self.thread_draw_points) >= 2:
+            self.annotations[stem].setdefault("missed_strokes", []).append({
+                "path": [[float(x), float(y)] for x, y in self.thread_draw_points],
+                "stroke_width_px": float(DEFAULT_MISSED_STROKE_WIDTH),
+            })
+            self._auto_save(stem)
+            self._set_info_text(
+                f"Added missed thread ({len(self.thread_draw_points)} points).\n"
+                f"Click it then Del to remove. Press T to draw another.")
+        else:
+            self._set_info_text("Thread needs at least 2 points — discarded.")
+        self.thread_draw_mode = False
+        self.thread_draw_points = []
+        self._redraw_markers()
+        self._populate_spots_list()
+
+    def _cancel_thread(self):
+        """Cancel the in-progress thread (Esc)."""
+        if self.thread_draw_mode:
+            self.thread_draw_mode = False
+            self.thread_draw_points = []
+            self._set_info_text("Thread draw cancelled.")
+            self._redraw_markers()
+
     def _toggle_hide_markers(self):
         """Toggle visibility of all markers (H key)."""
         self.hide_markers = not self.hide_markers
@@ -886,6 +1131,23 @@ class DebugUI:
 
     def _handle_click(self, canvas_x, canvas_y):
         """Select nearest marker on single click."""
+        # A stroke key-point handle takes priority so individual nodes are selectable.
+        kp = self._find_keypoint(canvas_x, canvas_y)
+        if kp is not None:
+            self.selected_detected = {kp[0]}
+            self.selected_rejected = set()
+            self.selected_missed = set()
+            self.selected_source = None
+            self.selected_keypoint = kp
+            self.remove_missed_btn.config(state=tk.DISABLED)
+            self._update_info_from_selection()
+            self._set_info_text(
+                f"Stroke #{kp[0]} node {kp[1]} selected.\n"
+                f"Ctrl+Click to move this node. Click the source square then Ctrl+Click "
+                f"to move the healing source.")
+            self._redraw_markers()
+            return
+
         nearest = self._find_nearest_marker(canvas_x, canvas_y)
         if nearest is None:
             self._clear_selection()
@@ -896,6 +1158,8 @@ class DebugUI:
         self.selected_rejected = set()
         self.selected_missed = set()
         self.selected_source = None
+        self.selected_keypoint = None
+        self.selected_missed_stroke = None
 
         if kind == "detected":
             self.selected_detected = {idx}
@@ -909,6 +1173,13 @@ class DebugUI:
         elif kind == "missed":
             self.selected_missed = {idx}
             self.remove_missed_btn.config(state=tk.NORMAL)
+        elif kind == "missed_stroke":
+            self.selected_missed_stroke = idx
+            self.remove_missed_btn.config(state=tk.NORMAL)
+            self._set_info_text(
+                f"Missed thread #{idx} selected.\n  Del = remove it.")
+            self._redraw_markers()
+            return
 
         self._update_info_from_selection()
         self._redraw_markers()
@@ -933,8 +1204,28 @@ class DebugUI:
                 best = ("missed", i)
                 best_dist = d
 
+        # Missed threads (hand-drawn): distance to the polyline
+        for i, ms in enumerate(ann.get("missed_strokes", [])):
+            path = ms.get("path") or []
+            if not path:
+                continue
+            d = _point_to_path_dist(ix, iy, path)
+            if d < hit_r and d < best_dist:
+                best = ("missed_stroke", i)
+                best_dist = d
+
         # Detected spots
         for i, spot in enumerate(img_dict.get("detected") or []):
+            if spot.get("kind") == "stroke":
+                # Distance to the (possibly user-edited) centerline polyline.
+                path = self._get_path(stem, i, spot)
+                if path:
+                    d = _point_to_path_dist(ix, iy, path)
+                    r_check = max(hit_r, spot.get("radius_px", 0))
+                    if d < r_check and d < best_dist:
+                        best = ("detected", i)
+                        best_dist = d
+                continue
             r_check = max(hit_r, spot["radius_px"])
             d = math.hypot(spot["cx"] - ix, spot["cy"] - iy)
             if d < r_check and d < best_dist:
@@ -959,6 +1250,29 @@ class DebugUI:
                     best = ("rejected", i)
                     best_dist = d
 
+        return best
+
+    def _find_keypoint(self, canvas_x, canvas_y):
+        """Return (spot_idx, kp_idx) of the nearest stroke key-point handle within hit
+        radius, or None. Used to select/move individual stroke nodes."""
+        ix, iy = canvas_to_image(canvas_x, canvas_y,
+                                 self.offset_x, self.offset_y, self.zoom)
+        hit_r = max(8.0, 12.0 / self.zoom)
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        best = None
+        best_dist = hit_r
+        for i, spot in enumerate(img_dict.get("detected") or []):
+            if spot.get("kind") != "stroke":
+                continue
+            path = self._get_path(stem, i, spot)
+            if not path:
+                continue
+            for k, (px, py) in enumerate(path):
+                d = math.hypot(px - ix, py - iy)
+                if d < best_dist:
+                    best = (i, k)
+                    best_dist = d
         return best
 
     # ------------------------------------------------------------------
@@ -1105,9 +1419,20 @@ class DebugUI:
         self._update_info_from_selection()
 
     def _remove_missed(self):
+        stem = self.images[self.current_idx]["stem"]
+        # Remove a selected hand-drawn missed thread first.
+        if self.selected_missed_stroke is not None:
+            ms_list = self.annotations[stem].get("missed_strokes", [])
+            if self.selected_missed_stroke < len(ms_list):
+                del ms_list[self.selected_missed_stroke]
+            self.selected_missed_stroke = None
+            self.remove_missed_btn.config(state=tk.DISABLED)
+            self._auto_save(stem)
+            self._redraw_markers()
+            self._set_info_text("Missed thread removed.")
+            return
         if not self.selected_missed:
             return
-        stem = self.images[self.current_idx]["stem"]
         md_list = self.annotations[stem]["missed_dust"]
         for idx in sorted(self.selected_missed, reverse=True):
             if idx < len(md_list):
@@ -1125,6 +1450,8 @@ class DebugUI:
         self.selected_rejected = set()
         self.selected_missed = set()
         self.selected_source = None
+        self.selected_keypoint = None
+        self.selected_missed_stroke = None
         self.remove_missed_btn.config(state=tk.DISABLED)
         self._set_info_text("No marker selected.\n"
                             "Click a marker or Ctrl+Click to add missed dust.")
@@ -1318,9 +1645,11 @@ class DebugUI:
         ann = self.annotations[stem]
         detected = img_dict.get("detected") or []
         missed = ann["missed_dust"]
+        missed_strokes = ann.get("missed_strokes", [])
 
+        stroke_suffix = f", {len(missed_strokes)} thread(s)" if missed_strokes else ""
         self.spot_list_header.config(
-            text=f"{len(detected)} detected, {len(missed)} missed")
+            text=f"{len(detected)} detected, {len(missed)} missed{stroke_suffix}")
 
         row_num = 0
         for i, spot in enumerate(detected):
@@ -1358,6 +1687,25 @@ class DebugUI:
                 "kind": "missed", "idx": i,
                 "sort_idx": 100000 + i,
                 "sort_cx":  md["cx"],  "sort_cy":  md["cy"],
+                "sort_r": -1, "sort_ctr": -1, "sort_tex": -1, "sort_fp": 0,
+            }
+
+        for i, ms in enumerate(missed_strokes):
+            path = ms.get("path", [])
+            if not path:
+                continue
+            mid = path[len(path) // 2]
+            cx, cy = mid[0], mid[1]
+            iid = f"mstroke_{i}"
+            parity = "even" if row_num % 2 == 0 else "odd"
+            row_num += 1
+            values = (f"t{i}", int(cx), int(cy), "", "", "", "")
+            self.spot_tree.insert("", tk.END, iid=iid, values=values,
+                                  tags=("missed", parity))
+            self.spot_list_data[iid] = {
+                "kind": "missed_stroke", "idx": i,
+                "sort_idx": 200000 + i,
+                "sort_cx": cx, "sort_cy": cy,
                 "sort_r": -1, "sort_ctr": -1, "sort_tex": -1, "sort_fp": 0,
             }
 
@@ -1412,10 +1760,13 @@ class DebugUI:
             return
         if data["kind"] == "missed" and data["idx"] in self.selected_missed:
             return
+        if data["kind"] == "missed_stroke" and data["idx"] == self.selected_missed_stroke:
+            return
 
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = set()
+        self.selected_missed_stroke = None
         self.selected_source = None
 
         if data["kind"] == "detected":
@@ -1423,6 +1774,9 @@ class DebugUI:
             self.remove_missed_btn.config(state=tk.DISABLED)
         elif data["kind"] == "missed":
             self.selected_missed = {data["idx"]}
+            self.remove_missed_btn.config(state=tk.NORMAL)
+        elif data["kind"] == "missed_stroke":
+            self.selected_missed_stroke = data["idx"]
             self.remove_missed_btn.config(state=tk.NORMAL)
 
         self._update_info_from_selection()
@@ -1451,6 +1805,14 @@ class DebugUI:
             md = self.annotations[stem]["missed_dust"]
             if idx < len(md):
                 self._center_canvas_on(md[idx]["cx"], md[idx]["cy"])
+        elif self.selected_missed_stroke is not None:
+            ms_list = self.annotations[stem].get("missed_strokes", [])
+            idx = self.selected_missed_stroke
+            if idx < len(ms_list):
+                path = ms_list[idx].get("path", [])
+                if path:
+                    mid = path[len(path) // 2]
+                    self._center_canvas_on(mid[0], mid[1])
 
     def _sync_spot_list_selection(self):
         """Sync treeview selection to match current canvas selection state."""
@@ -1501,12 +1863,20 @@ class DebugUI:
             for k, v in sorted(ann.get("radius_overrides", {}).items())
         ]
 
+        # Serialize path_overrides (edited stroke centerlines) as list of {spot_idx, path}
+        path_overrides_list = [
+            {"spot_idx": k, "path": [[float(p[0]), float(p[1])] for p in v]}
+            for k, v in sorted(ann.get("path_overrides", {}).items())
+        ]
+
         data = {
             "stem": stem,
             "false_positives": fp_list,
             "missed_dust": ann["missed_dust"],
+            "missed_strokes": ann.get("missed_strokes", []),
             "source_overrides": src_overrides_list,
             "radius_overrides": radius_overrides_list,
+            "path_overrides": path_overrides_list,
             "source_mismatches": ann.get("source_mismatches", []),
             "radius_mismatches": ann.get("radius_mismatches", []),
         }
@@ -1537,6 +1907,7 @@ class DebugUI:
                         break
             self.annotations[stem]["false_positives"] = fp_indices
             self.annotations[stem]["missed_dust"] = data.get("missed_dust", [])
+            self.annotations[stem]["missed_strokes"] = data.get("missed_strokes", [])
             # Restore source overrides: list of {spot_idx, src_cx, src_cy}
             src_overrides = {}
             for entry in data.get("source_overrides", []):
@@ -1554,6 +1925,15 @@ class DebugUI:
                 except (KeyError, ValueError, TypeError):
                     pass
             self.annotations[stem]["radius_overrides"] = radius_overrides
+            # Restore stroke path overrides: list of {spot_idx, path}
+            path_overrides = {}
+            for entry in data.get("path_overrides", []):
+                try:
+                    path_overrides[int(entry["spot_idx"])] = [
+                        [float(p[0]), float(p[1])] for p in entry["path"]]
+                except (KeyError, ValueError, TypeError):
+                    pass
+            self.annotations[stem]["path_overrides"] = path_overrides
             # Load source/radius mismatches from quality test diff sessions
             self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
             self.annotations[stem]["radius_mismatches"] = data.get("radius_mismatches", [])

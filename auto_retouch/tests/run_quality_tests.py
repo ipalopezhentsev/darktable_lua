@@ -68,6 +68,41 @@ def _dist(a, b):
     return math.sqrt((a["cx"] - b["cx"]) ** 2 + (a["cy"] - b["cy"]) ** 2)
 
 
+STROKE_MATCH_RADIUS = 60   # px: stroke midpoints within this (and similar length) = same stroke
+
+
+def _is_stroke(s):
+    return s.get("kind") == "stroke"
+
+
+def _match_strokes(baseline_strokes, new_strokes):
+    """Match thread/scratch strokes between baseline and new runs.
+
+    Strokes are matched by centerline-midpoint proximity plus a length-similarity check
+    (a single point match is unreliable for elongated forms). Returns (matched, missing,
+    new) where matched is a list of (baseline_idx, new_idx, baseline, new).
+    """
+    used = set()
+    matched = []
+    for bi, bs in enumerate(baseline_strokes):
+        best_ni, best_d = None, float("inf")
+        for ni, ns in enumerate(new_strokes):
+            if ni in used:
+                continue
+            d = _dist(bs, ns)
+            bl, nl = bs.get("length_px", 0.0), ns.get("length_px", 0.0)
+            lr = (min(bl, nl) / max(bl, nl)) if max(bl, nl) > 0 else 1.0
+            if d < best_d and d <= STROKE_MATCH_RADIUS and lr >= 0.5:
+                best_d, best_ni = d, ni
+        if best_ni is not None:
+            matched.append((bi, best_ni, bs, new_strokes[best_ni]))
+            used.add(best_ni)
+    missing = [bs for bi, bs in enumerate(baseline_strokes)
+               if bi not in {m[0] for m in matched}]
+    new = [ns for ni, ns in enumerate(new_strokes) if ni not in used]
+    return matched, missing, new
+
+
 def _match_spots(baseline_spots, new_spots, radius=MATCH_RADIUS):
     """Greedy nearest-neighbour matching within radius.
 
@@ -329,6 +364,7 @@ def main():
     # --- Compare against baseline ---
     verdicts = []
     diff_by_stem = {}
+    stroke_stats = {}   # stem -> (matched, missing, new) for thread/scratch strokes
     baseline_has_sources = False
 
     for stem, spots, rejected, img_dims, error, _xmp in raw_results:
@@ -352,14 +388,24 @@ def main():
         if baseline_spots and "src_cx" in baseline_spots[0]:
             baseline_has_sources = True
 
-        matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches = _match_spots(baseline_spots, new_spots)
+        # Partition by kind: dots use the established matcher (keeps dot regression
+        # metrics comparable to the committed baseline); strokes match separately.
+        base_dots = [s for s in baseline_spots if not _is_stroke(s)]
+        base_strokes = [s for s in baseline_spots if _is_stroke(s)]
+        new_dots = [s for s in new_spots if not _is_stroke(s)]
+        new_strokes_l = [s for s in new_spots if _is_stroke(s)]
+
+        s_matched, s_missing, s_new = _match_strokes(base_strokes, new_strokes_l)
+        stroke_stats[stem] = (len(s_matched), len(s_missing), len(s_new))
+
+        matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches = _match_spots(base_dots, new_dots)
 
         # Split new FPs: spots matching user-annotated missed_dust are recoveries, not true FPs
         true_fps, recovered = _filter_recoveries(new_fps, missed_dust_by_stem.get(stem, []))
 
         verdict, match_rate, new_ratio = _verdict(
-            len(baseline_spots), len(new_spots), matched_pairs, missing, true_fps, source_issues, source_mismatches, radius_mismatches)
-        verdicts.append((verdict, stem, len(new_spots), len(baseline_spots),
+            len(base_dots), len(new_dots), matched_pairs, missing, true_fps, source_issues, source_mismatches, radius_mismatches)
+        verdicts.append((verdict, stem, len(new_dots), len(base_dots),
                          matched_pairs, missing, true_fps, source_issues, source_mismatches, radius_mismatches, recovered, None))
         # Write only true FPs to diff session (recoveries are expected improvements)
         diff_by_stem[stem] = (missing, true_fps, source_mismatches, radius_mismatches)
@@ -391,6 +437,19 @@ def main():
               f"{match_rate_str}{miss_str}{fp_str}{rec_str}{src_str}{mismatch_str}{radius_str}{note_str}")
 
     print(f"\nOverall: {counts['PASS']} PASS, {counts['WARN']} WARN, {counts['FAIL']} FAIL")
+
+    # --- Stroke (thread/scratch) summary, reported separately from dots ---
+    s_tot_matched = sum(v[0] for v in stroke_stats.values())
+    s_tot_missing = sum(v[1] for v in stroke_stats.values())
+    s_tot_new = sum(v[2] for v in stroke_stats.values())
+    if s_tot_matched or s_tot_missing or s_tot_new:
+        print(f"\nStrokes: {s_tot_matched} matched, {s_tot_missing} missing (vs baseline), "
+              f"{s_tot_new} new")
+        for stem, (m, miss, nw) in sorted(stroke_stats.items()):
+            if miss or nw:
+                print(f"   {stem:<12} matched={m} missing={miss} new={nw}")
+        if s_tot_missing:
+            print(f"⚠ WARNING: {s_tot_missing} baseline stroke(s) no longer detected.")
 
     if not baseline_has_sources:
         print("\n⚠ WARNING: Baseline does not have source positions.")

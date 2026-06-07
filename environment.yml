@@ -10,3 +10,4 @@ dependencies:
   - pip:
     - opencv-python
     - scikit-learn
+    - scikit-image

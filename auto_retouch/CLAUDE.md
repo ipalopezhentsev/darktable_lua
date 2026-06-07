@@ -38,7 +38,10 @@ Current key fields: `cx`, `cy`, `radius_px` (raw detected, for algorithm interna
 For auto_retouch feature:
 - [x] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
 - [ ] Add ability to heal sensor dust (larger, common between selected frames)
-- [ ] Add ability to heal thread(fiber)-like dust
+- [x] Add ability to heal thread(fiber)-like dust — stroke detection (spec 06): elongated
+      bright threads detected from the threshold binary, healed with multi-node brush strokes
+      (`kind="stroke"` spots). Faint film-scratch ridge pass implemented but disabled by
+      default (noise-floor FPs); human adds faint scratches via the debug UI.
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
 - [x] Orientation/rotation not handled: fixed by treating flip as a full darktable bitmask (FLIP_X=1, FLIP_Y=2, SWAP_XY=4) and applying the inverse in reverse order in `_export_to_original`
