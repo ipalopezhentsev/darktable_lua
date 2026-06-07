@@ -112,9 +112,19 @@ STROKE_MAX_WIDTH_FRAC    = 0.0025 # max stroke width as fraction of min_dim (~9.
                                    #   bimodal with a gap at ~9px, so the cap sits in that gap.
 STROKE_MIN_WIDTH_PX      = 1.5    # floor for measured width (avoid div-by-zero on 1px ridges)
 STROKE_DP_EPS_FRAC       = 0.0015 # Douglas-Peucker epsilon as fraction of min_dim (path simplify)
-STROKE_BORDER_SCALE      = 1.6    # brush border (half-width) = stroke_width_px/2 * this.
-                                   #   >1 so the rendered brush fully covers the defect + margin.
+# Brush border (half-width) sizing. The distance-transform width measures only the
+# above-threshold CORE, which badly underestimates a thick/feathered thread (e.g. a twisted
+# fibre measured 4px but visibly ~14px wide), leaving a whitish leftover after healing. So
+# the brush is sized from the ACTUAL perpendicular brightness profile: how far the thread
+# stays visibly bright from the centerline (see stroke_coverage_halfwidth).
+STROKE_COVERAGE_FRAC     = 0.15   # edge = where diff falls below this fraction of the local peak
+STROKE_COVERAGE_MIN_DIFF = 10.0   # ...but never below this absolute diff (avoid chasing noise)
+STROKE_COVERAGE_PCTL     = 80     # use this percentile of per-sample half-widths (cover thick bits)
+STROKE_COVERAGE_MARGIN_PX = 2.0   # add this margin so the feathered edge is fully covered
+STROKE_BORDER_SCALE      = 1.6    # fallback multiplier on the core half-width if the profile
+                                   #   measurement fails; the larger of the two is used.
 STROKE_MIN_BORDER_PX     = 4.0    # minimum per-node brush border in pixels (darktable floor)
+STROKE_MAX_BORDER_FRAC   = 0.006  # cap brush border at this * min_dim (~22px) — no runaway brushes
 STROKE_MAX_KEYPOINTS     = 24     # cap nodes per stroke (darktable form is fine with many)
 
 # Ridge pass (faint scratches): Hessian-based bright-ridge filter (skimage sato).
@@ -1374,6 +1384,63 @@ def stroke_edge_crispness(path_full, width_px, gray):
     return float(np.median(steeps)) if steeps else 0.0
 
 
+def stroke_coverage_halfwidth(path_full, diff):
+    """Measure how far the thread stays visibly bright from its centerline, from the actual
+    perpendicular diff profile — the radius a heal brush must reach to avoid a whitish
+    leftover. The distance-transform width only sees the above-threshold core and badly
+    underestimates a thick/feathered or off-centre thread. At samples along the path: find
+    the local peak near the centerline, then walk OUTWARD (contiguously, so a neighbouring
+    thread's separate bump is not included) until the diff drops below
+    max(STROKE_COVERAGE_MIN_DIFF, STROKE_COVERAGE_FRAC*peak); the half-width is the larger of
+    the two sides' distances FROM THE CENTERLINE (handles off-centre skeletons). Returns the
+    STROKE_COVERAGE_PCTL percentile over samples (covers the thicker stretches).
+    """
+    pts = np.array(path_full, dtype=np.float64)
+    if len(pts) < 2:
+        return 0.0
+    dvec = pts[-1] - pts[0]
+    Lp = math.hypot(dvec[0], dvec[1])
+    if Lp < 1e-6:
+        return 0.0
+    ux, uy = dvec / Lp
+    px, py = uy, -ux
+    h, w = diff.shape
+
+    samples = []
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        seg = math.hypot(b[0] - a[0], b[1] - a[1])
+        nseg = max(1, int(seg / 5))
+        for k in range(nseg):
+            samples.append(a + (b - a) * (k / nseg))
+    samples.append(pts[-1])
+
+    reach, step = 16.0, 0.5
+    ts = np.arange(-reach, reach + step, step)
+    ci = len(ts) // 2  # index of t == 0 (the centerline)
+    halfwidths = []
+    for c in samples:
+        prof = np.empty(len(ts))
+        for j, t in enumerate(ts):
+            ix, iy = int(round(c[0] + px * t)), int(round(c[1] + py * t))
+            prof[j] = diff[iy, ix] if (0 <= ix < w and 0 <= iy < h) else -1e9
+        lo = max(0, ci - 3); pidx = lo + int(np.argmax(prof[lo:ci + 4]))
+        peak = prof[pidx]
+        if peak < 8:
+            continue
+        level = max(STROKE_COVERAGE_MIN_DIFF, STROKE_COVERAGE_FRAC * peak)
+        r = pidx
+        while r + 1 < len(prof) and prof[r + 1] >= level:
+            r += 1
+        l = pidx
+        while l - 1 >= 0 and prof[l - 1] >= level:
+            l -= 1
+        halfwidths.append(max(r - ci, ci - l) * step)
+    if not halfwidths:
+        return 0.0
+    return float(np.percentile(halfwidths, STROKE_COVERAGE_PCTL))
+
+
 def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
                       saturation, bright_ref, min_dim, source_tag):
     """Apply stroke acceptance gating and build a stroke spot dict.
@@ -1438,7 +1505,13 @@ def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
         return None, "soft"
 
     mid = path_full[len(path_full) // 2]
-    brush_radius_px = max(STROKE_MIN_BORDER_PX, width_px / 2.0 * STROKE_BORDER_SCALE)
+    # Size the brush from the measured visible half-width (covers thick/feathered/off-centre
+    # threads), falling back to the core-width estimate; cap to avoid runaway brushes.
+    cover_hw = stroke_coverage_halfwidth(path_full, diff)
+    brush_radius_px = max(STROKE_MIN_BORDER_PX,
+                          cover_hw + STROKE_COVERAGE_MARGIN_PX,
+                          width_px / 2.0 * STROKE_BORDER_SCALE)
+    brush_radius_px = min(brush_radius_px, STROKE_MAX_BORDER_FRAC * min_dim)
     spot = {
         "kind": "stroke",
         "path": [[float(p[0]), float(p[1])] for p in path_full],

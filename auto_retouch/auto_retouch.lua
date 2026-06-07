@@ -50,6 +50,122 @@ script_data.show = nil
 -- Helper functions
 -- ===================================================================
 
+-- Find the highest multi_priority among existing instances of an operation.
+-- Returns -1 if the operation has no entries yet (so caller can start at 0).
+-- Note: XMP entries span multiple lines, so we collapse newlines first.
+local function find_max_multi_priority(xmp_content, operation)
+  local flat = xmp_content:gsub("\n", " ")
+  local max_priority = -1
+
+  for entry in flat:gmatch('<rdf:li%s.-/>') do
+    local op = entry:match('darktable:operation="([^"]+)"')
+    if op == operation then
+      local priority = tonumber(entry:match('darktable:multi_priority="(%d+)"')) or 0
+      if priority > max_priority then
+        max_priority = priority
+      end
+    end
+  end
+
+  dlog.msg(dlog.info, "find_max_multi_priority",
+    string.format("Max multi_priority for %s=%d", operation, max_priority))
+  return max_priority
+end
+
+-- Canonical built-in module pipe order, keyed by darktable:iop_order_version.
+-- Images using a built-in order store only the version number (no explicit
+-- iop_order_list), but a second module instance cannot be placed without an
+-- explicit list. These templates were captured verbatim from darktable-written
+-- sidecars; each lists every module once at priority 0. The duplicate is added
+-- by add_instance_to_iop_order. If darktable ever writes a new version number,
+-- add its template here (capture by manually duplicating a module in darkroom).
+local IOP_ORDER_TEMPLATES = {
+  ["4"] = "rawprepare,0,invert,0,temperature,0,rasterfile,0,highlights,0,cacorrect,0,hotpixels,0,rawdenoise,0,demosaic,0,denoiseprofile,0,bilateral,0,rotatepixels,0,scalepixels,0,lens,0,cacorrectrgb,0,hazeremoval,0,ashift,0,flip,0,enlargecanvas,0,overlay,0,clipping,0,liquify,0,spots,0,retouch,0,exposure,0,mask_manager,0,tonemap,0,toneequal,0,crop,0,graduatednd,0,profile_gamma,0,equalizer,0,colorin,0,channelmixerrgb,0,diffuse,0,censorize,0,negadoctor,0,blurs,0,primaries,0,nlmeans,0,colorchecker,0,defringe,0,atrous,0,lowpass,0,highpass,0,sharpen,0,colortransfer,0,colormapping,0,channelmixer,0,basicadj,0,colorbalance,0,colorequal,0,colorbalancergb,0,rgbcurve,0,rgblevels,0,basecurve,0,filmic,0,sigmoid,0,agx,0,filmicrgb,0,lut3d,0,colisa,0,tonecurve,0,levels,0,shadhi,0,zonesystem,0,globaltonemap,0,relight,0,bilat,0,colorcorrection,0,colorcontrast,0,velvia,0,vibrance,0,colorzones,0,bloom,0,colorize,0,lowlight,0,monochrome,0,grain,0,soften,0,splittoning,0,vignette,0,colorreconstruct,0,finalscale,0,colorout,0,clahe,0,overexposed,0,rawoverexposed,0,dither,0,borders,0,watermark,0,gamma,0",
+}
+
+-- Register a new module instance in darktable's pipe-order list.
+-- darktable stores module order in the attribute
+--   darktable:iop_order_list="op,priority,op,priority,..."
+-- A new instance (multi_priority > 0) MUST appear here or darktable silently
+-- drops its history entry and the instance never shows up. The base instance
+-- (priority already present, typically 0) needs no change.
+-- When the image uses a built-in order (no iop_order_list), we synthesize the
+-- full list from IOP_ORDER_TEMPLATES so the new instance can be placed.
+-- Returns the (possibly unchanged) xmp_content and a boolean "modified".
+local function add_instance_to_iop_order(xmp_content, operation, multi_priority)
+  local list = xmp_content:match('darktable:iop_order_list="([^"]*)"')
+  local need_inject = false
+
+  if not list then
+    -- Built-in order: expand the version template into an explicit list.
+    local version = xmp_content:match('darktable:iop_order_version="(%d+)"')
+    local template = version and IOP_ORDER_TEMPLATES[version]
+    if not template then
+      dlog.msg(dlog.error, "add_instance_to_iop_order",
+        string.format("No iop_order_list and no template for iop_order_version=%s; "
+          .. "cannot add instance (capture this version's order from a manual "
+          .. "duplicate and add it to IOP_ORDER_TEMPLATES)", tostring(version)))
+      return xmp_content, false
+    end
+    list = template
+    need_inject = true
+  end
+
+  -- Tokenize into a flat array: name, priority, name, priority, ...
+  local tokens = {}
+  for tok in (list .. ","):gmatch("([^,]*),") do
+    tokens[#tokens + 1] = tok
+  end
+
+  -- Find the last entry for this operation; note if our exact pair already exists.
+  local last_idx = nil
+  local already = false
+  local i = 1
+  while i < #tokens do
+    if tokens[i] == operation then
+      last_idx = i
+      if tonumber(tokens[i + 1]) == multi_priority then
+        already = true
+      end
+    end
+    i = i + 2
+  end
+
+  if already then
+    return xmp_content, false  -- e.g. base priority 0 already listed
+  end
+  if not last_idx then
+    dlog.msg(dlog.info, "add_instance_to_iop_order",
+      string.format("Operation %s absent from iop_order_list; not inserting", operation))
+    return xmp_content, false
+  end
+
+  -- Insert the new instance immediately after the last existing one (adjacent
+  -- in pipe order). last_idx is the name token; +2/+3 land just past its pair.
+  table.insert(tokens, last_idx + 2, operation)
+  table.insert(tokens, last_idx + 3, tostring(multi_priority))
+
+  local new_list = table.concat(tokens, ",")
+  local safe_list = new_list:gsub("%%", "%%%%")  -- guard gsub replacement metachars
+  local new_content
+  if need_inject then
+    -- No attribute existed: add one right after iop_order_version, matching the
+    -- 3-space indentation darktable uses for sibling attributes. %1 keeps the
+    -- captured version number.
+    local repl = 'darktable:iop_order_version="%1"\n'
+      .. '   darktable:iop_order_list="' .. safe_list .. '"'
+    new_content = xmp_content:gsub('darktable:iop_order_version="(%d+)"', repl, 1)
+  else
+    local repl = 'darktable:iop_order_list="' .. safe_list .. '"'
+    new_content = xmp_content:gsub('darktable:iop_order_list="[^"]*"', repl, 1)
+  end
+
+  dlog.msg(dlog.info, "add_instance_to_iop_order",
+    string.format("%s %s,%d in iop_order_list",
+      need_inject and "Created list with" or "Inserted", operation, multi_priority))
+  return new_content, true
+end
+
 -- Find the highest history item num in XMP content
 local function find_max_history_num(xmp_content)
   local max_num = -1
@@ -272,24 +388,72 @@ local function create_mask_entries_xml(mask_num, brushes, group)
   return table.concat(entries, "\n")
 end
 
--- Create retouch module history XML entry
-local function create_retouch_module_xml(num, retouch_params, blendop_params)
+-- Build XML for every form in the previous (latest) masks snapshot, re-stamped
+-- to new_mask_num. darktable's masks_history is CUMULATIVE: each history step
+-- must list ALL forms active at that point, not just newly added ones. Without
+-- carrying the prior forms forward, adding a new retouch instance erases the
+-- earlier instances' forms at the new history position (they show up empty),
+-- and darktable may roll back the whole step on reload.
+-- Returns the concatenated XML, or nil if there are no prior forms to carry.
+local function carry_forward_masks_xml(xmp_content, new_mask_num)
+  -- The forms to preserve belong to existing retouch instances; their latest
+  -- cumulative snapshot sits at the mask_num equal to the highest existing
+  -- retouch history entry. We deliberately tie carry-forward to an actual
+  -- retouch entry so leftover/orphan masks (e.g. mask_num=0 cruft from removed
+  -- history) are NOT dragged into the new instance.
+  local prev_num = -1
+  for entry in xmp_content:gmatch('<rdf:li.-/>') do
+    if entry:match('darktable:operation="retouch"') then
+      local n = tonumber(entry:match('darktable:num="(%d+)"'))
+      if n and n > prev_num then prev_num = n end
+    end
+  end
+  if prev_num < 0 then return nil end
+
+  -- Re-emit each form from that snapshot under the new mask_num. (Lua patterns'
+  -- '.' matches newlines, so '<rdf:li.-/>' spans a whole multi-line entry;
+  -- history entries lack mask_num and are filtered out.)
+  local entries = {}
+  for entry in xmp_content:gmatch('<rdf:li.-/>') do
+    local n = entry:match('darktable:mask_num="(%d+)"')
+    if n and tonumber(n) == prev_num then
+      entries[#entries + 1] = (entry:gsub('darktable:mask_num="%d+"',
+        string.format('darktable:mask_num="%d"', new_mask_num)))
+    end
+  end
+
+  if #entries == 0 then return nil end
+  dlog.msg(dlog.info, "carry_forward_masks_xml",
+    string.format("Carried %d forms from snapshot mask_num=%d to %d",
+      #entries, prev_num, new_mask_num))
+  return table.concat(entries, "\n")
+end
+
+-- Create retouch module history XML entry.
+-- multi_priority and multi_name make this a distinct, named module instance so
+-- repeated runs add new retouch instances instead of overwriting earlier ones.
+local function create_retouch_module_xml(num, retouch_params, blendop_params, multi_priority, multi_name)
+  -- multi_name_hand_edited="1" tells darktable the label is user-set and must be preserved
+  local hand_edited = (multi_name ~= nil and multi_name ~= "") and "1" or "0"
   return string.format([[     <rdf:li
       darktable:num="%d"
       darktable:operation="retouch"
       darktable:enabled="1"
       darktable:modversion="3"
       darktable:params="%s"
-      darktable:multi_name=""
-      darktable:multi_name_hand_edited="0"
-      darktable:multi_priority="0"
+      darktable:multi_name="%s"
+      darktable:multi_name_hand_edited="%s"
+      darktable:multi_priority="%d"
       darktable:blendop_version="14"
       darktable:blendop_params="%s"/>]],
-    num, retouch_params, blendop_params)
+    num, retouch_params, multi_name or "", hand_edited, multi_priority or 0, blendop_params)
 end
 
--- Apply retouch to source image in-place by modifying its XMP sidecar
-local function apply_retouch_in_place(image, dust_data)
+-- Apply retouch to source image in-place by modifying its XMP sidecar.
+-- multi_name is the label shown in darktable for this retouch instance (e.g.
+-- "film dust" / "sensor dust"); each call adds a NEW instance, leaving any
+-- existing retouch instances intact.
+local function apply_retouch_in_place(image, dust_data, multi_name)
   dlog.msg(dlog.info, "apply_retouch_in_place",
     string.format("Called for %s with %d spots", image.filename, dust_data.count))
 
@@ -322,11 +486,20 @@ local function apply_retouch_in_place(image, dust_data)
     local new_history_end = new_history_num + 1
     local mask_num = tostring(new_history_num)
 
-    dlog.msg(dlog.info, "apply_retouch_in_place",
-      string.format("Max history num: %d, adding retouch at num=%d", max_history_num, new_history_num))
+    -- Each run becomes its own retouch instance: pick a multi_priority above any
+    -- existing retouch instance so darktable does not overwrite earlier ones.
+    local new_multi_priority = find_max_multi_priority(xmp_content, "retouch") + 1
 
-    -- Step 1: Insert mask entries into masks_history
-    local mask_xml = create_mask_entries_xml(mask_num, dust_data.brushes, dust_data.group)
+    dlog.msg(dlog.info, "apply_retouch_in_place",
+      string.format("Max history num: %d, adding retouch at num=%d, multi_priority=%d, label=%s",
+        max_history_num, new_history_num, new_multi_priority, multi_name or ""))
+
+    -- Step 1: Insert mask entries into masks_history. The new snapshot must be
+    -- cumulative: carry forward all forms from the previous snapshot (so earlier
+    -- retouch instances keep their brushes) and append this run's new forms.
+    local new_masks_xml = create_mask_entries_xml(mask_num, dust_data.brushes, dust_data.group)
+    local carried_xml = carry_forward_masks_xml(xmp_content, new_history_num)
+    local mask_xml = carried_xml and (carried_xml .. "\n" .. new_masks_xml) or new_masks_xml
 
     local has_masks_history = xmp_content:find("<darktable:masks_history>")
     if has_masks_history then
@@ -364,7 +537,8 @@ local function apply_retouch_in_place(image, dust_data)
 
     -- Step 2: Insert retouch history entry
     local retouch_xml = create_retouch_module_xml(
-      new_history_num, dust_data.params.retouch, dust_data.params.blendop)
+      new_history_num, dust_data.params.retouch, dust_data.params.blendop,
+      new_multi_priority, multi_name)
 
     local before_seq_end = xmp_content:find("</rdf:Seq>%s*</darktable:history>")
     if not before_seq_end then
@@ -374,6 +548,16 @@ local function apply_retouch_in_place(image, dust_data)
     xmp_content = xmp_content:sub(1, before_seq_end - 1) .. "\n" ..
                   retouch_xml .. "\n" ..
                   xmp_content:sub(before_seq_end)
+
+    -- Step 2b: Register this instance in the module pipe-order list, otherwise
+    -- darktable ignores the history entry for any non-base instance.
+    local iop_modified
+    xmp_content, iop_modified = add_instance_to_iop_order(xmp_content, "retouch", new_multi_priority)
+    if not iop_modified and new_multi_priority > 0 then
+      dlog.msg(dlog.error, "apply_retouch_in_place",
+        string.format("Could not register retouch instance %d in iop_order_list; "
+          .. "darktable may drop it", new_multi_priority))
+    end
 
     -- Step 3: Update history_end
     xmp_content = xmp_content:gsub('darktable:history_end="%d+"',
@@ -662,7 +846,7 @@ local function export_detect_and_apply_retouch_inplace()
         dt.print(string.format(_("Applying retouch to %s (%d spots)..."),
           original_image.filename, dust_data.count))
 
-        local success, error_msg = apply_retouch_in_place(original_image, dust_data)
+        local success, error_msg = apply_retouch_in_place(original_image, dust_data, _("film dust"))
 
         if success then
           stats.applied = stats.applied + 1
@@ -728,7 +912,7 @@ local function export_detect_and_apply_sensor_dust(keep_temp)
         dt.print(string.format(_("Applying sensor dust retouch to %s (%d spot(s))..."),
           original_image.filename, dust_data.count))
 
-        local success, error_msg = apply_retouch_in_place(original_image, dust_data)
+        local success, error_msg = apply_retouch_in_place(original_image, dust_data, _("sensor dust"))
 
         if success then
           stats.applied = stats.applied + 1
