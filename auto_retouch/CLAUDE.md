@@ -6,14 +6,38 @@
 2. Lua reads each image's XMP sidecar to extract flip/crop transform params, writes `transform_params.txt`
 3. Lua calls `auto_retouch/detect_dust.py` via `conda run -n autocrop` with file paths as arguments
 4. Python detects bright dust spots using local background subtraction (OpenCV), generates darktable retouch module binary data (brush masks, group mask, retouch params, blendop params), writes `dust_results.txt`
-5. Python applies inverse coordinate transforms (undo crop, undo flip)
- so mask coords are in darktable's original image space
+5. Python applies inverse coordinate transforms (undo crop, undo flip, undo ashift when the
+ "rotate and perspective" module is active) so mask coords are in darktable's raw image space.
+ NOTE: lens correction is not yet inverted (small constant offset, present on all frames).
 6. Lua parses results, injects retouch history entry + mask entries into each source image's XMP sidecar
 7. Lua calls `image:apply_sidecar(xmp_path)` to reload the modified XMP into darktable
 
 ### Testing approach
-There is folder `tests` with saved baseline of 'reasonably good detection' and `tests/run_quality_tests.py` script which runs the current algorithm and compares how different it is from the baseline.
-If you make any change to algorithm in `detect_dust.py` you must test yourself via the run_quality_tests.py that your proposed changes do not create large regression.
+
+The `tests` folder holds a saved baseline of 'reasonably good detection' plus checks that run
+against it. **Two obligations, not one** — running the suite is necessary but not sufficient:
+
+1. **RUN it after any change to `detect_dust.py`.** `conda run -n autocrop python
+   tests/run_quality_tests.py` — confirm no large regression vs the baseline. Also run the
+   focused tests: `tests/test_source_invariants.py`, `tests/test_ashift_transform.py`.
+
+2. **EXTEND it whenever you add a feature.** The suite only checks what someone taught it to
+   check — a passing run on an un-extended suite is a false sense of safety. This is exactly how
+   stroke healing shipped unverified: `run_quality_tests` only diffed *dots* against the baseline,
+   so stroke sources/paths/radii were invisible to it. When you add anything, ask "what new data
+   or property did I just create, and what here would catch it regressing?" and add that:
+   - **New detected data** (new spot kind / field): make sure the baseline diff covers it, OR add
+     a check. Regenerate the baseline (`generate_baseline.py`) ONLY after the user approves the
+     new detections — the baseline is ground truth, don't bake in unreviewed output.
+   - **New correctness property / invariant** (e.g. "healing source must not overlap the defect",
+     "a coordinate transform must round-trip"): add it to `check_spot_invariants()` in
+     run_quality_tests, or a dedicated `tests/test_*.py`. Invariants are better than baseline diffs
+     where possible — they need no baseline and state the actual requirement. Give a non-trivial
+     check its own self-test (a "test for the test") so it can't silently degrade into a no-op.
+
+What the suite currently covers: dot match/missing/FP + source/radius mismatch vs baseline;
+stroke match/missing/new counts vs baseline; per-spot source-clearance + geometry invariants
+(`check_spot_invariants`, baseline-independent); ashift inverse transform (round-trip + bbox).
 
 ### Canonical Data Principle (auto_retouch)
 
@@ -36,13 +60,13 @@ Current key fields: `cx`, `cy`, `radius_px` (raw detected, for algorithm interna
 ## Known Bugs / TODOs
 
 For auto_retouch feature:
-- [x] Detection quality: the python script may detect image features instead of actual dust spots, and miss some real dust
-- [ ] Add ability to heal sensor dust (larger, common between selected frames)
 - [x] Add ability to heal thread(fiber)-like dust — stroke detection (spec 06): elongated
       bright threads detected from the threshold binary, healed with multi-node brush strokes
       (`kind="stroke"` spots). Faint film-scratch ridge pass implemented but disabled by
       default (noise-floor FPs); human adds faint scratches via the debug UI.
 - [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
-- [x] Orientation/rotation not handled: fixed by treating flip as a full darktable bitmask (FLIP_X=1, FLIP_Y=2, SWAP_XY=4) and applying the inverse in reverse order in `_export_to_original`
-- [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass. But currently, second application to xmp does not add new shapes but replaces previous ones. Consider adding second retouch instance. 
+- [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass.
+- [ ] add full negadoctor automation
+- [ ] generalize debug ui - viewer is common part, other features are like modules to it, add other detectors to UI, not only retouching
+- [ ] speed up retouching (GPU?)
