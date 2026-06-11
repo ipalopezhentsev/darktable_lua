@@ -34,3 +34,5 @@ For auto_crop feature:
 - [ ] in auto_crop.lua, implement the same bugfix as in auto_retouch where it erroneously could delete previous history if there were some disabled steps in it. (check commit 7b444a3f77be05cf064097cef4e4eb4823ce7664)
 - [ ] Create spec/current algo description like for auto_retouch feature
 - [ ] create baseline and tests - any improvement should base on them and not deviate
+- [ ] showing diff vs baseline in debug UI
+- [ ] fine tune via debug ui marking like I did with threaded dust

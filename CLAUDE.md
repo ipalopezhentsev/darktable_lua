@@ -32,3 +32,6 @@ When writing Lua scripts, follow rules in @docs/lua_rules.md
 - `lib/dtutils`, `lib/dtutils.file`, `lib/dtutils.system`, `lib/dtutils.log`, `lib/dtutils.debug` (darktable utility libs, not in this repo)
 - Python 3.11 via conda `autocrop` environment
 
+## General TODO
+
+- Add auto negadoctor

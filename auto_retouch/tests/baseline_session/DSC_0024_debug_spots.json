@@ -1,6 +1,6 @@
 {
   "stem": "DSC_0024",
-  "image_path": "C:\\Users\\ilyap\\AppData\\Local\\darktable\\lua\\ilya\\auto_retouch\\tests\\images\\DSC_0024.jpg",
+  "image_path": "c:\\Users\\ilyap\\AppData\\Local\\darktable\\lua\\ilya\\auto_retouch\\tests\\images\\DSC_0024.jpg",
   "width": 2670,
   "height": 4032,
   "detected": [
@@ -17627,5 +17627,7 @@
     "SENSOR_MAX_CANDIDATES_FOR_CONSENSUS": 300,
     "SENSOR_MAX_CORRECTION_TEXTURE": 8.0,
     "SENSOR_MAX_SOURCE_TEXTURE": 8.0
-  }
+  },
+  "processing_time_s": 12.31,
+  "run_wall_time_s": 156.42
 }

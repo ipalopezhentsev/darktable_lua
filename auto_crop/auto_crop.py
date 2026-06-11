@@ -10,6 +10,7 @@ Usage: auto_crop.py <image_path> [image_path2 ...]
 import sys
 import os
 import json
+import time
 from pathlib import Path
 import cv2
 import numpy as np
@@ -781,12 +782,14 @@ def write_crop_results(results, output_path):
     except Exception as e:
         print(f"Error writing results file: {e}")
 
-def write_debug_crop_json(debug_entries, output_dir):
+def write_debug_crop_json(debug_entries, output_dir, wall_time_s=None):
     """Write per-image {stem}_debug_crop.json files for the crop debug UI.
 
     debug_entries: list of dicts with stem, image_path, width, height,
     crop {left,top,right,bottom} (%), confidence {left,top,right,bottom},
     detected_region [x,y,w,h] (pre-tightening px rect).
+    wall_time_s: total wall-clock seconds of the whole run (session-level,
+    persisted into every per-image file as "run_wall_time_s").
     """
     constants = {k: v for k, v in globals().items()
                  if k.isupper() and isinstance(v, (int, float))}
@@ -794,6 +797,8 @@ def write_debug_crop_json(debug_entries, output_dir):
     for entry in debug_entries:
         data = dict(entry)
         data["constants"] = constants
+        if wall_time_s is not None:
+            data["run_wall_time_s"] = round(float(wall_time_s), 2)
         out_path = os.path.join(output_dir, f"{entry['stem']}_debug_crop.json")
         with open(out_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -866,6 +871,8 @@ def main():
     # Determine output directory from first image path
     output_dir = image_files[0].parent if image_files else Path.cwd()
 
+    wall_t0 = time.perf_counter()
+
     for idx, img_file in enumerate(image_files, 1):
         if len(image_files) > 1:
             print(f"\n[{idx}/{len(image_files)}]")
@@ -875,7 +882,10 @@ def main():
         print(f"Size: {img_file.stat().st_size:,} bytes")
 
         # Detect margins and calculate crop percentages
+        t0 = time.perf_counter()
         result, error = detect_content_bounds(img_file, save_visualization=save_visualization)
+        elapsed = time.perf_counter() - t0
+        print(f"Processing time: {elapsed:.2f}s")
 
         if error:
             print(f"Error: {error}")
@@ -939,7 +949,10 @@ def main():
                     "bottom": result['confidence_bottom'],
                 },
                 "detected_region": [int(v) for v in result['detected_region']],
+                "processing_time_s": round(elapsed, 2),
             })
+
+    wall_time = time.perf_counter() - wall_t0
 
     # Summary
     print("\n" + "=" * 60)
@@ -947,13 +960,14 @@ def main():
         print(f"Processing complete: {success_count} succeeded, {error_count} failed")
     else:
         print("Processing complete")
+    print(f"Total wall time: {wall_time:.1f}s for {len(image_files)} image(s)")
 
     # Write crop results file
     results_output_path = output_dir / "crop_results.txt"
     write_crop_results(all_results, results_output_path)
 
     if debug_ui and debug_entries:
-        write_debug_crop_json(debug_entries, str(output_dir))
+        write_debug_crop_json(debug_entries, str(output_dir), wall_time_s=wall_time)
         import subprocess
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
         print(f"Launching debug UI: {debug_ui_script}", flush=True)

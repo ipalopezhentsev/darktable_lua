@@ -39,12 +39,14 @@ class DustDebugUI(DebugUIBase):
     EMPTY_SESSION_MESSAGE = "No *_debug_spots.json files found in:"
     ITEM_PANEL_TITLE = "Spots:"
     CENTER_BUTTON_TEXT = "Center on spot"
-    ITEM_COLS    = ("idx", "cx", "cy", "r", "ctr", "tex", "fp")
+    ITEM_COLS    = ("idx", "cx", "cy", "r", "ctr", "tex", "fp", "nt")
     ITEM_HEADERS = {"idx": "#",   "cx": "cx",  "cy": "cy",
-                    "r":   "r",   "ctr": "ctr", "tex": "tex", "fp": "FP"}
+                    "r":   "r",   "ctr": "ctr", "tex": "tex", "fp": "FP",
+                    "nt": "✎"}
     ITEM_WIDTHS  = {"idx": 30, "cx": 46, "cy": 46,
-                    "r":  30, "ctr": 40, "tex": 36, "fp": 24}
-    ITEM_ANCHORS = {"fp": "center"}
+                    "r":  30, "ctr": 40, "tex": 36, "fp": 24, "nt": 22}
+    ITEM_ANCHORS = {"fp": "center", "nt": "center"}
+    NOTE_COLUMN  = "nt"
 
     # ------------------------------------------------------------------
     # Session / annotation lifecycle
@@ -68,6 +70,7 @@ class DustDebugUI(DebugUIBase):
             "radius_overrides": {},   # {spot_idx: corrected_radius_px}
             "path_overrides": {},     # {spot_idx: [[x,y],...]} edited stroke centerlines
             "missed_strokes": [],     # [{"path":[[x,y],...], "stroke_width_px":w}] hand-drawn threads
+            "spot_notes": {},         # {spot_idx: str} user text notes on detected spots
             "source_mismatches": [],  # list from quality test diff sessions
             "radius_mismatches": [],  # list from quality test diff sessions
         }
@@ -100,6 +103,16 @@ class DustDebugUI(DebugUIBase):
             for k, v in sorted(ann.get("path_overrides", {}).items())
         ]
 
+        # Serialize spot_notes as list of {spot_idx, cx, cy, note} — coords
+        # included so the notes stay interpretable without the session JSON
+        spot_notes_list = []
+        for k, v in sorted(ann.get("spot_notes", {}).items()):
+            entry = {"spot_idx": k, "note": v}
+            if k < len(detected):
+                entry["cx"] = detected[k]["cx"]
+                entry["cy"] = detected[k]["cy"]
+            spot_notes_list.append(entry)
+
         return {
             "stem": stem,
             "false_positives": fp_list,
@@ -108,6 +121,7 @@ class DustDebugUI(DebugUIBase):
             "source_overrides": src_overrides_list,
             "radius_overrides": radius_overrides_list,
             "path_overrides": path_overrides_list,
+            "spot_notes": spot_notes_list,
             "source_mismatches": ann.get("source_mismatches", []),
             "radius_mismatches": ann.get("radius_mismatches", []),
         }
@@ -151,6 +165,14 @@ class DustDebugUI(DebugUIBase):
             except (KeyError, ValueError, TypeError):
                 pass
         self.annotations[stem]["path_overrides"] = path_overrides
+        # Restore spot notes: list of {spot_idx, note}
+        spot_notes = {}
+        for entry in data.get("spot_notes", []):
+            try:
+                spot_notes[int(entry["spot_idx"])] = str(entry["note"])
+            except (KeyError, ValueError, TypeError):
+                pass
+        self.annotations[stem]["spot_notes"] = spot_notes
         # Load source/radius mismatches from quality test diff sessions
         self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
         self.annotations[stem]["radius_mismatches"] = data.get("radius_mismatches", [])
@@ -242,6 +264,8 @@ class DustDebugUI(DebugUIBase):
             "  M — mark false positive\n"
             "  C — clear FP mark\n"
             "  Del — remove missed marker\n"
+            "  Note box — comment on sel.\n"
+            "    object (saves as you type)\n"
             "  H — hide/show all markers\n"
             "  +/- — zoom ×2 / ÷2\n"
             "  Arrows — pan  (Shift=fast)\n"
@@ -270,24 +294,29 @@ class DustDebugUI(DebugUIBase):
         self.remove_missed_btn.pack(fill=tk.X, pady=1)
 
     def bind_feature_keys(self):
-        self.root.bind("<m>", lambda e: self._mark_fp())
-        self.root.bind("<M>", lambda e: self._mark_fp())
-        self.root.bind("<c>", lambda e: self._clear_fp())
-        self.root.bind("<C>", lambda e: self._clear_fp())
-        self.root.bind("<Delete>", lambda e: self._remove_missed())
-        self.root.bind("<BackSpace>", lambda e: self._remove_missed())
-        self.root.bind("<r>", lambda e: self._mark_rejected_as_missed())
-        self.root.bind("<R>", lambda e: self._mark_rejected_as_missed())
-        self.root.bind("<t>", lambda e: self._toggle_thread_draw())
-        self.root.bind("<T>", lambda e: self._toggle_thread_draw())
-        self.root.bind("<Return>", lambda e: self._finish_thread())
-        self.root.bind("<Escape>", lambda e: self._cancel_thread())
+        self.bind_key("<m>", lambda e: self._mark_fp())
+        self.bind_key("<M>", lambda e: self._mark_fp())
+        self.bind_key("<c>", lambda e: self._clear_fp())
+        self.bind_key("<C>", lambda e: self._clear_fp())
+        self.bind_key("<Delete>", lambda e: self._remove_missed())
+        self.bind_key("<BackSpace>", lambda e: self._remove_missed())
+        self.bind_key("<r>", lambda e: self._mark_rejected_as_missed())
+        self.bind_key("<R>", lambda e: self._mark_rejected_as_missed())
+        self.bind_key("<t>", lambda e: self._toggle_thread_draw())
+        self.bind_key("<T>", lambda e: self._toggle_thread_draw())
+        self.bind_key("<Return>", lambda e: self._finish_thread())
+        self.bind_key("<Escape>", lambda e: self._cancel_thread())
 
     def image_status_text(self, img_dict):
         detected = img_dict.get("detected") or []
         rejected_list = img_dict.get("rejected") or []
+        t = img_dict.get("processing_time_s")
+        time_str = f"\nprocessed in {t:.1f}s" if t is not None else ""
+        if self.run_wall_time_s is not None:
+            time_str += f"\nrun total {self.run_wall_time_s:.1f}s"
         return (f"{img_dict['width']} × {img_dict['height']} px\n"
-                f"{len(detected)} detected\n{len(rejected_list)} rejected candidates")
+                f"{len(detected)} detected\n{len(rejected_list)} rejected candidates"
+                f"{time_str}")
 
     def default_info_text(self):
         return ("No marker selected.\n"
@@ -295,6 +324,48 @@ class DustDebugUI(DebugUIBase):
 
     def update_counts(self):
         self._update_count_label()
+
+    # ------------------------------------------------------------------
+    # Note hooks (free-text user annotation per object)
+    # ------------------------------------------------------------------
+
+    def get_selected_note(self):
+        ann = self.annotations[self.images[self.current_idx]["stem"]]
+        if len(self.selected_detected) == 1:
+            idx = next(iter(self.selected_detected))
+            return ann["spot_notes"].get(idx, "")
+        if len(self.selected_missed) == 1:
+            idx = next(iter(self.selected_missed))
+            if idx < len(ann["missed_dust"]):
+                return ann["missed_dust"][idx].get("note", "")
+        if self.selected_missed_stroke is not None:
+            ms_list = ann.get("missed_strokes", [])
+            if self.selected_missed_stroke < len(ms_list):
+                return ms_list[self.selected_missed_stroke].get("note", "")
+        return None
+
+    def set_selected_note(self, text):
+        ann = self.annotations[self.images[self.current_idx]["stem"]]
+        if len(self.selected_detected) == 1:
+            idx = next(iter(self.selected_detected))
+            if text:
+                ann["spot_notes"][idx] = text
+            else:
+                ann["spot_notes"].pop(idx, None)
+        elif len(self.selected_missed) == 1:
+            idx = next(iter(self.selected_missed))
+            if idx < len(ann["missed_dust"]):
+                if text:
+                    ann["missed_dust"][idx]["note"] = text
+                else:
+                    ann["missed_dust"][idx].pop("note", None)
+        elif self.selected_missed_stroke is not None:
+            ms_list = ann.get("missed_strokes", [])
+            if self.selected_missed_stroke < len(ms_list):
+                if text:
+                    ms_list[self.selected_missed_stroke]["note"] = text
+                else:
+                    ms_list[self.selected_missed_stroke].pop("note", None)
 
     # ------------------------------------------------------------------
     # Drawing
@@ -782,6 +853,7 @@ class DustDebugUI(DebugUIBase):
             self.remove_missed_btn.config(state=tk.NORMAL)
             self._set_info_text(
                 f"Missed thread #{idx} selected.\n  Del = remove it.")
+            self._refresh_note_entry()
             self._redraw_markers()
             return
 
@@ -1124,9 +1196,11 @@ class DustDebugUI(DebugUIBase):
         missed = ann["missed_dust"]
         missed_strokes = ann.get("missed_strokes", [])
 
+        spot_notes = ann.get("spot_notes", {})
         rows = []
         for i, spot in enumerate(detected):
             is_fp = i in ann["false_positives"]
+            has_note = i in spot_notes
             rows.append({
                 "iid": f"det_{i}",
                 "values": (i,
@@ -1135,25 +1209,30 @@ class DustDebugUI(DebugUIBase):
                            int(spot["brush_radius_px"]),
                            f"{spot['contrast']:.1f}",
                            f"{spot['texture']:.1f}",
-                           "●" if is_fp else ""),
+                           "●" if is_fp else "",
+                           "✎" if has_note else ""),
                 "tag": "fp" if is_fp else "det",
                 "kind": "detected", "idx": i,
                 "sort": {"idx": i,
                          "cx":  spot["cx"],            "cy":  spot["cy"],
                          "r":   spot["brush_radius_px"],
                          "ctr": spot["contrast"],      "tex": spot["texture"],
-                         "fp":  1 if is_fp else 0},
+                         "fp":  1 if is_fp else 0,
+                         "nt":  1 if has_note else 0},
             })
 
         for i, md in enumerate(missed):
+            has_note = bool(md.get("note"))
             rows.append({
                 "iid": f"missed_{i}",
-                "values": (f"m{i}", int(md["cx"]), int(md["cy"]), "", "", "", ""),
+                "values": (f"m{i}", int(md["cx"]), int(md["cy"]), "", "", "", "",
+                           "✎" if has_note else ""),
                 "tag": "missed",
                 "kind": "missed", "idx": i,
                 "sort": {"idx": 100000 + i,
                          "cx":  md["cx"],  "cy":  md["cy"],
-                         "r": -1, "ctr": -1, "tex": -1, "fp": 0},
+                         "r": -1, "ctr": -1, "tex": -1, "fp": 0,
+                         "nt": 1 if has_note else 0},
             })
 
         for i, ms in enumerate(missed_strokes):
@@ -1162,14 +1241,17 @@ class DustDebugUI(DebugUIBase):
                 continue
             mid = path[len(path) // 2]
             cx, cy = mid[0], mid[1]
+            has_note = bool(ms.get("note"))
             rows.append({
                 "iid": f"mstroke_{i}",
-                "values": (f"t{i}", int(cx), int(cy), "", "", "", ""),
+                "values": (f"t{i}", int(cx), int(cy), "", "", "", "",
+                           "✎" if has_note else ""),
                 "tag": "missed",
                 "kind": "missed_stroke", "idx": i,
                 "sort": {"idx": 200000 + i,
                          "cx": cx, "cy": cy,
-                         "r": -1, "ctr": -1, "tex": -1, "fp": 0},
+                         "r": -1, "ctr": -1, "tex": -1, "fp": 0,
+                         "nt": 1 if has_note else 0},
             })
         return rows
 
@@ -1207,6 +1289,8 @@ class DustDebugUI(DebugUIBase):
             return f"det_{next(iter(self.selected_detected))}"
         if self.selected_missed:
             return f"missed_{next(iter(self.selected_missed))}"
+        if self.selected_missed_stroke is not None:
+            return f"mstroke_{self.selected_missed_stroke}"
         return None
 
     def selection_center(self):
@@ -1290,10 +1374,16 @@ class DustDebugUI(DebugUIBase):
             src_overrides = ann.get("source_overrides", {})
 
             radius_overrides = ann.get("radius_overrides", {})
+            spot_notes = ann.get("spot_notes", {})
+            missed_notes = [(i, m) for i, m in enumerate(missed_list) if m.get("note")]
+            stroke_notes = [(i, ms) for i, ms in enumerate(ann.get("missed_strokes", []))
+                            if ms.get("note")]
+            has_notes = bool(spot_notes or missed_notes or stroke_notes)
             total_fp += len(fp_indices)
             total_missed += len(missed_list)
             total_src_repositions += len(src_overrides)
-            has_annotations = bool(fp_indices or missed_list or src_overrides or radius_overrides)
+            has_annotations = bool(fp_indices or missed_list or src_overrides
+                                   or radius_overrides or has_notes)
             if has_annotations:
                 images_with_annotations += 1
 
@@ -1352,6 +1442,26 @@ class DustDebugUI(DebugUIBase):
                     orig_str = f"{orig_r:.1f}" if isinstance(orig_r, float) else str(orig_r)
                     lines.append(
                         f"    Spot #{spot_idx}: corrected={corr_r:.1f}px  detected={orig_str}px")
+
+            # User notes (free-text comments on objects)
+            if has_notes:
+                lines.append("")
+                lines.append("  USER NOTES (free-text comments on objects):")
+                for i in sorted(spot_notes):
+                    if i < len(detected):
+                        s = detected[i]
+                        lines.append(f"    Detected #{i} (cx={s['cx']:.0f}, "
+                                     f"cy={s['cy']:.0f}): {spot_notes[i]}")
+                    else:
+                        lines.append(f"    Detected #{i}: {spot_notes[i]}")
+                for i, m in missed_notes:
+                    lines.append(f"    Missed dust #{i} (cx={m['cx']:.0f}, "
+                                 f"cy={m['cy']:.0f}): {m['note']}")
+                for i, ms in stroke_notes:
+                    path = ms.get("path", [])
+                    mid = path[len(path) // 2] if path else (0, 0)
+                    lines.append(f"    Missed thread #{i} (mid cx={mid[0]:.0f}, "
+                                 f"cy={mid[1]:.0f}): {ms['note']}")
 
             # Rejected candidates (for context)
             if rejected_list:

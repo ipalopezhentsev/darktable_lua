@@ -107,6 +107,9 @@ class DebugUIBase:
         self.data = {"images": images, "constants": constants}
         self.images = images
         self.constants = constants
+        # Total wall-clock time of the detection run that produced this
+        # session (session-level; duplicated into every per-image file)
+        self.run_wall_time_s = images[0].get("run_wall_time_s")
 
         # Per-image annotation state (schema defined by the subclass)
         self.annotations = {}
@@ -385,26 +388,26 @@ class DebugUIBase:
         self.canvas.bind("<Button-4>", self._on_mousewheel)          # Linux scroll up
         self.canvas.bind("<Button-5>", self._on_mousewheel)          # Linux scroll down
         self.canvas.bind("<Configure>", self._on_canvas_configure)
-        self.root.bind("<f>", lambda e: self._fit_to_window())
-        self.root.bind("<F>", lambda e: self._fit_to_window())
-        self.root.bind("<h>", lambda e: self._toggle_hide_markers())
-        self.root.bind("<H>", lambda e: self._toggle_hide_markers())
-        self.root.bind("<equal>", lambda e: self._zoom_step(2.0))    # + key (no shift)
-        self.root.bind("<plus>", lambda e: self._zoom_step(2.0))     # + key (with shift)
-        self.root.bind("<minus>", lambda e: self._zoom_step(0.5))
+        self.bind_key("<f>", lambda e: self._fit_to_window())
+        self.bind_key("<F>", lambda e: self._fit_to_window())
+        self.bind_key("<h>", lambda e: self._toggle_hide_markers())
+        self.bind_key("<H>", lambda e: self._toggle_hide_markers())
+        self.bind_key("<equal>", lambda e: self._zoom_step(2.0))    # + key (no shift)
+        self.bind_key("<plus>", lambda e: self._zoom_step(2.0))     # + key (with shift)
+        self.bind_key("<minus>", lambda e: self._zoom_step(0.5))
         pan_step = 80
         pan_big  = 300
-        self.root.bind("<Left>",          lambda e: self._pan_by( pan_step, 0))
-        self.root.bind("<Right>",         lambda e: self._pan_by(-pan_step, 0))
-        self.root.bind("<Up>",            lambda e: self._pan_by(0,  pan_step))
-        self.root.bind("<Down>",          lambda e: self._pan_by(0, -pan_step))
-        self.root.bind("<Shift-Left>",    lambda e: self._pan_by( pan_big, 0))
-        self.root.bind("<Shift-Right>",   lambda e: self._pan_by(-pan_big, 0))
-        self.root.bind("<Shift-Up>",      lambda e: self._pan_by(0,  pan_big))
-        self.root.bind("<Shift-Down>",    lambda e: self._pan_by(0, -pan_big))
-        self.root.bind("<space>",         lambda e: self._nav_image(+1))
-        self.root.bind("<b>",             lambda e: self._nav_image(-1))
-        self.root.bind("<B>",             lambda e: self._nav_image(-1))
+        self.bind_key("<Left>",          lambda e: self._pan_by( pan_step, 0))
+        self.bind_key("<Right>",         lambda e: self._pan_by(-pan_step, 0))
+        self.bind_key("<Up>",            lambda e: self._pan_by(0,  pan_step))
+        self.bind_key("<Down>",          lambda e: self._pan_by(0, -pan_step))
+        self.bind_key("<Shift-Left>",    lambda e: self._pan_by( pan_big, 0))
+        self.bind_key("<Shift-Right>",   lambda e: self._pan_by(-pan_big, 0))
+        self.bind_key("<Shift-Up>",      lambda e: self._pan_by(0,  pan_big))
+        self.bind_key("<Shift-Down>",    lambda e: self._pan_by(0, -pan_big))
+        self.bind_key("<space>",         lambda e: self._nav_image(+1))
+        self.bind_key("<b>",             lambda e: self._nav_image(-1))
+        self.bind_key("<B>",             lambda e: self._nav_image(-1))
         self.bind_feature_keys()
 
         # Bottom panel
@@ -431,6 +434,26 @@ class DebugUIBase:
         self.info_text.pack(fill=tk.BOTH, expand=True)
         self._set_info_text(self.default_info_text())
 
+        # Note entry: free-text user annotation for the selected object.
+        # Saved live on every keystroke into the per-image annotations JSON
+        # (and the debug report) so the annotation session can be handed over
+        # for algorithm tuning. Enter/Esc just return focus to the canvas.
+        note_frame = tk.Frame(info_frame, bg="#484848")
+        note_frame.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(note_frame, text="Note:", bg="#484848", fg="#c0c0c0",
+                 font=("", 9, "bold")).pack(side=tk.LEFT)
+        self.note_var = tk.StringVar()
+        self._note_refreshing = False
+        self.note_var.trace_add("write", lambda *args: self._on_note_changed())
+        self.note_entry = tk.Entry(note_frame, textvariable=self.note_var,
+                                   bg="#363636", fg="white",
+                                   insertbackground="white",
+                                   disabledbackground="#404040",
+                                   relief=tk.FLAT, state=tk.DISABLED)
+        self.note_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        self.note_entry.bind("<Return>", self._on_note_done)
+        self.note_entry.bind("<Escape>", self._on_note_done)
+
         # Buttons
         btn_frame = tk.Frame(bottom, bg="#484848")
         btn_frame.pack(side=tk.RIGHT, padx=8, pady=6)
@@ -449,6 +472,79 @@ class DebugUIBase:
         self.hide_btn = tk.Button(btn_frame, text="Hide Markers  (H)",
                                   command=self._toggle_hide_markers, **btn_cfg)
         self.hide_btn.pack(fill=tk.X, pady=1)
+
+    # ------------------------------------------------------------------
+    # Key binding helper (focus-aware)
+    # ------------------------------------------------------------------
+
+    def bind_key(self, sequence, fn):
+        """root.bind that ignores the key while a text-input widget has focus,
+        so typing in the note entry doesn't trigger shortcuts."""
+        def handler(event):
+            w = self.root.focus_get()
+            if isinstance(w, (tk.Entry, tk.Text)):
+                return
+            fn(event)
+        self.root.bind(sequence, handler)
+
+    # ------------------------------------------------------------------
+    # Note entry (per-object user annotation)
+    # ------------------------------------------------------------------
+
+    def get_selected_note(self) -> "str | None":
+        """Note text of the currently selected object ("" when none stored),
+        or None when no single annotatable object is selected.
+        Subclasses override."""
+        return None
+
+    def set_selected_note(self, text):
+        """Store the note text on the selected object (empty text removes it).
+        Subclasses override."""
+
+    NOTE_COLUMN = None   # item-table column id for the note marker (e.g. "nt")
+
+    def _refresh_note_entry(self):
+        self._note_refreshing = True
+        try:
+            note = self.get_selected_note()
+            if note is None:
+                self.note_var.set("")
+                self.note_entry.config(state=tk.DISABLED)
+            else:
+                self.note_entry.config(state=tk.NORMAL)
+                self.note_var.set(note)
+        finally:
+            self._note_refreshing = False
+
+    def _on_note_changed(self):
+        """Live-save the note on every keystroke."""
+        if self._note_refreshing:
+            return
+        if self.get_selected_note() is None:
+            return
+        self.set_selected_note(self.note_var.get().strip())
+        self._auto_save(self.images[self.current_idx]["stem"])
+        self._update_note_marker()
+
+    def _update_note_marker(self):
+        """Refresh the selected row's note-marker cell in place (no full
+        repopulate, so the user's column sort survives typing)."""
+        col = self.NOTE_COLUMN
+        if not col:
+            return
+        iid = self.selected_row_iid()
+        if not iid or not self.item_tree.exists(iid):
+            return
+        marker = "✎" if self.get_selected_note() else ""
+        self.item_tree.set(iid, col, marker)
+        row = self.item_list_data.get(iid)
+        if row is not None:
+            row["sort"][col] = 1 if marker else 0
+
+    def _on_note_done(self, event=None):
+        """Enter/Esc in the note entry: hand focus back to the canvas so
+        keyboard shortcuts work again (the note is already saved live)."""
+        self.canvas.focus_set()
 
     # ------------------------------------------------------------------
     # Left-panel helpers for subclasses
@@ -520,6 +616,7 @@ class DebugUIBase:
         self._redraw()
         self.update_counts()
         self._populate_items_list()
+        self._refresh_note_entry()
 
         # Highlight selected row and scroll to it
         self._highlight_lb_row(idx)
@@ -627,6 +724,8 @@ class DebugUIBase:
         self.pan_offset_at_start = None
 
     def _on_left_press(self, event):
+        # Reclaim keyboard focus from the note entry so shortcuts work again
+        self.canvas.focus_set()
         if self.handle_press_override(event):
             return
         self.drag_start = (event.x, event.y)
@@ -761,6 +860,7 @@ class DebugUIBase:
     def _clear_selection(self):
         self.reset_selection()
         self._set_info_text(self.default_info_text())
+        self._refresh_note_entry()
         self._redraw_markers()
 
     # ------------------------------------------------------------------
@@ -1011,6 +1111,8 @@ class DebugUIBase:
         finally:
             self._syncing_selection = False
 
+        self._refresh_note_entry()
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
@@ -1054,8 +1156,10 @@ class DebugUIBase:
             f"Generated: {now}",
             f"Export dir: {self.session_dir}",
             f"Images processed: {len(self.images)}",
-            "",
         ]
+        if self.run_wall_time_s is not None:
+            lines.append(f"Run wall time: {self.run_wall_time_s:.1f}s")
+        lines.append("")
         lines.extend(self.report_constants_lines())
         lines.append("")
         lines.extend(self.report_body_lines())

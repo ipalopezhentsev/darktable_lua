@@ -3022,13 +3022,20 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-def write_debug_spots_json(results, image_paths_by_stem, output_dir, mode=None):
+def write_debug_spots_json(results, image_paths_by_stem, output_dir, mode=None,
+                           times_by_stem=None, wall_time_s=None):
     """Write per-image {stem}_debug_spots.json files for the debug UI.
 
     results: list of (filename_no_ext, spots_or_None, rejected_candidates, img_dims,
                       error_or_None, xmp_data_or_None).
     mode: optional session marker (e.g. "sensor") so the UI can adapt its
           title/report to the detection mode that produced the session.
+    times_by_stem: optional {stem: seconds} per-image processing times, persisted
+          as "processing_time_s" (shown in the UI, compared by the quality suite).
+    wall_time_s: optional total wall-clock seconds of the whole detection run,
+          persisted as "run_wall_time_s" in every per-image file (session-level;
+          per-image times overlap under parallel workers, so only the wall time
+          is comparable run-to-run).
     """
     constants = {k: v for k, v in globals().items()
                  if k.isupper() and isinstance(v, (int, float))}
@@ -3046,6 +3053,10 @@ def write_debug_spots_json(results, image_paths_by_stem, output_dir, mode=None):
         }
         if mode:
             data["mode"] = mode
+        if times_by_stem and filename in times_by_stem:
+            data["processing_time_s"] = round(float(times_by_stem[filename]), 2)
+        if wall_time_s is not None:
+            data["run_wall_time_s"] = round(float(wall_time_s), 2)
         out_path = os.path.join(output_dir, f"{filename}_debug_spots.json")
         with open(out_path, "w") as f:
             json.dump(data, f, indent=2, cls=NumpyEncoder)
@@ -3466,6 +3477,7 @@ def process_one_sensor_image(args):
     """Detect sensor dust candidates in one image. Top-level for multiprocessing pickling."""
     (image_path,) = args
     filename = Path(image_path).stem
+    t0 = time.perf_counter()
     buf = io.StringIO()
     candidates = []
     error = None
@@ -3483,7 +3495,9 @@ def process_one_sensor_image(args):
     except Exception as e:
         error = str(e)
         buf.write(f"  EXCEPTION: {e}\n")
-    return (filename, candidates, img_dims, error, buf.getvalue())
+    elapsed = time.perf_counter() - t0
+    buf.write(f"  [{filename}] processed in {elapsed:.1f}s\n")
+    return (filename, candidates, img_dims, error, buf.getvalue(), elapsed)
 
 
 def _compute_frame_pairwise_overlap(consensus_spots):
@@ -3517,17 +3531,20 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
     n_workers = min(cpu_count(), len(image_paths))
     print(f"Sensor dust mode: {len(image_paths)} image(s), {n_workers} worker(s)", flush=True)
 
+    wall_t0 = time.perf_counter()
     per_image_results = []
+    times_by_stem = {}
     any_errors = False
     args_list = [(p,) for p in image_paths]
 
     with Pool(processes=n_workers) as pool:
         for i, result in enumerate(pool.imap_unordered(process_one_sensor_image, args_list), 1):
-            filename, candidates, img_dims, error, log_output = result
+            filename, candidates, img_dims, error, log_output, elapsed = result
             print(log_output, end="", flush=True)
             if error:
                 any_errors = True
             per_image_results.append((filename, candidates, img_dims[0], img_dims[1]))
+            times_by_stem[filename] = elapsed
             print(f"PROGRESS|{i}|{len(image_paths)}", flush=True)
 
     consensus_spots = find_sensor_dust_consensus(per_image_results, transforms)
@@ -3690,8 +3707,12 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
     results.sort(key=lambda r: r[0])
     write_dust_results(results, output_dir)
 
+    wall_time = time.perf_counter() - wall_t0
+    print(f"\nTotal wall time: {wall_time:.1f}s for {len(image_paths)} image(s)")
+
     if debug_ui:
-        write_debug_spots_json(results, image_paths_by_stem, output_dir, mode="sensor")
+        write_debug_spots_json(results, image_paths_by_stem, output_dir, mode="sensor",
+                               times_by_stem=times_by_stem, wall_time_s=wall_time)
         import subprocess
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
         print(f"Launching debug UI: {debug_ui_script}", flush=True)
@@ -3713,6 +3734,7 @@ def process_one_image(args):
     image_path, transforms, collect_rejects, ml_model_path = args
     filename = Path(image_path).stem
 
+    t0 = time.perf_counter()
     buf = io.StringIO()
     spots = None
     rejected_candidates = []
@@ -3731,7 +3753,10 @@ def process_one_image(args):
                 ml_model_path=ml_model_path)
             if error:
                 print(f"  ERROR: {error}")
-                return (filename, None, [], (0, 0), error, None, buf.getvalue())
+                elapsed = time.perf_counter() - t0
+                buf.write(f"  [{filename}] processed in {elapsed:.1f}s\n")
+                return (filename, None, [], (0, 0), error, None, buf.getvalue(),
+                        elapsed)
 
             print(f"  Image loaded successfully")
             img = cv2.imread(str(image_path))
@@ -3784,7 +3809,10 @@ def process_one_image(args):
         buf.write(f"  EXCEPTION: {e}\n")
         error = str(e)
 
-    return (filename, spots, rejected_candidates, img_dims, error, xmp_data, buf.getvalue())
+    elapsed = time.perf_counter() - t0
+    buf.write(f"  [{filename}] processed in {elapsed:.1f}s\n")
+    return (filename, spots, rejected_candidates, img_dims, error, xmp_data,
+            buf.getvalue(), elapsed)
 
 
 # ===================================================================
@@ -3856,7 +3884,9 @@ def main():
 
     image_paths_by_stem = {Path(p).stem: p for p in image_paths}
     results = []
+    times_by_stem = {}
     any_errors = False
+    wall_t0 = time.perf_counter()
 
     n_workers = min(cpu_count(), len(image_paths))
     print(f"Running {n_workers} parallel worker(s) for {len(image_paths)} image(s)", flush=True)
@@ -3865,24 +3895,29 @@ def main():
 
     with Pool(processes=n_workers) as pool:
         for i, result in enumerate(pool.imap_unordered(process_one_image, args_list), 1):
-            filename, spots, rejected_candidates, img_dims, error, xmp_data, log_output = result
+            filename, spots, rejected_candidates, img_dims, error, xmp_data, log_output, elapsed = result
             # Print worker log sequentially (no interleaving between images)
             print(log_output, end="", flush=True)
             if error:
                 any_errors = True
             results.append((filename, spots, rejected_candidates, img_dims, error, xmp_data))
+            times_by_stem[filename] = elapsed
             # Progress sentinel read by Lua via io.popen()
             print(f"PROGRESS|{i}|{len(image_paths)}", flush=True)
 
     # Sort for deterministic output order (imap_unordered returns in completion order)
     results.sort(key=lambda r: r[0])
 
+    wall_time = time.perf_counter() - wall_t0
+    print(f"\nTotal wall time: {wall_time:.1f}s for {len(image_paths)} image(s)")
+
     # Write results file
     results_path = write_dust_results(results, output_dir)
     print(f"\nResults written to: {results_path}")
 
     if debug_ui:
-        write_debug_spots_json(results, image_paths_by_stem, output_dir)
+        write_debug_spots_json(results, image_paths_by_stem, output_dir,
+                               times_by_stem=times_by_stem, wall_time_s=wall_time)
         import subprocess
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
         print(f"Launching debug UI: {debug_ui_script}", flush=True)

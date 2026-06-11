@@ -79,3 +79,6 @@ For auto_retouch feature:
 - [ ] add full negadoctor automation
 - [x] generalize debug ui - viewer is common part, other features are like modules to it, add other detectors to UI, not only retouching — done: `common/debug_ui_base.py` is the shared viewer base; `debug_ui.py` here is `DustDebugUI` (also serves sensor sessions via the `mode="sensor"` marker written by `--sensor-dust --debug-ui`); `auto_crop/debug_ui.py` is `CropDebugUI`
 - [ ] speed up retouching (GPU?)
+- [ ] fine tune sensor dust via debug ui marking like I did with threaded dust
+- [ ] add sensor dust to regression
+- [ ] ensure debug ui can visualize new regressions vs baseline

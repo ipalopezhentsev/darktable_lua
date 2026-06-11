@@ -42,10 +42,13 @@ class CropDebugUI(DebugUIBase):
     EMPTY_SESSION_MESSAGE = "No *_debug_crop.json files found in:"
     ITEM_PANEL_TITLE = "Edges:"
     CENTER_BUTTON_TEXT = "Center on edge"
-    ITEM_COLS    = ("edge", "det", "conf", "corr", "dpx")
+    ITEM_COLS    = ("edge", "det", "conf", "corr", "dpx", "nt")
     ITEM_HEADERS = {"edge": "edge", "det": "det%", "conf": "conf",
-                    "corr": "corr%", "dpx": "Δpx"}
-    ITEM_WIDTHS  = {"edge": 48, "det": 46, "conf": 38, "corr": 46, "dpx": 40}
+                    "corr": "corr%", "dpx": "Δpx", "nt": "✎"}
+    ITEM_WIDTHS  = {"edge": 48, "det": 46, "conf": 38, "corr": 46, "dpx": 40,
+                    "nt": 22}
+    ITEM_ANCHORS = {"nt": "center"}
+    NOTE_COLUMN  = "nt"
 
     # ------------------------------------------------------------------
     # Session / annotation lifecycle
@@ -58,12 +61,14 @@ class CropDebugUI(DebugUIBase):
     def new_annotation_state(self, img_dict):
         return {
             "edge_corrections": {},   # {edge: corrected_pct (% from that edge)}
+            "edge_notes": {},         # {edge: str} free-text user notes
         }
 
     def serialize_annotations(self, stem):
         img_dict = next((d for d in self.images if d["stem"] == stem), None)
         crop = img_dict["crop"] if img_dict else {}
         corrections = self.annotations[stem]["edge_corrections"]
+        notes = self.annotations[stem]["edge_notes"]
         return {
             "stem": stem,
             "edge_corrections": {
@@ -73,6 +78,7 @@ class CropDebugUI(DebugUIBase):
                 }
                 for edge, pct in sorted(corrections.items())
             },
+            "edge_notes": {edge: note for edge, note in sorted(notes.items())},
         }
 
     def deserialize_annotations(self, img_dict, data):
@@ -85,6 +91,11 @@ class CropDebugUI(DebugUIBase):
                 except (KeyError, ValueError, TypeError):
                     pass
         self.annotations[stem]["edge_corrections"] = corrections
+        self.annotations[stem]["edge_notes"] = {
+            edge: str(note)
+            for edge, note in data.get("edge_notes", {}).items()
+            if edge in EDGES and note
+        }
 
     # ------------------------------------------------------------------
     # Edge geometry helpers
@@ -161,6 +172,8 @@ class CropDebugUI(DebugUIBase):
             "  Space/B — next/prev image\n"
             "  1/2/3/4 — select L/T/R/B\n"
             "  C — clear correction\n"
+            "  Note box — comment on sel.\n"
+            "    edge (saves as you type)\n"
             "  H — hide/show edges\n"
             "  +/- — zoom ×2 / ÷2\n"
             "  Arrows — pan  (Shift=fast)\n"
@@ -178,16 +191,21 @@ class CropDebugUI(DebugUIBase):
 
     def bind_feature_keys(self):
         for key, edge in EDGE_KEYS.items():
-            self.root.bind(f"<Key-{key}>",
-                           lambda e, edge=edge: self._select_edge(edge))
-        self.root.bind("<c>", lambda e: self._clear_correction())
-        self.root.bind("<C>", lambda e: self._clear_correction())
+            self.bind_key(f"<Key-{key}>",
+                          lambda e, edge=edge: self._select_edge(edge))
+        self.bind_key("<c>", lambda e: self._clear_correction())
+        self.bind_key("<C>", lambda e: self._clear_correction())
 
     def image_status_text(self, img_dict):
         conf = img_dict["confidence"]
+        t = img_dict.get("processing_time_s")
+        time_str = f"\nprocessed in {t:.2f}s" if t is not None else ""
+        if self.run_wall_time_s is not None:
+            time_str += f"\nrun total {self.run_wall_time_s:.1f}s"
         return (f"{img_dict['width']} × {img_dict['height']} px\n"
                 f"conf: L={conf['left']:.2f} T={conf['top']:.2f}\n"
-                f"      R={conf['right']:.2f} B={conf['bottom']:.2f}")
+                f"      R={conf['right']:.2f} B={conf['bottom']:.2f}"
+                f"{time_str}")
 
     def default_info_text(self):
         return ("No edge selected.\n"
@@ -195,6 +213,25 @@ class CropDebugUI(DebugUIBase):
 
     def update_counts(self):
         self._update_count_label()
+
+    # ------------------------------------------------------------------
+    # Note hooks (free-text user annotation per edge)
+    # ------------------------------------------------------------------
+
+    def get_selected_note(self):
+        if self.selected_edge is None:
+            return None
+        ann = self.annotations[self.images[self.current_idx]["stem"]]
+        return ann["edge_notes"].get(self.selected_edge, "")
+
+    def set_selected_note(self, text):
+        if self.selected_edge is None:
+            return
+        ann = self.annotations[self.images[self.current_idx]["stem"]]
+        if text:
+            ann["edge_notes"][self.selected_edge] = text
+        else:
+            ann["edge_notes"].pop(self.selected_edge, None)
 
     def _update_count_label(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
@@ -411,6 +448,7 @@ class CropDebugUI(DebugUIBase):
         for k, edge in enumerate(EDGES):
             det_pct = crop[edge]
             corr_pct = ann["edge_corrections"].get(edge)
+            has_note = bool(ann["edge_notes"].get(edge))
             if corr_pct is not None:
                 det_px = self._edge_pos_px(img_dict, edge, det_pct)
                 corr_px = self._edge_pos_px(img_dict, edge, corr_pct)
@@ -426,12 +464,13 @@ class CropDebugUI(DebugUIBase):
             rows.append({
                 "iid": f"edge_{edge}",
                 "values": (edge, f"{det_pct:.2f}", f"{conf[edge]:.2f}",
-                           corr_str, dpx_str),
+                           corr_str, dpx_str, "✎" if has_note else ""),
                 "tag": tag,
                 "edge": edge,
                 "sort": {"edge": k, "det": det_pct, "conf": conf[edge],
                          "corr": corr_pct if corr_pct is not None else -1.0,
-                         "dpx": abs(dpx)},
+                         "dpx": abs(dpx),
+                         "nt": 1 if has_note else 0},
             })
         return rows
 
@@ -483,6 +522,7 @@ class CropDebugUI(DebugUIBase):
             crop = img_dict["crop"]
             conf = img_dict["confidence"]
             corrections = ann["edge_corrections"]
+            notes = ann["edge_notes"]
 
             lines.append("=" * 48)
             lines.append(f"IMAGE: {stem}  ({img_dict['width']} x {img_dict['height']} px)")
@@ -492,30 +532,38 @@ class CropDebugUI(DebugUIBase):
                 lines.append(f"    {edge:<7} {crop[edge]:6.2f}%  ({det_px:5.0f}px)  "
                              f"conf={conf[edge]:.2f}")
 
-            if not corrections:
+            if not corrections and not notes:
                 lines.append("  No corrections — detection accepted.")
                 lines.append("")
                 continue
 
-            images_with_corrections += 1
-            lines.append("")
-            lines.append("  CORRECTED EDGES (detected was wrong):")
-            for edge in EDGES:
-                if edge not in corrections:
-                    continue
-                corrected_by_edge[edge] += 1
-                det_pct = crop[edge]
-                corr_pct = corrections[edge]
-                det_px = self._edge_pos_px(img_dict, edge, det_pct)
-                corr_px = self._edge_pos_px(img_dict, edge, corr_pct)
-                err_pct = corr_pct - det_pct
-                err_px = corr_px - det_px
-                all_errors_pct.append(abs(err_pct))
-                all_errors_px.append(abs(err_px))
-                lines.append(
-                    f"    {edge:<7} detected={det_pct:.2f}% ({det_px:.0f}px) "
-                    f"conf={conf[edge]:.2f}  ->  corrected={corr_pct:.2f}% "
-                    f"({corr_px:.0f}px)  error={err_pct:+.2f}% ({err_px:+.0f}px)")
+            if corrections:
+                images_with_corrections += 1
+                lines.append("")
+                lines.append("  CORRECTED EDGES (detected was wrong):")
+                for edge in EDGES:
+                    if edge not in corrections:
+                        continue
+                    corrected_by_edge[edge] += 1
+                    det_pct = crop[edge]
+                    corr_pct = corrections[edge]
+                    det_px = self._edge_pos_px(img_dict, edge, det_pct)
+                    corr_px = self._edge_pos_px(img_dict, edge, corr_pct)
+                    err_pct = corr_pct - det_pct
+                    err_px = corr_px - det_px
+                    all_errors_pct.append(abs(err_pct))
+                    all_errors_px.append(abs(err_px))
+                    lines.append(
+                        f"    {edge:<7} detected={det_pct:.2f}% ({det_px:.0f}px) "
+                        f"conf={conf[edge]:.2f}  ->  corrected={corr_pct:.2f}% "
+                        f"({corr_px:.0f}px)  error={err_pct:+.2f}% ({err_px:+.0f}px)")
+
+            if notes:
+                lines.append("")
+                lines.append("  USER NOTES (free-text comments on edges):")
+                for edge in EDGES:
+                    if edge in notes:
+                        lines.append(f"    {edge:<7} {notes[edge]}")
             lines.append("")
 
         lines.append("=" * 48)

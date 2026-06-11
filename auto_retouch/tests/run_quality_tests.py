@@ -55,15 +55,18 @@ RADIUS_MISMATCH_THRESHOLD = 3.0  # px: brush_radius_px difference to flag as mis
 def _worker(image_path):
     stem = Path(image_path).stem
 
+    import time
     import cv2
+    t0 = time.perf_counter()
     img = cv2.imread(str(image_path))
     if img is None:
-        return (stem, None, [], (0, 0), f"Failed to load: {image_path}", None)
+        return (stem, None, [], (0, 0), f"Failed to load: {image_path}", None, 0.0)
     height, width = img.shape[:2]
 
     spots, rejected, error, local_std = detect_dust.detect(
         str(image_path), collect_rejects=True)
-    return (stem, spots, rejected, (width, height), error, None)
+    elapsed = time.perf_counter() - t0
+    return (stem, spots, rejected, (width, height), error, None, elapsed)
 
 
 def _dist(a, b):
@@ -362,13 +365,16 @@ def _filter_recoveries(new_fps, missed_dust_spots, radius=MATCH_RADIUS):
     return true_fps, recovered
 
 
-def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem):
+def write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem,
+                  times_by_stem=None, wall_time_s=None):
     """Write per-image debug_spots + annotations.json to session_dir."""
     session_dir = Path(session_dir)
     session_dir.mkdir(parents=True, exist_ok=True)
 
     # Write debug_spots.json using the same function as detect_dust.py
-    detect_dust.write_debug_spots_json(raw_results, image_paths_by_stem, str(session_dir))
+    detect_dust.write_debug_spots_json(raw_results, image_paths_by_stem,
+                                       str(session_dir), times_by_stem=times_by_stem,
+                                       wall_time_s=wall_time_s)
 
     # Write annotations.json with pre-populated diff markers
     for stem, (missing, new_fps, source_mismatches, radius_mismatches) in diff_by_stem.items():
@@ -443,9 +449,22 @@ def main():
 
     print(f"Running detection on {len(image_paths)} image(s)...")
     n_workers = min(cpu_count(), len(image_paths))
+    import time as _time
+    wall_t0 = _time.perf_counter()
     with Pool(processes=n_workers) as pool:
         raw_results = pool.map(_worker, [str(p) for p in image_paths])
+    wall_time = _time.perf_counter() - wall_t0
     raw_results.sort(key=lambda r: r[0])
+
+    # Per-image wall-clock times (last tuple element); strip back to the
+    # 6-tuple shape the comparison code and write_debug_spots_json expect
+    times_by_stem = {r[0]: r[6] for r in raw_results}
+    raw_results = [r[:6] for r in raw_results]
+    baseline_time_by_stem = {stem: entry.get("processing_time_s")
+                             for stem, entry in baseline.items()}
+    baseline_wall_time = next((entry.get("run_wall_time_s")
+                               for entry in baseline.values()
+                               if entry.get("run_wall_time_s")), None)
 
     image_paths_by_stem = {Path(p).stem: str(p) for p in image_paths}
 
@@ -529,10 +548,41 @@ def main():
         mismatch_str = f"  src_mismatch={len(source_mismatches)}" if source_mismatches else ""
         radius_str = f"  radius_mismatch={len(radius_mismatches)}" if radius_mismatches else ""
         note_str = f"  ({note})" if note else ""
+        t_new = times_by_stem.get(stem)
+        t_base = baseline_time_by_stem.get(stem)
+        time_str = ""
+        if t_new is not None:
+            time_str = f"  time={t_new:.1f}s"
+            if t_base:
+                time_str += f" (base {t_base:.1f}s)"
         print(f"[{verdict}] {stem:<12} baseline={baseline_count:>3}  new={new_count:>3}"
-              f"{match_rate_str}{miss_str}{fp_str}{rec_str}{src_str}{mismatch_str}{radius_str}{note_str}")
+              f"{match_rate_str}{miss_str}{fp_str}{rec_str}{src_str}{mismatch_str}{radius_str}{time_str}{note_str}")
 
     print(f"\nOverall: {counts['PASS']} PASS, {counts['WARN']} WARN, {counts['FAIL']} FAIL")
+
+    # --- Timing summary (informational; baseline times exist once the baseline
+    # is regenerated with processing_time_s / run_wall_time_s). The wall time is
+    # the comparable number — per-image times overlap under parallel workers and
+    # are inflated by contention, so they only rank images within one run. ---
+    if baseline_wall_time:
+        wall_delta = (wall_time - baseline_wall_time) / baseline_wall_time * 100
+        print(f"Run wall time: {wall_time:.1f}s "
+              f"(baseline {baseline_wall_time:.1f}s, {wall_delta:+.0f}%)")
+    else:
+        print(f"Run wall time: {wall_time:.1f}s "
+              f"(no baseline wall time — regenerate baseline to record it)")
+    total_time = sum(times_by_stem.values())
+    common = [stem for stem in times_by_stem if baseline_time_by_stem.get(stem)]
+    if common:
+        new_common = sum(times_by_stem[s] for s in common)
+        base_common = sum(baseline_time_by_stem[s] for s in common)
+        delta_pct = (new_common - base_common) / base_common * 100 if base_common else 0.0
+        print(f"Per-image detection time (parallel, contention-inflated): "
+              f"{total_time:.1f}s summed; vs baseline on {len(common)} "
+              f"image(s): {new_common:.1f}s vs {base_common:.1f}s ({delta_pct:+.0f}%)")
+    else:
+        print(f"Per-image detection time (parallel, contention-inflated): "
+              f"{total_time:.1f}s summed (no baseline times)")
 
     # --- Stroke (thread/scratch) summary, reported separately from dots ---
     s_tot_matched = sum(v[0] for v in stroke_stats.values())
@@ -584,7 +634,8 @@ def main():
     # --- Write diff session ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_dir = Path(tempfile.gettempdir()) / f"dt_qualitytest_{timestamp}"
-    write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem)
+    write_session(session_dir, raw_results, image_paths_by_stem, diff_by_stem,
+                  times_by_stem=times_by_stem, wall_time_s=wall_time)
 
     debug_ui_script = AUTO_RETOUCH_DIR / "debug_ui.py"
     open_cmd = f"conda run -n autocrop python \"{debug_ui_script}\" \"{session_dir}\""
