@@ -5,6 +5,10 @@ Lets the user review detected spots and rejected candidates on each exported
 image, mark false positives, and add missed dust points. Produces a
 debug_report.txt readable by Claude Code for algorithm tuning.
 
+Built on the shared viewer base in common/debug_ui_base.py; this file holds
+everything dust-specific (marker rendering, hit-testing, annotation schema,
+thread-draw mode, report content).
+
 Usage:
     python debug_ui.py <export_dir>
 
@@ -14,108 +18,142 @@ Writes: {export_dir}/{stem}_annotations.json   (auto-saved per image)
 """
 
 import sys
-import os
-import json
 import math
-import datetime
-import threading
-import queue
 from pathlib import Path
 
 import tkinter as tk
-import tkinter.ttk as ttk
-from tkinter import messagebox
 
-from PIL import Image, ImageTk
+sys.path.insert(0, str(Path(__file__).parent.parent))   # repo root -> common
+sys.path.insert(0, str(Path(__file__).parent))           # feature dir -> detect_dust
+
+from common.debug_ui_base import (
+    DebugUIBase, canvas_to_image, image_to_canvas, _point_to_path_dist)
 
 
 # Default full width (px) assigned to a hand-drawn missed thread.
 DEFAULT_MISSED_STROKE_WIDTH = 8.0
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+class DustDebugUI(DebugUIBase):
+    WINDOW_TITLE = "Dust Detection Debug UI"
+    EMPTY_SESSION_MESSAGE = "No *_debug_spots.json files found in:"
+    ITEM_PANEL_TITLE = "Spots:"
+    CENTER_BUTTON_TEXT = "Center on spot"
+    ITEM_COLS    = ("idx", "cx", "cy", "r", "ctr", "tex", "fp")
+    ITEM_HEADERS = {"idx": "#",   "cx": "cx",  "cy": "cy",
+                    "r":   "r",   "ctr": "ctr", "tex": "tex", "fp": "FP"}
+    ITEM_WIDTHS  = {"idx": 30, "cx": 46, "cy": 46,
+                    "r":  30, "ctr": 40, "tex": 36, "fp": 24}
+    ITEM_ANCHORS = {"fp": "center"}
 
-def canvas_to_image(cx, cy, offset_x, offset_y, zoom):
-    return (cx - offset_x) / zoom, (cy - offset_y) / zoom
+    # ------------------------------------------------------------------
+    # Session / annotation lifecycle
+    # ------------------------------------------------------------------
 
-
-def image_to_canvas(ix, iy, offset_x, offset_y, zoom):
-    return ix * zoom + offset_x, iy * zoom + offset_y
-
-
-def _seg_dist(px, py, ax, ay, bx, by):
-    """Distance from point (px,py) to segment (ax,ay)-(bx,by)."""
-    dx, dy = bx - ax, by - ay
-    if dx == 0 and dy == 0:
-        return math.hypot(px - ax, py - ay)
-    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
-    t = max(0.0, min(1.0, t))
-    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
-
-
-def _point_to_path_dist(px, py, path):
-    """Minimum distance from point (px,py) to a polyline (list of [x,y])."""
-    if not path:
-        return float("inf")
-    if len(path) == 1:
-        return math.hypot(px - path[0][0], py - path[0][1])
-    return min(_seg_dist(px, py, path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
-              for i in range(len(path) - 1))
-
-
-# ---------------------------------------------------------------------------
-# Main UI class
-# ---------------------------------------------------------------------------
-
-class DebugUI:
-    def __init__(self, root, export_dir):
-        self.root = root
-        self.export_dir = export_dir
-        self.root.title("Dust Detection Debug UI")
-        self.root.geometry("1400x900")
-
-        # Load per-image debug_spots files
-        sys.path.insert(0, str(Path(__file__).parent))
+    def load_session(self, session_dir):
         import detect_dust
-        images, constants = detect_dust.load_debug_spots_dir(export_dir)
-        if not images:
-            messagebox.showerror("Error", f"No *_debug_spots.json files found in:\n{export_dir}")
-            root.destroy()
-            return
+        return detect_dust.load_debug_spots_dir(session_dir)
 
-        self.data = {"images": images, "constants": constants}
-        self.images = images
+    def new_annotation_state(self, img_dict):
+        return {
+            "false_positives": set(),
+            "missed_dust": [],
+            "source_overrides": {},   # {spot_idx: (src_cx, src_cy)}
+            "radius_overrides": {},   # {spot_idx: corrected_radius_px}
+            "path_overrides": {},     # {spot_idx: [[x,y],...]} edited stroke centerlines
+            "missed_strokes": [],     # [{"path":[[x,y],...], "stroke_width_px":w}] hand-drawn threads
+            "source_mismatches": [],  # list from quality test diff sessions
+            "radius_mismatches": [],  # list from quality test diff sessions
+        }
 
-        # Per-image annotation state: {stem: {"false_positives": set(), "missed_dust": []}}
-        self.annotations = {}
-        for img in self.images:
-            stem = img["stem"]
-            self.annotations[stem] = {
-                "false_positives": set(),
-                "missed_dust": [],
-                "source_overrides": {},   # {spot_idx: (src_cx, src_cy)}
-                "radius_overrides": {},   # {spot_idx: corrected_radius_px}
-                "path_overrides": {},     # {spot_idx: [[x,y],...]} edited stroke centerlines
-                "missed_strokes": [],     # [{"path":[[x,y],...], "stroke_width_px":w}] hand-drawn threads
-                "source_mismatches": [],  # list from quality test diff sessions
-                "radius_mismatches": [],  # list from quality test diff sessions
-            }
+    def serialize_annotations(self, stem):
+        ann = self.annotations[stem]
+        img_dict = next((d for d in self.images if d["stem"] == stem), None)
+        detected = img_dict.get("detected") or [] if img_dict else []
 
-        # Load any previously saved annotations
-        self._load_existing_annotations()
+        fp_list = []
+        for idx in sorted(ann["false_positives"]):
+            if idx < len(detected):
+                fp_list.append(detected[idx])
 
-        # View state
-        self.current_idx = 0
-        self.zoom = 1.0
-        self.fit_zoom = 1.0
-        self.offset_x = 0.0
-        self.offset_y = 0.0
-        self.pil_image = None
-        self.photo_image = None
+        # Serialize source_overrides as list of {spot_idx, src_cx, src_cy}
+        src_overrides_list = [
+            {"spot_idx": k, "src_cx": float(v[0]), "src_cy": float(v[1])}
+            for k, v in sorted(ann.get("source_overrides", {}).items())
+        ]
 
-        # Selection state
+        # Serialize radius_overrides as list of {spot_idx, corrected_radius_px}
+        radius_overrides_list = [
+            {"spot_idx": k, "corrected_radius_px": float(v)}
+            for k, v in sorted(ann.get("radius_overrides", {}).items())
+        ]
+
+        # Serialize path_overrides (edited stroke centerlines) as list of {spot_idx, path}
+        path_overrides_list = [
+            {"spot_idx": k, "path": [[float(p[0]), float(p[1])] for p in v]}
+            for k, v in sorted(ann.get("path_overrides", {}).items())
+        ]
+
+        return {
+            "stem": stem,
+            "false_positives": fp_list,
+            "missed_dust": ann["missed_dust"],
+            "missed_strokes": ann.get("missed_strokes", []),
+            "source_overrides": src_overrides_list,
+            "radius_overrides": radius_overrides_list,
+            "path_overrides": path_overrides_list,
+            "source_mismatches": ann.get("source_mismatches", []),
+            "radius_mismatches": ann.get("radius_mismatches", []),
+        }
+
+    def deserialize_annotations(self, img_dict, data):
+        stem = img_dict["stem"]
+        detected = img_dict.get("detected") or []
+        # Rebuild false_positives as set of indices by matching cx/cy
+        fp_indices = set()
+        for fp in data.get("false_positives", []):
+            for i, spot in enumerate(detected):
+                if abs(spot["cx"] - fp["cx"]) < 0.5 and abs(spot["cy"] - fp["cy"]) < 0.5:
+                    fp_indices.add(i)
+                    break
+        self.annotations[stem]["false_positives"] = fp_indices
+        self.annotations[stem]["missed_dust"] = data.get("missed_dust", [])
+        self.annotations[stem]["missed_strokes"] = data.get("missed_strokes", [])
+        # Restore source overrides: list of {spot_idx, src_cx, src_cy}
+        src_overrides = {}
+        for entry in data.get("source_overrides", []):
+            try:
+                src_overrides[int(entry["spot_idx"])] = (
+                    float(entry["src_cx"]), float(entry["src_cy"]))
+            except (KeyError, ValueError, TypeError):
+                pass
+        self.annotations[stem]["source_overrides"] = src_overrides
+        # Restore radius overrides: list of {spot_idx, corrected_radius_px}
+        radius_overrides = {}
+        for entry in data.get("radius_overrides", []):
+            try:
+                radius_overrides[int(entry["spot_idx"])] = float(entry["corrected_radius_px"])
+            except (KeyError, ValueError, TypeError):
+                pass
+        self.annotations[stem]["radius_overrides"] = radius_overrides
+        # Restore stroke path overrides: list of {spot_idx, path}
+        path_overrides = {}
+        for entry in data.get("path_overrides", []):
+            try:
+                path_overrides[int(entry["spot_idx"])] = [
+                    [float(p[0]), float(p[1])] for p in entry["path"]]
+            except (KeyError, ValueError, TypeError):
+                pass
+        self.annotations[stem]["path_overrides"] = path_overrides
+        # Load source/radius mismatches from quality test diff sessions
+        self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
+        self.annotations[stem]["radius_mismatches"] = data.get("radius_mismatches", [])
+
+    # ------------------------------------------------------------------
+    # Selection state
+    # ------------------------------------------------------------------
+
+    def init_selection_state(self):
         self.selected_detected = set()   # set of int (detected spot indices)
         self.selected_rejected = set()   # set of int (rejected candidate indices)
         self.selected_missed = set()     # set of int (indices into missed_dust list)
@@ -127,72 +165,28 @@ class DebugUI:
         self.thread_draw_mode = False
         self.thread_draw_points = []     # list of [x,y] image coords (in-progress)
 
-        # Visibility
-        self.hide_markers = False
+    def reset_selection(self):
+        self.selected_detected = set()
+        self.selected_rejected = set()
+        self.selected_missed = set()
+        self.selected_source = None
+        self.selected_keypoint = None
+        self.selected_missed_stroke = None
+        self.remove_missed_btn.config(state=tk.DISABLED)
 
-        # Rubber-band drag
-        self.drag_start = None
-        self.is_dragging = False
-        self.ctrl_drag_mode = False
-
-        # Pan state
-        self.pan_start = None
-        self.pan_offset_at_start = None
-
-        # Track whether we're at fit zoom so resize can re-fit automatically
-        self.at_fit_zoom = True
-
-        self.spot_list_data = {}      # iid -> {kind, idx, sort_* values}
-        self._syncing_selection = False
-
-        self._build_ui()
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        # Defer all post-UI work so the window skeleton appears immediately.
-        # after(0) fires on the first event-loop tick; after(150) fires later,
-        # by which time lb_rows will already exist.
-        self.root.after(0, self._populate_thumb_list)
-        self.root.after(150, self._load_image_by_idx, 0)
+    def reset_for_new_image(self):
+        self.thread_draw_mode = False
+        self.thread_draw_points = []
+        self.reset_selection()
 
     # ------------------------------------------------------------------
-    # UI construction
+    # Layout / text hooks
     # ------------------------------------------------------------------
 
-    def _build_ui(self):
-        # PanedWindow splits left panel from right
-        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
-                               sashrelief=tk.RAISED, sashwidth=6)
-        paned.pack(fill=tk.BOTH, expand=True)
-
-        # ---- LEFT PANEL ----
-        left = tk.Frame(paned, width=220, bg="#484848")
-        left.pack_propagate(False)
-        paned.add(left, minsize=160, stretch="never")
-
-        tk.Label(left, text="Images:", bg="#484848", fg="white",
-                 font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
-
-        lb_frame = tk.Frame(left, bg="#484848")
-        lb_frame.pack(fill=tk.BOTH, expand=True, padx=4)
-        lb_sb = tk.Scrollbar(lb_frame, orient=tk.VERTICAL)
-        self.lb_canvas = tk.Canvas(lb_frame, bg="#363636",
-                                   yscrollcommand=lb_sb.set, highlightthickness=0)
-        lb_sb.config(command=self.lb_canvas.yview)
-        lb_sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.lb_canvas.pack(fill=tk.BOTH, expand=True)
-        self.lb_inner = tk.Frame(self.lb_canvas, bg="#363636")
-        self.lb_canvas_window = self.lb_canvas.create_window(
-            0, 0, anchor="nw", window=self.lb_inner)
-        self.lb_inner.bind("<Configure>", self._on_lb_inner_configure)
-        self.lb_inner.bind("<MouseWheel>", self._on_lb_scroll)
-        self.lb_canvas.bind("<Configure>", self._on_lb_outer_configure)
-        self.lb_canvas.bind("<MouseWheel>", self._on_lb_scroll)
-        self.lb_rows = []        # Frame per image row
-        self.lb_photos = []      # PhotoImage refs per row (prevent GC)
-
+    def build_left_controls(self, parent):
         # Show rejected toggle
         self.show_rejected_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(left, text="Show rejected candidates",
+        tk.Checkbutton(parent, text="Show rejected candidates",
                        variable=self.show_rejected_var,
                        command=self._redraw_markers,
                        bg="#484848", fg="white", selectcolor="#363636",
@@ -201,21 +195,15 @@ class DebugUI:
 
         # Show source brush circle toggle
         self.show_source_brush_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(left, text="Show source brush",
+        tk.Checkbutton(parent, text="Show source brush",
                        variable=self.show_source_brush_var,
                        command=self._redraw_markers,
                        bg="#484848", fg="white", selectcolor="#363636",
                        activebackground="#484848", activeforeground="white"
                        ).pack(anchor="w", padx=6, pady=2)
 
-        self.status_label = tk.Label(left, text="", bg="#484848", fg="#c0c0c0",
-                                     font=("", 9), wraplength=200, justify=tk.LEFT)
-        self.status_label.pack(anchor="w", padx=6, pady=2)
-
-        # Legend
-        tk.Label(left, text="Legend:", bg="#484848", fg="#c0c0c0",
-                 font=("", 8, "bold")).pack(anchor="w", padx=6, pady=(6, 1))
-        for symbol, color, label in [
+    def build_left_info(self, parent):
+        self.add_legend(parent, [
             ("●", "#00cc44", "Detected spot"),
             ("●", "#ff44cc", "Radius mismatch vs baseline"),
             ("✕", "#ff3333", "False positive"),
@@ -227,16 +215,8 @@ class DebugUI:
             ("□", "#ff4444", "Baseline source (mismatch)"),
             ("○", "#ff9900", "Baseline radius (dashed, zoom in)"),
             ("○", "#00ddff", "Corrected radius (annotated)"),
-        ]:
-            row = tk.Frame(left, bg="#484848")
-            row.pack(anchor="w", padx=6)
-            tk.Label(row, text=symbol, bg="#484848", fg=color,
-                     font=("", 11)).pack(side=tk.LEFT, padx=(0, 4))
-            tk.Label(row, text=label, bg="#484848", fg="#cccccc",
-                     font=("", 8)).pack(side=tk.LEFT)
-
-        # Hints
-        tk.Label(left, text=(
+        ])
+        self.add_hints(parent, (
             "Mouse:\n"
             "  Scroll — zoom in/out\n"
             "  Scroll (1 spot sel'd) —\n"
@@ -260,114 +240,12 @@ class DebugUI:
             "  +/- — zoom ×2 / ÷2\n"
             "  Arrows — pan  (Shift=fast)\n"
             "  F — fit to window"
-        ), bg="#484848", fg="white", font=("Courier", 8),
-                 justify=tk.LEFT).pack(anchor="w", padx=6, pady=(8, 4))
+        ))
 
-        # ---- CENTER PANEL (canvas) ----
-        right = tk.Frame(paned, bg="#363636")
-        paned.add(right, stretch="always")
-
-        # ---- SPOT LIST PANEL ----
-        spot_pane = tk.Frame(paned, width=230, bg="#484848")
-        spot_pane.pack_propagate(False)
-        paned.add(spot_pane, minsize=140, stretch="never")
-        self._build_spot_list_panel(spot_pane)
-
-        # Canvas + scrollbars
-        canvas_frame = tk.Frame(right, bg="#363636")
-        canvas_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.canvas = tk.Canvas(canvas_frame, bg="#363636",
-                                cursor="crosshair", highlightthickness=0)
-        h_scroll = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL,
-                                command=self.canvas.xview)
-        v_scroll = tk.Scrollbar(canvas_frame, orient=tk.VERTICAL,
-                                command=self.canvas.yview)
-        self.canvas.configure(xscrollcommand=h_scroll.set,
-                              yscrollcommand=v_scroll.set)
-        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-
-        # Canvas events
-        self.canvas.bind("<ButtonPress-1>", self._on_left_press)
-        self.canvas.bind("<B1-Motion>", self._on_left_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_left_release)
-        self.canvas.bind("<ButtonPress-2>", self._on_pan_start)
-        self.canvas.bind("<B2-Motion>", self._on_pan_move)
-        self.canvas.bind("<ButtonRelease-2>", self._on_pan_end)
-        self.canvas.bind("<MouseWheel>", self._on_mousewheel)       # Windows
-        self.canvas.bind("<Button-4>", self._on_mousewheel)          # Linux scroll up
-        self.canvas.bind("<Button-5>", self._on_mousewheel)          # Linux scroll down
-        self.canvas.bind("<Configure>", self._on_canvas_configure)
-        self.root.bind("<f>", lambda e: self._fit_to_window())
-        self.root.bind("<F>", lambda e: self._fit_to_window())
-        self.root.bind("<m>", lambda e: self._mark_fp())
-        self.root.bind("<M>", lambda e: self._mark_fp())
-        self.root.bind("<c>", lambda e: self._clear_fp())
-        self.root.bind("<C>", lambda e: self._clear_fp())
-        self.root.bind("<Delete>", lambda e: self._remove_missed())
-        self.root.bind("<BackSpace>", lambda e: self._remove_missed())
-        self.root.bind("<r>", lambda e: self._mark_rejected_as_missed())
-        self.root.bind("<R>", lambda e: self._mark_rejected_as_missed())
-        self.root.bind("<t>", lambda e: self._toggle_thread_draw())
-        self.root.bind("<T>", lambda e: self._toggle_thread_draw())
-        self.root.bind("<Return>", lambda e: self._finish_thread())
-        self.root.bind("<Escape>", lambda e: self._cancel_thread())
-        self.root.bind("<h>", lambda e: self._toggle_hide_markers())
-        self.root.bind("<H>", lambda e: self._toggle_hide_markers())
-        self.root.bind("<equal>", lambda e: self._zoom_step(2.0))    # + key (no shift)
-        self.root.bind("<plus>", lambda e: self._zoom_step(2.0))     # + key (with shift)
-        self.root.bind("<minus>", lambda e: self._zoom_step(0.5))
-        pan_step = 80
-        pan_big  = 300
-        self.root.bind("<Left>",          lambda e: self._pan_by( pan_step, 0))
-        self.root.bind("<Right>",         lambda e: self._pan_by(-pan_step, 0))
-        self.root.bind("<Up>",            lambda e: self._pan_by(0,  pan_step))
-        self.root.bind("<Down>",          lambda e: self._pan_by(0, -pan_step))
-        self.root.bind("<Shift-Left>",    lambda e: self._pan_by( pan_big, 0))
-        self.root.bind("<Shift-Right>",   lambda e: self._pan_by(-pan_big, 0))
-        self.root.bind("<Shift-Up>",      lambda e: self._pan_by(0,  pan_big))
-        self.root.bind("<Shift-Down>",    lambda e: self._pan_by(0, -pan_big))
-        self.root.bind("<space>",         lambda e: self._nav_image(+1))
-        self.root.bind("<b>",             lambda e: self._nav_image(-1))
-        self.root.bind("<B>",             lambda e: self._nav_image(-1))
-
-        # Bottom panel
-        bottom = tk.Frame(right, bg="#484848", height=190)
-        bottom.pack(fill=tk.X)
-        bottom.pack_propagate(False)
-
-        # Scrollable info text
-        info_frame = tk.Frame(bottom, bg="#484848")
-        info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=6)
-        tk.Label(info_frame, text="Selected:", bg="#484848", fg="#c0c0c0",
-                 font=("", 9, "bold")).pack(anchor="w")
-        info_text_wrap = tk.Frame(info_frame, bg="#484848")
-        info_text_wrap.pack(fill=tk.BOTH, expand=True)
-        info_sb = tk.Scrollbar(info_text_wrap, orient=tk.VERTICAL)
-        self.info_text = tk.Text(info_text_wrap, bg="#363636", fg="white",
-                                 font=("Courier", 9), wrap=tk.WORD,
-                                 state=tk.DISABLED, height=7,
-                                 yscrollcommand=info_sb.set,
-                                 relief=tk.FLAT, padx=4, pady=4,
-                                 cursor="arrow")
-        info_sb.config(command=self.info_text.yview)
-        info_sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.info_text.pack(fill=tk.BOTH, expand=True)
-        self._set_info_text("No marker selected.\n"
-                            "Click a marker or Ctrl+Click to add missed dust.")
-
-        # Buttons
-        btn_frame = tk.Frame(bottom, bg="#484848")
-        btn_frame.pack(side=tk.RIGHT, padx=8, pady=6)
-
+    def build_feature_buttons(self, btn_frame, btn_cfg):
         self.count_label = tk.Label(btn_frame, text="FP: 0 | Missed: 0",
                                     bg="#484848", fg="#c0c0c0", font=("", 9))
         self.count_label.pack(anchor="e", pady=(0, 4))
-
-        btn_cfg = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
-                   "padx": 8, "pady": 4, "width": 20}
 
         tk.Button(btn_frame, text="Rejected → Missed  (R)",
                   command=self._mark_rejected_as_missed, **btn_cfg).pack(fill=tk.X, pady=1)
@@ -385,114 +263,39 @@ class DebugUI:
                                            state=tk.DISABLED, **btn_cfg)
         self.remove_missed_btn.pack(fill=tk.X, pady=1)
 
-        tk.Button(btn_frame, text="Clear Selection",
-                  command=self._clear_selection, **btn_cfg).pack(fill=tk.X, pady=1)
+    def bind_feature_keys(self):
+        self.root.bind("<m>", lambda e: self._mark_fp())
+        self.root.bind("<M>", lambda e: self._mark_fp())
+        self.root.bind("<c>", lambda e: self._clear_fp())
+        self.root.bind("<C>", lambda e: self._clear_fp())
+        self.root.bind("<Delete>", lambda e: self._remove_missed())
+        self.root.bind("<BackSpace>", lambda e: self._remove_missed())
+        self.root.bind("<r>", lambda e: self._mark_rejected_as_missed())
+        self.root.bind("<R>", lambda e: self._mark_rejected_as_missed())
+        self.root.bind("<t>", lambda e: self._toggle_thread_draw())
+        self.root.bind("<T>", lambda e: self._toggle_thread_draw())
+        self.root.bind("<Return>", lambda e: self._finish_thread())
+        self.root.bind("<Escape>", lambda e: self._cancel_thread())
 
-        tk.Button(btn_frame, text="Fit to Window  (F)",
-                  command=self._fit_to_window, **btn_cfg).pack(fill=tk.X, pady=(6, 1))
-
-        self.hide_btn = tk.Button(btn_frame, text="Hide Markers  (H)",
-                                  command=self._toggle_hide_markers, **btn_cfg)
-        self.hide_btn.pack(fill=tk.X, pady=1)
-
-    # ------------------------------------------------------------------
-    # Info text helper
-    # ------------------------------------------------------------------
-
-    def _set_info_text(self, text):
-        self.info_text.config(state=tk.NORMAL)
-        self.info_text.delete("1.0", tk.END)
-        self.info_text.insert(tk.END, text)
-        self.info_text.config(state=tk.DISABLED)
-
-    # ------------------------------------------------------------------
-    # Image loading
-    # ------------------------------------------------------------------
-
-    def _load_image_by_idx(self, idx):
-        self.current_idx = idx
-        img_dict = self.images[idx]
-        image_path = img_dict["image_path"]
-
-        if not os.path.exists(image_path):
-            messagebox.showerror("Error", f"Image not found:\n{image_path}")
-            return
-
-        self.pil_image = Image.open(image_path)
-
-        # Fit-to-window zoom
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-        iw, ih = img_dict["width"], img_dict["height"]
-        if iw > 0 and ih > 0 and cw > 1 and ch > 1:
-            self.fit_zoom = min(cw / iw, ch / ih)
-        else:
-            self.fit_zoom = 0.2
-        self.zoom = self.fit_zoom
-        self.offset_x = (cw - iw * self.zoom) / 2
-        self.offset_y = (ch - ih * self.zoom) / 2
-        self.at_fit_zoom = True
-
-        # Reset selection
-        self.selected_detected = set()
-        self.selected_rejected = set()
-        self.selected_missed = set()
-        self.selected_source = None
-        self.selected_keypoint = None
-        self.selected_missed_stroke = None
-        self.thread_draw_mode = False
-        self.thread_draw_points = []
-        self.remove_missed_btn.config(state=tk.DISABLED)
-        self._set_info_text("No marker selected.\n"
-                            "Click a marker or Ctrl+Click to add missed dust.")
-
-        # Update status
+    def image_status_text(self, img_dict):
         detected = img_dict.get("detected") or []
         rejected_list = img_dict.get("rejected") or []
-        self.status_label.config(
-            text=f"{img_dict['width']} × {img_dict['height']} px\n"
-                 f"{len(detected)} detected\n{len(rejected_list)} rejected candidates")
+        return (f"{img_dict['width']} × {img_dict['height']} px\n"
+                f"{len(detected)} detected\n{len(rejected_list)} rejected candidates")
 
-        self._redraw()
+    def default_info_text(self):
+        return ("No marker selected.\n"
+                "Click a marker or Ctrl+Click to add missed dust.")
+
+    def update_counts(self):
         self._update_count_label()
-        self._populate_spots_list()
-
-        # Highlight selected row and scroll to it
-        self._highlight_lb_row(idx)
 
     # ------------------------------------------------------------------
     # Drawing
     # ------------------------------------------------------------------
 
-    def _redraw(self):
-        self.canvas.delete("all")
-        if self.pil_image is None:
-            return
-
-        img_dict = self.images[self.current_idx]
-        iw, iw_h = img_dict["width"], img_dict["height"]
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-
-        # Draw visible crop of image
-        vis_x1 = max(0, int(-self.offset_x / self.zoom))
-        vis_y1 = max(0, int(-self.offset_y / self.zoom))
-        vis_x2 = min(iw, int((cw - self.offset_x) / self.zoom) + 1)
-        vis_y2 = min(iw_h, int((ch - self.offset_y) / self.zoom) + 1)
-
-        if vis_x2 > vis_x1 and vis_y2 > vis_y1:
-            resample = Image.LANCZOS if self.zoom >= 0.2 else Image.NEAREST
-            crop = self.pil_image.crop((vis_x1, vis_y1, vis_x2, vis_y2))
-            dw = max(1, int((vis_x2 - vis_x1) * self.zoom))
-            dh = max(1, int((vis_y2 - vis_y1) * self.zoom))
-            resized = crop.resize((dw, dh), resample)
-            self.photo_image = ImageTk.PhotoImage(resized)
-            draw_x = self.offset_x + vis_x1 * self.zoom
-            draw_y = self.offset_y + vis_y1 * self.zoom
-            self.canvas.create_image(draw_x, draw_y, anchor="nw",
-                                     image=self.photo_image, tags="bg")
-
-        self._redraw_markers()
+    def overlay_tags(self):
+        return ("detected", "rejected", "fp", "missed", "source", "sel")
 
     def _get_source(self, stem, spot_idx, spot):
         """Return (src_cx, src_cy) for a spot — user override first, then auto-detected."""
@@ -572,11 +375,7 @@ class DebugUI:
                                          outline=src_color,
                                          width=2 if is_src_sel else 1, tags="source")
 
-    def _redraw_markers(self):
-        self.canvas.delete("detected", "rejected", "fp", "missed", "source", "sel", "rubberband")
-        if self.pil_image is None or self.hide_markers:
-            return
-
+    def draw_overlays(self):
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         ann = self.annotations[stem]
@@ -728,51 +527,15 @@ class DebugUI:
                                         outline="#ffff00", width=2, tags="missed")
 
     # ------------------------------------------------------------------
-    # Mouse events
+    # Interaction hooks
     # ------------------------------------------------------------------
 
-    def _zoom_step(self, factor):
-        """Zoom in or out by factor, centered on the canvas centre."""
-        new_zoom = max(0.05, min(20.0, self.zoom * factor))
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-        mx, my = cw / 2, ch / 2
-        self.offset_x = mx - (mx - self.offset_x) * (new_zoom / self.zoom)
-        self.offset_y = my - (my - self.offset_y) * (new_zoom / self.zoom)
-        self.zoom = new_zoom
-        self.at_fit_zoom = False
-        self._redraw()
-
-    def _pan_by(self, dx, dy):
-        """Shift the image by dx/dy canvas pixels."""
-        self.offset_x += dx
-        self.offset_y += dy
-        self.at_fit_zoom = False
-        self._redraw()
-
-    def _on_mousewheel(self, event):
+    def on_scroll_override(self, event):
         # When exactly one detected spot is selected, scroll adjusts its radius correction
         if len(self.selected_detected) == 1:
             self._adjust_radius_correction(event)
-            return
-
-        # Normal zoom centered on mouse position
-        if event.num == 4:
-            delta = 1
-        elif event.num == 5:
-            delta = -1
-        else:
-            delta = 1 if event.delta > 0 else -1
-
-        factor = 1.15 if delta > 0 else (1 / 1.15)
-        new_zoom = max(0.05, min(20.0, self.zoom * factor))
-
-        mx, my = event.x, event.y
-        self.offset_x = mx - (mx - self.offset_x) * (new_zoom / self.zoom)
-        self.offset_y = my - (my - self.offset_y) * (new_zoom / self.zoom)
-        self.zoom = new_zoom
-        self.at_fit_zoom = False
-        self._redraw()
+            return True
+        return False
 
     def _adjust_radius_correction(self, event):
         """Scroll wheel: grow/shrink the radius correction for the selected detected spot."""
@@ -800,23 +563,6 @@ class DebugUI:
         self._redraw_markers()
         self._update_info_from_selection()
 
-    def _on_pan_start(self, event):
-        self.pan_start = (event.x, event.y)
-        self.pan_offset_at_start = (self.offset_x, self.offset_y)
-
-    def _on_pan_move(self, event):
-        if self.pan_start is None:
-            return
-        dx = event.x - self.pan_start[0]
-        dy = event.y - self.pan_start[1]
-        self.offset_x = self.pan_offset_at_start[0] + dx
-        self.offset_y = self.pan_offset_at_start[1] + dy
-        self._redraw()
-
-    def _on_pan_end(self, event):
-        self.pan_start = None
-        self.pan_offset_at_start = None
-
     def _thread_add_point(self, canvas_x, canvas_y):
         """Append a centerline point (from canvas coords) to the in-progress thread."""
         ix, iy = canvas_to_image(canvas_x, canvas_y,
@@ -832,142 +578,67 @@ class DebugUI:
             f"  Enter = finish,  Esc / T = cancel.")
         self._redraw_markers()
 
-    def _on_left_press(self, event):
+    def handle_press_override(self, event):
         # Thread-draw mode: every mouse-down drops a centerline point (immune to
-        # accidental drag). Hold and drag to draw freehand (see _on_left_drag).
+        # accidental drag). Hold and drag to draw freehand (see handle_drag_override).
         if self.thread_draw_mode:
             self._thread_add_point(event.x, event.y)
             self.drag_start = (event.x, event.y)  # last freehand sample point
             self.is_dragging = False
-            return
-        self.drag_start = (event.x, event.y)
-        self.is_dragging = False
-        self.ctrl_drag_mode = bool(event.state & 0x4)
+            return True
+        return False
 
-    def _on_left_drag(self, event):
-        if self.drag_start is None:
-            return
-
+    def handle_drag_override(self, event):
         # Thread-draw mode: freehand — sample a new point when moved enough.
         if self.thread_draw_mode:
+            if self.drag_start is None:
+                return True
             dx = event.x - self.drag_start[0]
             dy = event.y - self.drag_start[1]
             if (dx * dx + dy * dy) >= 64:  # ~8px on canvas
                 self._thread_add_point(event.x, event.y)
                 self.drag_start = (event.x, event.y)
-            return
+            return True
+        return False
 
-        dx = event.x - self.drag_start[0]
-        dy = event.y - self.drag_start[1]
-        if not self.is_dragging and (abs(dx) > 5 or abs(dy) > 5):
-            self.is_dragging = True
-
-        if self.is_dragging:
-            self.canvas.delete("rubberband")
-            x0, y0 = self.drag_start
-            color = "#4488ff" if self.ctrl_drag_mode else "white"
-            self.canvas.create_rectangle(x0, y0, event.x, event.y,
-                                         outline=color, width=2, dash=(4, 2),
-                                         tags="rubberband")
-
-    def _on_left_release(self, event):
+    def handle_release_override(self, event):
         # Thread-draw mode: points were already placed on press/drag; nothing to do.
         if self.thread_draw_mode:
             self.drag_start = None
             self.is_dragging = False
-            return
+            return True
+        return False
 
-        if self.drag_start is None:
-            return
-
-        if self.ctrl_drag_mode:
-            self.canvas.delete("rubberband")
-            if self.is_dragging:
-                self._zoom_to_rect(self.drag_start, (event.x, event.y))
-            else:
-                self._do_add_missed(event.x, event.y)
-            self.drag_start = None
-            self.is_dragging = False
-            self.ctrl_drag_mode = False
-            return
-
-        shift_held = bool(event.state & 0x1)
-
-        if self.is_dragging:
-            # Rubber-band select detected spots
-            x0, y0 = self.drag_start
-            x1, y1 = event.x, event.y
-            rx1, rx2 = min(x0, x1), max(x0, x1)
-            ry1, ry2 = min(y0, y1), max(y0, y1)
-            # Convert to image coords
-            ix1, iy1 = canvas_to_image(rx1, ry1, self.offset_x, self.offset_y, self.zoom)
-            ix2, iy2 = canvas_to_image(rx2, ry2, self.offset_x, self.offset_y, self.zoom)
-            img_dict = self.images[self.current_idx]
-            stem = img_dict["stem"]
-            new_sel = set()
-            for i, spot in enumerate(img_dict.get("detected") or []):
-                if ix1 <= spot["cx"] <= ix2 and iy1 <= spot["cy"] <= iy2:
-                    new_sel.add(i)
-            new_missed = set()
-            for i, md in enumerate(self.annotations[stem]["missed_dust"]):
-                if ix1 <= md["cx"] <= ix2 and iy1 <= md["cy"] <= iy2:
-                    new_missed.add(i)
-            new_rejected = set()
-            if self.show_rejected_var.get():
-                for i, r in enumerate(img_dict.get("rejected") or []):
-                    if ix1 <= r["cx"] <= ix2 and iy1 <= r["cy"] <= iy2:
-                        new_rejected.add(i)
-            if shift_held:
-                # Shift+drag: add to existing selection
-                self.selected_detected |= new_sel
-                self.selected_missed |= new_missed
-                self.selected_rejected |= new_rejected
-            else:
-                self.selected_detected = new_sel
-                self.selected_missed = new_missed
-                self.selected_rejected = new_rejected
-            self.remove_missed_btn.config(state=tk.NORMAL if self.selected_missed else tk.DISABLED)
-            self.canvas.delete("rubberband")
-            self._update_info_from_selection()
-            self._redraw_markers()
+    def on_rubber_band(self, ix1, iy1, ix2, iy2, additive):
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        new_sel = set()
+        for i, spot in enumerate(img_dict.get("detected") or []):
+            if ix1 <= spot["cx"] <= ix2 and iy1 <= spot["cy"] <= iy2:
+                new_sel.add(i)
+        new_missed = set()
+        for i, md in enumerate(self.annotations[stem]["missed_dust"]):
+            if ix1 <= md["cx"] <= ix2 and iy1 <= md["cy"] <= iy2:
+                new_missed.add(i)
+        new_rejected = set()
+        if self.show_rejected_var.get():
+            for i, r in enumerate(img_dict.get("rejected") or []):
+                if ix1 <= r["cx"] <= ix2 and iy1 <= r["cy"] <= iy2:
+                    new_rejected.add(i)
+        if additive:
+            # Shift+drag: add to existing selection
+            self.selected_detected |= new_sel
+            self.selected_missed |= new_missed
+            self.selected_rejected |= new_rejected
         else:
-            if shift_held:
-                # Shift+click: toggle nearest detected spot in/out of selection
-                self._handle_shift_click(event.x, event.y)
-            else:
-                # Normal click — find nearest marker
-                self._handle_click(event.x, event.y)
+            self.selected_detected = new_sel
+            self.selected_missed = new_missed
+            self.selected_rejected = new_rejected
+        self.remove_missed_btn.config(state=tk.NORMAL if self.selected_missed else tk.DISABLED)
+        self._update_info_from_selection()
+        self._redraw_markers()
 
-        self.drag_start = None
-        self.is_dragging = False
-
-    def _zoom_to_rect(self, start, end):
-        """Zoom and pan so the rubber-band rectangle fills the canvas."""
-        x0, y0 = start
-        x1, y1 = end
-        rx1, rx2 = min(x0, x1), max(x0, x1)
-        ry1, ry2 = min(y0, y1), max(y0, y1)
-        if rx2 - rx1 < 5 or ry2 - ry1 < 5:
-            return
-        # Convert rubber-band corners to image coordinates
-        ix1, iy1 = canvas_to_image(rx1, ry1, self.offset_x, self.offset_y, self.zoom)
-        ix2, iy2 = canvas_to_image(rx2, ry2, self.offset_x, self.offset_y, self.zoom)
-        rect_w = ix2 - ix1
-        rect_h = iy2 - iy1
-        if rect_w <= 0 or rect_h <= 0:
-            return
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-        new_zoom = max(0.05, min(20.0, min(cw / rect_w, ch / rect_h)))
-        cx_img = (ix1 + ix2) / 2
-        cy_img = (iy1 + iy2) / 2
-        self.offset_x = cw / 2 - cx_img * new_zoom
-        self.offset_y = ch / 2 - cy_img * new_zoom
-        self.zoom = new_zoom
-        self.at_fit_zoom = False
-        self._redraw()
-
-    def _do_add_missed(self, canvas_x, canvas_y):
+    def on_ctrl_click(self, canvas_x, canvas_y):
         """Ctrl+Click: reposition selected source, or add a missed dust marker."""
         ix, iy = canvas_to_image(canvas_x, canvas_y,
                                  self.offset_x, self.offset_y, self.zoom)
@@ -1010,7 +681,7 @@ class DebugUI:
         # If near existing marker, treat as normal click instead
         nearest = self._find_nearest_marker(canvas_x, canvas_y)
         if nearest is not None:
-            self._handle_click(canvas_x, canvas_y)
+            self.on_click(canvas_x, canvas_y)
             return
 
         self.annotations[stem]["missed_dust"].append({"cx": ix, "cy": iy})
@@ -1023,11 +694,11 @@ class DebugUI:
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
-        self._populate_spots_list()
-        self._sync_spot_list_selection()
+        self._populate_items_list()
+        self._sync_item_list_selection()
         self._set_info_text(f"Added missed dust at ({ix:.0f}, {iy:.0f})")
 
-    def _handle_shift_click(self, canvas_x, canvas_y):
+    def on_shift_click(self, canvas_x, canvas_y):
         """Shift+click: toggle nearest detected or missed spot in/out of selection."""
         nearest = self._find_nearest_marker(canvas_x, canvas_y)
         if nearest is None:
@@ -1056,80 +727,7 @@ class DebugUI:
             self._update_info_from_selection()
             self._redraw_markers()
 
-    def _toggle_thread_draw(self):
-        """Toggle thread-draw mode (T key): click to place centerline points."""
-        self.thread_draw_mode = not self.thread_draw_mode
-        self.thread_draw_points = []
-        if self.thread_draw_mode:
-            self._clear_selection()
-            self._set_info_text(
-                "THREAD DRAW MODE ON\n"
-                "  Click along the missing thread to place points.\n"
-                "  Enter = finish (needs >=2 points),  Esc / T = cancel.")
-        else:
-            self._set_info_text("Thread draw mode off.")
-        self._redraw_markers()
-
-    def _finish_thread(self):
-        """Commit the in-progress thread as a missed-thread annotation (Enter)."""
-        if not self.thread_draw_mode:
-            return
-        stem = self.images[self.current_idx]["stem"]
-        if len(self.thread_draw_points) >= 2:
-            self.annotations[stem].setdefault("missed_strokes", []).append({
-                "path": [[float(x), float(y)] for x, y in self.thread_draw_points],
-                "stroke_width_px": float(DEFAULT_MISSED_STROKE_WIDTH),
-            })
-            self._auto_save(stem)
-            self._set_info_text(
-                f"Added missed thread ({len(self.thread_draw_points)} points).\n"
-                f"Click it then Del to remove. Press T to draw another.")
-        else:
-            self._set_info_text("Thread needs at least 2 points — discarded.")
-        self.thread_draw_mode = False
-        self.thread_draw_points = []
-        self._redraw_markers()
-        self._populate_spots_list()
-
-    def _cancel_thread(self):
-        """Cancel the in-progress thread (Esc)."""
-        if self.thread_draw_mode:
-            self.thread_draw_mode = False
-            self.thread_draw_points = []
-            self._set_info_text("Thread draw cancelled.")
-            self._redraw_markers()
-
-    def _toggle_hide_markers(self):
-        """Toggle visibility of all markers (H key)."""
-        self.hide_markers = not self.hide_markers
-        label = "Show Markers  (H)" if self.hide_markers else "Hide Markers  (H)"
-        self.hide_btn.config(text=label,
-                             fg="#ffff88" if self.hide_markers else "white")
-        self._redraw_markers()
-
-    def _fit_to_window(self):
-        """Zoom image to fit the canvas, centered."""
-        if self.pil_image is None:
-            return
-        img_dict = self.images[self.current_idx]
-        iw, ih = img_dict["width"], img_dict["height"]
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-        if iw > 0 and ih > 0 and cw > 1 and ch > 1:
-            self.fit_zoom = min(cw / iw, ch / ih)
-        self.zoom = self.fit_zoom
-        self.offset_x = (cw - iw * self.zoom) / 2
-        self.offset_y = (ch - ih * self.zoom) / 2
-        self.at_fit_zoom = True
-        self._redraw()
-
-    def _on_canvas_configure(self, event):
-        """Canvas resized: re-fit image if we were at fit zoom."""
-        if self.at_fit_zoom and self.pil_image is not None:
-            # Use after() to let the resize settle before measuring
-            self.root.after(50, self._fit_to_window)
-
-    def _handle_click(self, canvas_x, canvas_y):
+    def on_click(self, canvas_x, canvas_y):
         """Select nearest marker on single click."""
         # A stroke key-point handle takes priority so individual nodes are selectable.
         kp = self._find_keypoint(canvas_x, canvas_y)
@@ -1276,6 +874,53 @@ class DebugUI:
         return best
 
     # ------------------------------------------------------------------
+    # Thread-draw mode
+    # ------------------------------------------------------------------
+
+    def _toggle_thread_draw(self):
+        """Toggle thread-draw mode (T key): click to place centerline points."""
+        self.thread_draw_mode = not self.thread_draw_mode
+        self.thread_draw_points = []
+        if self.thread_draw_mode:
+            self._clear_selection()
+            self._set_info_text(
+                "THREAD DRAW MODE ON\n"
+                "  Click along the missing thread to place points.\n"
+                "  Enter = finish (needs >=2 points),  Esc / T = cancel.")
+        else:
+            self._set_info_text("Thread draw mode off.")
+        self._redraw_markers()
+
+    def _finish_thread(self):
+        """Commit the in-progress thread as a missed-thread annotation (Enter)."""
+        if not self.thread_draw_mode:
+            return
+        stem = self.images[self.current_idx]["stem"]
+        if len(self.thread_draw_points) >= 2:
+            self.annotations[stem].setdefault("missed_strokes", []).append({
+                "path": [[float(x), float(y)] for x, y in self.thread_draw_points],
+                "stroke_width_px": float(DEFAULT_MISSED_STROKE_WIDTH),
+            })
+            self._auto_save(stem)
+            self._set_info_text(
+                f"Added missed thread ({len(self.thread_draw_points)} points).\n"
+                f"Click it then Del to remove. Press T to draw another.")
+        else:
+            self._set_info_text("Thread needs at least 2 points — discarded.")
+        self.thread_draw_mode = False
+        self.thread_draw_points = []
+        self._redraw_markers()
+        self._populate_items_list()
+
+    def _cancel_thread(self):
+        """Cancel the in-progress thread (Esc)."""
+        if self.thread_draw_mode:
+            self.thread_draw_mode = False
+            self.thread_draw_points = []
+            self._set_info_text("Thread draw cancelled.")
+            self._redraw_markers()
+
+    # ------------------------------------------------------------------
     # Info panel
     # ------------------------------------------------------------------
 
@@ -1363,7 +1008,7 @@ class DebugUI:
 
         self._set_info_text("\n".join(lines))
         self._update_count_label()
-        self._sync_spot_list_selection()
+        self._sync_item_list_selection()
 
     def _update_count_label(self):
         img_dict = self.images[self.current_idx]
@@ -1395,7 +1040,7 @@ class DebugUI:
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
-        self._populate_spots_list()
+        self._populate_items_list()
         self._set_info_text(f"Added {added} rejected candidate(s) as missed dust.")
 
     def _mark_fp(self):
@@ -1405,7 +1050,7 @@ class DebugUI:
         self.annotations[stem]["false_positives"] |= self.selected_detected
         self._auto_save(stem)
         self._redraw_markers()
-        self._populate_spots_list()
+        self._populate_items_list()
         self._update_info_from_selection()
 
     def _clear_fp(self):
@@ -1415,7 +1060,7 @@ class DebugUI:
         self.annotations[stem]["false_positives"] -= self.selected_detected
         self._auto_save(stem)
         self._redraw_markers()
-        self._populate_spots_list()
+        self._populate_items_list()
         self._update_info_from_selection()
 
     def _remove_missed(self):
@@ -1442,204 +1087,28 @@ class DebugUI:
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
-        self._populate_spots_list()
+        self._populate_items_list()
         self._set_info_text("Missed dust marker(s) removed.")
 
-    def _clear_selection(self):
-        self.selected_detected = set()
-        self.selected_rejected = set()
-        self.selected_missed = set()
-        self.selected_source = None
-        self.selected_keypoint = None
-        self.selected_missed_stroke = None
-        self.remove_missed_btn.config(state=tk.DISABLED)
-        self._set_info_text("No marker selected.\n"
-                            "Click a marker or Ctrl+Click to add missed dust.")
-        self._redraw_markers()
-
     # ------------------------------------------------------------------
-    # Thumbnail list
+    # Item table hooks
     # ------------------------------------------------------------------
 
-    def _populate_thumb_list(self):
-        self.lb_img_labels = []   # Label widget per row (holds thumb, created lazily)
-        for i, img_dict in enumerate(self.images):
-            row = tk.Frame(self.lb_inner, bg="#363636", cursor="hand2")
-            row.pack(fill=tk.X, padx=2, pady=(2, 0))
-            self.lb_photos.append(None)   # placeholder; filled in lazily
+    def configure_item_tags(self, tree):
+        tree.tag_configure("det",    foreground="#cccccc")
+        tree.tag_configure("fp",     foreground="#ff8888")
+        tree.tag_configure("missed", foreground="#00ddcc")
 
-            def _bind_click(w, idx=i):
-                w.bind("<Button-1>", lambda e: self._on_thumb_row_click(idx))
-                w.bind("<MouseWheel>", self._on_lb_scroll)
+    def item_panel_header_text(self):
+        img_dict = self.images[self.current_idx]
+        ann = self.annotations[img_dict["stem"]]
+        detected = img_dict.get("detected") or []
+        missed = ann["missed_dust"]
+        missed_strokes = ann.get("missed_strokes", [])
+        stroke_suffix = f", {len(missed_strokes)} thread(s)" if missed_strokes else ""
+        return f"{len(detected)} detected, {len(missed)} missed{stroke_suffix}"
 
-            # Placeholder label (shows loading indicator, replaced by thumb later)
-            lbl_img = tk.Label(row, text="…", bg="#363636", fg="#808080",
-                               font=("", 8), cursor="hand2", anchor="center",
-                               width=26, height=5)
-            lbl_img.pack(fill=tk.X)
-            _bind_click(lbl_img)
-            self.lb_img_labels.append(lbl_img)
-
-            lbl_txt = tk.Label(row, text=img_dict["stem"], bg="#363636",
-                               fg="#cccccc", font=("", 8), wraplength=200,
-                               cursor="hand2", anchor="w")
-            lbl_txt.pack(fill=tk.X, padx=2, pady=(1, 3))
-            _bind_click(lbl_txt)
-            _bind_click(row)
-            self.lb_rows.append(row)
-
-        # Load thumbnails in background thread; main thread applies them
-        self._thumb_queue = queue.Queue()
-        self._thumb_thread = threading.Thread(
-            target=self._thumb_loader_thread, daemon=True)
-        self._thumb_thread.start()
-        self.root.after(50, self._poll_thumb_queue)
-
-    def _thumb_loader_thread(self):
-        """Background: open + resize each image, push PIL Image to queue."""
-        for i, img_dict in enumerate(self.images):
-            try:
-                pil_img = Image.open(img_dict["image_path"])
-                pil_img.thumbnail((210, 140), Image.LANCZOS)
-            except Exception:
-                pil_img = None
-            self._thumb_queue.put((i, pil_img))
-
-    def _poll_thumb_queue(self):
-        """Main thread: drain queue, create PhotoImages, update labels."""
-        try:
-            while True:
-                i, pil_img = self._thumb_queue.get_nowait()
-                if pil_img is not None:
-                    photo = ImageTk.PhotoImage(pil_img)
-                    self.lb_photos[i] = photo
-                    self.lb_img_labels[i].config(image=photo, text="", width=0, height=0)
-        except queue.Empty:
-            pass
-        if self._thumb_thread.is_alive() or not self._thumb_queue.empty():
-            self.root.after(50, self._poll_thumb_queue)
-
-    def _nav_image(self, delta):
-        """Go to next (+1) or previous (-1) image."""
-        new_idx = self.current_idx + delta
-        if new_idx < 0 or new_idx >= len(self.images):
-            return
-        stem = self.images[self.current_idx]["stem"]
-        self._auto_save(stem)
-        self._load_image_by_idx(new_idx)
-
-    def _on_thumb_row_click(self, idx):
-        if idx == self.current_idx and self.pil_image is not None:
-            return
-        stem = self.images[self.current_idx]["stem"]
-        self._auto_save(stem)
-        self._load_image_by_idx(idx)
-
-    def _highlight_lb_row(self, idx):
-        sel_bg = "#3a5a8f"
-        norm_bg = "#363636"
-        for i, row in enumerate(self.lb_rows):
-            bg = sel_bg if i == idx else norm_bg
-            row.config(bg=bg)
-            for child in row.winfo_children():
-                child.config(bg=bg)
-        # Scroll to show selected row
-        if idx < len(self.lb_rows):
-            self.lb_inner.update_idletasks()
-            row = self.lb_rows[idx]
-            ry = row.winfo_y()
-            rh = row.winfo_height()
-            ch = self.lb_canvas.winfo_height()
-            total = self.lb_inner.winfo_height()
-            if total > ch:
-                frac = max(0.0, min(1.0, (ry - ch // 2 + rh // 2) / total))
-                self.lb_canvas.yview_moveto(frac)
-
-    def _on_lb_inner_configure(self, event):
-        self.lb_canvas.configure(scrollregion=self.lb_canvas.bbox("all"))
-
-    def _on_lb_outer_configure(self, event):
-        self.lb_canvas.itemconfig(self.lb_canvas_window, width=event.width)
-
-    def _on_lb_scroll(self, event):
-        self.lb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    # ------------------------------------------------------------------
-    # Spot list panel  (ttk.Treeview table with sortable columns)
-    # ------------------------------------------------------------------
-
-    _SPOT_COLS    = ("idx", "cx", "cy", "r", "ctr", "tex", "fp")
-    _SPOT_HEADERS = {"idx": "#",   "cx": "cx",  "cy": "cy",
-                     "r":   "r",   "ctr": "ctr", "tex": "tex", "fp": "FP"}
-    _SPOT_WIDTHS  = {"idx": 30, "cx": 46, "cy": 46,
-                     "r":  30, "ctr": 40, "tex": 36, "fp": 24}
-
-    def _build_spot_list_panel(self, parent):
-        """Build the right-side spot table panel (ttk.Treeview)."""
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure("Spot.Treeview",
-                        background="#363636", foreground="#cccccc",
-                        fieldbackground="#363636", borderwidth=1,
-                        font=("Courier", 8), rowheight=20)
-        style.configure("Spot.Treeview.Heading",
-                        background="#484848", foreground="#c0c0c0",
-                        font=("", 8, "bold"), relief="groove")
-        style.map("Spot.Treeview",
-                  background=[("selected", "#3a5a8f")],
-                  foreground=[("selected", "white")])
-
-        tk.Label(parent, text="Spots:", bg="#484848", fg="white",
-                 font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
-        self.spot_list_header = tk.Label(parent, text="", bg="#484848", fg="#c0c0c0",
-                                         font=("", 9))
-        self.spot_list_header.pack(anchor="w", padx=6, pady=(0, 2))
-
-        tree_frame = tk.Frame(parent, bg="#484848")
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 2))
-
-        self.spot_tree = ttk.Treeview(tree_frame, columns=self._SPOT_COLS,
-                                       show="headings", style="Spot.Treeview",
-                                       selectmode="browse")
-        self._sort_state = {}   # col -> currently_descending
-
-        for col in self._SPOT_COLS:
-            self.spot_tree.heading(col, text=self._SPOT_HEADERS[col],
-                                   command=lambda c=col: self._sort_column(c))
-            self.spot_tree.column(col, width=self._SPOT_WIDTHS[col],
-                                  anchor="center" if col == "fp" else "e",
-                                  stretch=False, minwidth=18)
-
-        self.spot_tree.tag_configure("det",    foreground="#cccccc")
-        self.spot_tree.tag_configure("fp",     foreground="#ff8888")
-        self.spot_tree.tag_configure("missed", foreground="#00ddcc")
-        self.spot_tree.tag_configure("even",   background="#414141")
-        # "odd" rows keep the default fieldbackground (#363636)
-
-        sb_y = tk.Scrollbar(tree_frame, orient=tk.VERTICAL,
-                            command=self.spot_tree.yview)
-        self.spot_tree.configure(yscrollcommand=sb_y.set)
-        sb_y.pack(side=tk.RIGHT, fill=tk.Y)
-        self.spot_tree.pack(fill=tk.BOTH, expand=True)
-
-        self.spot_tree.bind("<<TreeviewSelect>>", lambda *_: self._on_spot_tree_select())
-
-        self.center_btn = tk.Button(
-            parent, text="Center on spot",
-            command=self._center_on_selected_spot,
-            bg="#585858", fg="white", relief=tk.FLAT,
-            padx=6, pady=3, state=tk.DISABLED)
-        self.center_btn.pack(fill=tk.X, padx=4, pady=(2, 4))
-
-    def _populate_spots_list(self):
-        """Rebuild the spot table for the current image."""
-        for iid in self.spot_tree.get_children():
-            self.spot_tree.delete(iid)
-        self.spot_list_data = {}
-        self._sort_state = {}
-        for col in self._SPOT_COLS:
-            self.spot_tree.heading(col, text=self._SPOT_HEADERS[col])
-
+    def item_rows(self):
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         ann = self.annotations[stem]
@@ -1647,48 +1116,37 @@ class DebugUI:
         missed = ann["missed_dust"]
         missed_strokes = ann.get("missed_strokes", [])
 
-        stroke_suffix = f", {len(missed_strokes)} thread(s)" if missed_strokes else ""
-        self.spot_list_header.config(
-            text=f"{len(detected)} detected, {len(missed)} missed{stroke_suffix}")
-
-        row_num = 0
+        rows = []
         for i, spot in enumerate(detected):
             is_fp = i in ann["false_positives"]
-            iid = f"det_{i}"
-            parity = "even" if row_num % 2 == 0 else "odd"
-            row_num += 1
-            values = (i,
-                      int(spot["cx"]),
-                      int(spot["cy"]),
-                      int(spot["brush_radius_px"]),
-                      f"{spot['contrast']:.1f}",
-                      f"{spot['texture']:.1f}",
-                      "●" if is_fp else "")
-            self.spot_tree.insert("", tk.END, iid=iid, values=values,
-                                  tags=("fp" if is_fp else "det", parity))
-            self.spot_list_data[iid] = {
+            rows.append({
+                "iid": f"det_{i}",
+                "values": (i,
+                           int(spot["cx"]),
+                           int(spot["cy"]),
+                           int(spot["brush_radius_px"]),
+                           f"{spot['contrast']:.1f}",
+                           f"{spot['texture']:.1f}",
+                           "●" if is_fp else ""),
+                "tag": "fp" if is_fp else "det",
                 "kind": "detected", "idx": i,
-                "sort_idx": i,
-                "sort_cx":  spot["cx"],            "sort_cy":  spot["cy"],
-                "sort_r":   spot["brush_radius_px"],
-                "sort_ctr": spot["contrast"],      "sort_tex": spot["texture"],
-                "sort_fp":  1 if is_fp else 0,
-            }
+                "sort": {"idx": i,
+                         "cx":  spot["cx"],            "cy":  spot["cy"],
+                         "r":   spot["brush_radius_px"],
+                         "ctr": spot["contrast"],      "tex": spot["texture"],
+                         "fp":  1 if is_fp else 0},
+            })
 
         for i, md in enumerate(missed):
-            iid = f"missed_{i}"
-            parity = "even" if row_num % 2 == 0 else "odd"
-            row_num += 1
-            values = (f"m{i}", int(md["cx"]), int(md["cy"]),
-                      "", "", "", "")
-            self.spot_tree.insert("", tk.END, iid=iid, values=values,
-                                  tags=("missed", parity))
-            self.spot_list_data[iid] = {
+            rows.append({
+                "iid": f"missed_{i}",
+                "values": (f"m{i}", int(md["cx"]), int(md["cy"]), "", "", "", ""),
+                "tag": "missed",
                 "kind": "missed", "idx": i,
-                "sort_idx": 100000 + i,
-                "sort_cx":  md["cx"],  "sort_cy":  md["cy"],
-                "sort_r": -1, "sort_ctr": -1, "sort_tex": -1, "sort_fp": 0,
-            }
+                "sort": {"idx": 100000 + i,
+                         "cx":  md["cx"],  "cy":  md["cy"],
+                         "r": -1, "ctr": -1, "tex": -1, "fp": 0},
+            })
 
         for i, ms in enumerate(missed_strokes):
             path = ms.get("path", [])
@@ -1696,115 +1154,66 @@ class DebugUI:
                 continue
             mid = path[len(path) // 2]
             cx, cy = mid[0], mid[1]
-            iid = f"mstroke_{i}"
-            parity = "even" if row_num % 2 == 0 else "odd"
-            row_num += 1
-            values = (f"t{i}", int(cx), int(cy), "", "", "", "")
-            self.spot_tree.insert("", tk.END, iid=iid, values=values,
-                                  tags=("missed", parity))
-            self.spot_list_data[iid] = {
+            rows.append({
+                "iid": f"mstroke_{i}",
+                "values": (f"t{i}", int(cx), int(cy), "", "", "", ""),
+                "tag": "missed",
                 "kind": "missed_stroke", "idx": i,
-                "sort_idx": 200000 + i,
-                "sort_cx": cx, "sort_cy": cy,
-                "sort_r": -1, "sort_ctr": -1, "sort_tex": -1, "sort_fp": 0,
-            }
+                "sort": {"idx": 200000 + i,
+                         "cx": cx, "cy": cy,
+                         "r": -1, "ctr": -1, "tex": -1, "fp": 0},
+            })
+        return rows
 
-    def _sort_column(self, col):
-        """Sort the treeview by the clicked column header; toggle asc/desc."""
-        reverse = not self._sort_state.get(col, False)
-        sort_key = {"idx": "sort_idx", "cx": "sort_cx", "cy": "sort_cy",
-                    "r": "sort_r", "ctr": "sort_ctr",
-                    "tex": "sort_tex", "fp": "sort_fp"}[col]
-        items = [(self.spot_list_data[iid][sort_key], iid)
-                 for iid in self.spot_tree.get_children()]
-        items.sort(reverse=reverse)
-        for pos, (_key, iid) in enumerate(items):
-            self.spot_tree.move(iid, "", pos)
-        self._sort_state[col] = reverse
-        for c in self._SPOT_COLS:
-            arrow = (" ▼" if reverse else " ▲") if c == col else ""
-            self.spot_tree.heading(c, text=self._SPOT_HEADERS[c] + arrow)
-        self._reapply_row_parity()
+    def is_row_currently_selected(self, row):
+        if row["kind"] == "detected" and row["idx"] in self.selected_detected:
+            return True
+        if row["kind"] == "missed" and row["idx"] in self.selected_missed:
+            return True
+        if row["kind"] == "missed_stroke" and row["idx"] == self.selected_missed_stroke:
+            return True
+        return False
 
-    def _reapply_row_parity(self):
-        """Reapply even/odd background tags after rows are reordered by sort."""
-        ann = self.annotations[self.images[self.current_idx]["stem"]]
-        for row_num, iid in enumerate(self.spot_tree.get_children()):
-            data = self.spot_list_data.get(iid, {})
-            kind = data.get("kind", "detected")
-            parity = "even" if row_num % 2 == 0 else "odd"
-            if kind == "missed":
-                semantic = "missed"
-            else:
-                is_fp = data.get("idx", -1) in ann["false_positives"]
-                semantic = "fp" if is_fp else "det"
-            self.spot_tree.item(iid, tags=(semantic, parity))
-
-    def _on_spot_tree_select(self):
-        """Treeview row selected: sync canvas selection."""
-        if self._syncing_selection:
-            return
-        sel = self.spot_tree.selection()
-        if not sel:
-            return
-        data = self.spot_list_data.get(sel[0])
-        if data is None:
-            return
-
-        # On Windows, <<TreeviewSelect>> fired by our own selection_set() in
-        # _sync_spot_list_selection is deferred and arrives after _syncing_selection
-        # is already False.  If the treeview row's index is already present in the
-        # current canvas selection, this event is that deferred echo — ignore it so
-        # a rubber-band multi-selection isn't collapsed to one spot.
-        if data["kind"] == "detected" and data["idx"] in self.selected_detected:
-            return
-        if data["kind"] == "missed" and data["idx"] in self.selected_missed:
-            return
-        if data["kind"] == "missed_stroke" and data["idx"] == self.selected_missed_stroke:
-            return
-
+    def on_item_row_selected(self, row):
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = set()
         self.selected_missed_stroke = None
         self.selected_source = None
 
-        if data["kind"] == "detected":
-            self.selected_detected = {data["idx"]}
+        if row["kind"] == "detected":
+            self.selected_detected = {row["idx"]}
             self.remove_missed_btn.config(state=tk.DISABLED)
-        elif data["kind"] == "missed":
-            self.selected_missed = {data["idx"]}
+        elif row["kind"] == "missed":
+            self.selected_missed = {row["idx"]}
             self.remove_missed_btn.config(state=tk.NORMAL)
-        elif data["kind"] == "missed_stroke":
-            self.selected_missed_stroke = data["idx"]
+        elif row["kind"] == "missed_stroke":
+            self.selected_missed_stroke = row["idx"]
             self.remove_missed_btn.config(state=tk.NORMAL)
 
         self._update_info_from_selection()
         self._redraw_markers()
 
-    def _center_canvas_on(self, ix, iy):
-        """Pan canvas so image coordinates (ix, iy) appear at the canvas center."""
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-        self.offset_x = cw / 2 - ix * self.zoom
-        self.offset_y = ch / 2 - iy * self.zoom
-        self.at_fit_zoom = False
-        self._redraw()
+    def selected_row_iid(self):
+        if self.selected_detected:
+            return f"det_{next(iter(self.selected_detected))}"
+        if self.selected_missed:
+            return f"missed_{next(iter(self.selected_missed))}"
+        return None
 
-    def _center_on_selected_spot(self):
-        """Button action: pan canvas to center on the selected table row."""
+    def selection_center(self):
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         if self.selected_detected:
             idx = next(iter(self.selected_detected))
             spots = img_dict.get("detected") or []
             if idx < len(spots):
-                self._center_canvas_on(spots[idx]["cx"], spots[idx]["cy"])
+                return (spots[idx]["cx"], spots[idx]["cy"])
         elif self.selected_missed:
             idx = next(iter(self.selected_missed))
             md = self.annotations[stem]["missed_dust"]
             if idx < len(md):
-                self._center_canvas_on(md[idx]["cx"], md[idx]["cy"])
+                return (md[idx]["cx"], md[idx]["cy"])
         elif self.selected_missed_stroke is not None:
             ms_list = self.annotations[stem].get("missed_strokes", [])
             idx = self.selected_missed_stroke
@@ -1812,155 +1221,19 @@ class DebugUI:
                 path = ms_list[idx].get("path", [])
                 if path:
                     mid = path[len(path) // 2]
-                    self._center_canvas_on(mid[0], mid[1])
-
-    def _sync_spot_list_selection(self):
-        """Sync treeview selection to match current canvas selection state."""
-        has_sel = bool(self.selected_detected or self.selected_missed)
-        self.center_btn.config(state=tk.NORMAL if has_sel else tk.DISABLED)
-
-        target_iid = None
-        if self.selected_detected:
-            target_iid = f"det_{next(iter(self.selected_detected))}"
-        elif self.selected_missed:
-            target_iid = f"missed_{next(iter(self.selected_missed))}"
-
-        self._syncing_selection = True
-        try:
-            current = self.spot_tree.selection()
-            if target_iid and self.spot_tree.exists(target_iid):
-                if not current or current[0] != target_iid:
-                    self.spot_tree.selection_set(target_iid)
-                self.spot_tree.see(target_iid)
-            elif current:
-                self.spot_tree.selection_remove(*current)
-        finally:
-            self._syncing_selection = False
+                    return (mid[0], mid[1])
+        return None
 
     # ------------------------------------------------------------------
-    # Persistence
+    # Report generation
     # ------------------------------------------------------------------
 
-    def _auto_save(self, stem):
-        ann = self.annotations[stem]
-        img_dict = next((d for d in self.images if d["stem"] == stem), None)
-        detected = img_dict.get("detected") or [] if img_dict else []
+    def report_title(self):
+        return "DUST DETECTION DEBUG REPORT"
 
-        fp_list = []
-        for idx in sorted(ann["false_positives"]):
-            if idx < len(detected):
-                fp_list.append(detected[idx])
-
-        # Serialize source_overrides as list of {spot_idx, src_cx, src_cy}
-        src_overrides_list = [
-            {"spot_idx": k, "src_cx": float(v[0]), "src_cy": float(v[1])}
-            for k, v in sorted(ann.get("source_overrides", {}).items())
-        ]
-
-        # Serialize radius_overrides as list of {spot_idx, corrected_radius_px}
-        radius_overrides_list = [
-            {"spot_idx": k, "corrected_radius_px": float(v)}
-            for k, v in sorted(ann.get("radius_overrides", {}).items())
-        ]
-
-        # Serialize path_overrides (edited stroke centerlines) as list of {spot_idx, path}
-        path_overrides_list = [
-            {"spot_idx": k, "path": [[float(p[0]), float(p[1])] for p in v]}
-            for k, v in sorted(ann.get("path_overrides", {}).items())
-        ]
-
-        data = {
-            "stem": stem,
-            "false_positives": fp_list,
-            "missed_dust": ann["missed_dust"],
-            "missed_strokes": ann.get("missed_strokes", []),
-            "source_overrides": src_overrides_list,
-            "radius_overrides": radius_overrides_list,
-            "path_overrides": path_overrides_list,
-            "source_mismatches": ann.get("source_mismatches", []),
-            "radius_mismatches": ann.get("radius_mismatches", []),
-        }
-        ann_path = os.path.join(self.export_dir, f"{stem}_annotations.json")
-        with open(ann_path, "w") as f:
-            json.dump(data, f, indent=2)
-
-    def _load_existing_annotations(self):
-        """Load any previously saved annotation files."""
-        for img in self.images:
-            stem = img["stem"]
-            ann_path = os.path.join(self.export_dir, f"{stem}_annotations.json")
-            if not os.path.exists(ann_path):
-                continue
-            try:
-                with open(ann_path, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                continue
-
-            detected = img.get("detected") or []
-            # Rebuild false_positives as set of indices by matching cx/cy
-            fp_indices = set()
-            for fp in data.get("false_positives", []):
-                for i, spot in enumerate(detected):
-                    if abs(spot["cx"] - fp["cx"]) < 0.5 and abs(spot["cy"] - fp["cy"]) < 0.5:
-                        fp_indices.add(i)
-                        break
-            self.annotations[stem]["false_positives"] = fp_indices
-            self.annotations[stem]["missed_dust"] = data.get("missed_dust", [])
-            self.annotations[stem]["missed_strokes"] = data.get("missed_strokes", [])
-            # Restore source overrides: list of {spot_idx, src_cx, src_cy}
-            src_overrides = {}
-            for entry in data.get("source_overrides", []):
-                try:
-                    src_overrides[int(entry["spot_idx"])] = (
-                        float(entry["src_cx"]), float(entry["src_cy"]))
-                except (KeyError, ValueError, TypeError):
-                    pass
-            self.annotations[stem]["source_overrides"] = src_overrides
-            # Restore radius overrides: list of {spot_idx, corrected_radius_px}
-            radius_overrides = {}
-            for entry in data.get("radius_overrides", []):
-                try:
-                    radius_overrides[int(entry["spot_idx"])] = float(entry["corrected_radius_px"])
-                except (KeyError, ValueError, TypeError):
-                    pass
-            self.annotations[stem]["radius_overrides"] = radius_overrides
-            # Restore stroke path overrides: list of {spot_idx, path}
-            path_overrides = {}
-            for entry in data.get("path_overrides", []):
-                try:
-                    path_overrides[int(entry["spot_idx"])] = [
-                        [float(p[0]), float(p[1])] for p in entry["path"]]
-                except (KeyError, ValueError, TypeError):
-                    pass
-            self.annotations[stem]["path_overrides"] = path_overrides
-            # Load source/radius mismatches from quality test diff sessions
-            self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
-            self.annotations[stem]["radius_mismatches"] = data.get("radius_mismatches", [])
-
-    # ------------------------------------------------------------------
-    # Report generation & close
-    # ------------------------------------------------------------------
-
-    def _on_close(self):
-        # Save current image annotations
-        stem = self.images[self.current_idx]["stem"]
-        self._auto_save(stem)
-        self._write_debug_report()
-        self.root.destroy()
-
-    def _write_debug_report(self):
+    def report_constants_lines(self):
         constants = self.data.get("constants", {})
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        lines = [
-            "DUST DETECTION DEBUG REPORT",
-            f"Generated: {now}",
-            f"Export dir: {self.export_dir}",
-            f"Images processed: {len(self.images)}",
-            "",
-            "Detection constants at time of run:",
-        ]
+        lines = ["Detection constants at time of run:"]
         # Key constants
         for key in ["NOISE_THRESHOLD_MULTIPLIER", "MIN_ABSOLUTE_THRESHOLD",
                     "MIN_SPOT_AREA", "MAX_SPOT_AREA", "MIN_ASPECT_RATIO",
@@ -1976,8 +1249,10 @@ class DebugUI:
                     "MIN_BRUSH_PX", "BRUSH_HARDNESS"]:
             if key in constants:
                 lines.append(f"  {key} = {constants[key]}")
-        lines.append("")
+        return lines
 
+    def report_body_lines(self):
+        lines = []
         total_fp = 0
         total_missed = 0
         total_src_repositions = 0
@@ -2077,11 +1352,11 @@ class DebugUI:
         lines.append(f"  Total source repositions across all images: {total_src_repositions}")
         lines.append(f"  Images with annotations: {images_with_annotations} / {len(self.images)}")
         lines.append("")
+        return lines
 
-        report_path = os.path.join(self.export_dir, "debug_report.txt")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        print(f"Debug report written to: {report_path}")
+
+# Backwards-compatible alias (external callers may refer to DebugUI)
+DebugUI = DustDebugUI
 
 
 # ---------------------------------------------------------------------------
@@ -2089,18 +1364,7 @@ class DebugUI:
 # ---------------------------------------------------------------------------
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: debug_ui.py <export_dir>")
-        sys.exit(1)
-
-    export_dir = sys.argv[1]
-    if not os.path.isdir(export_dir):
-        print(f"Error: directory not found: {export_dir}")
-        sys.exit(1)
-
-    root = tk.Tk()
-    app = DebugUI(root, export_dir)
-    root.mainloop()
+    DustDebugUI.run_main(usage="Usage: debug_ui.py <export_dir>")
 
 
 if __name__ == "__main__":

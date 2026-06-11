@@ -1,0 +1,1085 @@
+"""
+Shared debug-UI viewer base for the detectors in this repo.
+
+DebugUIBase provides the generic annotation-viewer machinery: window layout,
+image display with zoom/pan, thumbnail navigation, a sortable item table,
+selection plumbing, the annotation save/load lifecycle and report writing.
+Feature UIs (dust, crop, ...) subclass it and implement the hooks to define
+what is drawn, what clicking means, the annotation schema and report content.
+
+Usage from a feature debug_ui.py:
+
+    sys.path.insert(0, str(Path(__file__).parent.parent))  # repo root
+    from common.debug_ui_base import DebugUIBase
+
+    class MyDebugUI(DebugUIBase):
+        ...
+
+    if __name__ == "__main__":
+        MyDebugUI.run_main()
+
+The session directory contract: load_session() returns (images, constants)
+where each image dict has at least "stem", "image_path", "width", "height".
+Annotations are auto-saved to {stem}_annotations.json on every edit and on
+image switch/close; a human-readable report is written on window close.
+"""
+
+import sys
+import os
+import json
+import math
+import datetime
+import threading
+import queue
+
+import tkinter as tk
+import tkinter.ttk as ttk
+from tkinter import messagebox
+
+from PIL import Image, ImageTk
+
+
+# ---------------------------------------------------------------------------
+# Coordinate helpers (shared by base and feature subclasses)
+# ---------------------------------------------------------------------------
+
+def canvas_to_image(cx, cy, offset_x, offset_y, zoom):
+    return (cx - offset_x) / zoom, (cy - offset_y) / zoom
+
+
+def image_to_canvas(ix, iy, offset_x, offset_y, zoom):
+    return ix * zoom + offset_x, iy * zoom + offset_y
+
+
+def _seg_dist(px, py, ax, ay, bx, by):
+    """Distance from point (px,py) to segment (ax,ay)-(bx,by)."""
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _point_to_path_dist(px, py, path):
+    """Minimum distance from point (px,py) to a polyline (list of [x,y])."""
+    if not path:
+        return float("inf")
+    if len(path) == 1:
+        return math.hypot(px - path[0][0], py - path[0][1])
+    return min(_seg_dist(px, py, path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+              for i in range(len(path) - 1))
+
+
+# ---------------------------------------------------------------------------
+# Base viewer class
+# ---------------------------------------------------------------------------
+
+class DebugUIBase:
+    # --- Class-level configuration (override in subclasses) ---
+    WINDOW_TITLE = "Debug UI"
+    WINDOW_GEOMETRY = "1400x900"
+    EMPTY_SESSION_MESSAGE = "No debug session files found in:"
+    ANNOTATION_SUFFIX = "_annotations.json"
+    REPORT_FILENAME = "debug_report.txt"
+    # Item table (right panel) columns
+    ITEM_COLS = ()            # tuple of column ids
+    ITEM_HEADERS = {}         # col -> header text
+    ITEM_WIDTHS = {}          # col -> px width
+    ITEM_ANCHORS = {}         # col -> anchor (default "e")
+    ITEM_PANEL_TITLE = "Items:"
+    CENTER_BUTTON_TEXT = "Center on item"
+
+    def __init__(self, root, session_dir):
+        self.root = root
+        self.session_dir = session_dir
+        self.export_dir = session_dir   # legacy alias used by feature code
+        self.root.title(self.WINDOW_TITLE)
+        self.root.geometry(self.WINDOW_GEOMETRY)
+
+        images, constants = self.load_session(session_dir)
+        if not images:
+            messagebox.showerror("Error",
+                                 f"{self.EMPTY_SESSION_MESSAGE}\n{session_dir}")
+            root.destroy()
+            return
+
+        self.data = {"images": images, "constants": constants}
+        self.images = images
+        self.constants = constants
+
+        # Per-image annotation state (schema defined by the subclass)
+        self.annotations = {}
+        for img in self.images:
+            self.annotations[img["stem"]] = self.new_annotation_state(img)
+
+        # Load any previously saved annotations
+        self._load_existing_annotations()
+
+        # View state
+        self.current_idx = 0
+        self.zoom = 1.0
+        self.fit_zoom = 1.0
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.pil_image = None
+        self.photo_image = None
+
+        # Feature-specific selection state
+        self.init_selection_state()
+
+        # Visibility
+        self.hide_markers = False
+
+        # Rubber-band drag
+        self.drag_start: "tuple | None" = None
+        self.is_dragging = False
+        self.ctrl_drag_mode = False
+
+        # Pan state
+        self.pan_start = None
+        self.pan_offset_at_start = None
+
+        # Track whether we're at fit zoom so resize can re-fit automatically
+        self.at_fit_zoom = True
+
+        self.item_list_data = {}      # iid -> row dict from item_rows()
+        self._syncing_selection = False
+
+        self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Defer all post-UI work so the window skeleton appears immediately.
+        # after(0) fires on the first event-loop tick; after(150) fires later,
+        # by which time lb_rows will already exist.
+        self.root.after(0, self._populate_thumb_list)
+        self.root.after(150, self._load_image_by_idx, 0)
+
+    # ------------------------------------------------------------------
+    # Hooks: session / annotations  (subclass MUST implement)
+    # ------------------------------------------------------------------
+
+    def load_session(self, session_dir):
+        """Return (images, constants). Each image dict needs stem,
+        image_path, width, height."""
+        raise NotImplementedError
+
+    def new_annotation_state(self, img_dict):
+        """Return a fresh in-memory annotation dict for one image."""
+        raise NotImplementedError
+
+    def serialize_annotations(self, stem):
+        """Return the JSON-serializable dict written to {stem}_annotations.json."""
+        raise NotImplementedError
+
+    def deserialize_annotations(self, img_dict, data):
+        """Restore in-memory annotation state from a loaded annotations dict."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Hooks: rendering  (subclass MUST implement)
+    # ------------------------------------------------------------------
+
+    def draw_overlays(self):
+        """Draw all feature markers for the current image on self.canvas."""
+        raise NotImplementedError
+
+    def overlay_tags(self):
+        """Canvas tags deleted before each marker redraw."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Hooks: layout / text  (optional)
+    # ------------------------------------------------------------------
+
+    def build_left_controls(self, parent):
+        """Feature widgets between the thumbnail list and the status label
+        (e.g. visibility checkboxes)."""
+
+    def build_left_info(self, parent):
+        """Feature widgets below the status label (legend, key hints)."""
+
+    def build_feature_buttons(self, btn_frame, btn_cfg):
+        """Feature buttons/labels packed above the common buttons."""
+
+    def bind_feature_keys(self):
+        """Feature keyboard shortcuts (root.bind)."""
+
+    def configure_item_tags(self, tree):
+        """Configure semantic foreground tags on the item table."""
+
+    def image_status_text(self, img_dict) -> str:
+        return f"{img_dict['width']} × {img_dict['height']} px"
+
+    def default_info_text(self) -> str:
+        return "No marker selected."
+
+    def update_counts(self):
+        """Refresh feature count labels after image switch."""
+
+    # ------------------------------------------------------------------
+    # Hooks: interaction  (optional)
+    # ------------------------------------------------------------------
+
+    def init_selection_state(self):
+        """Create feature selection-state attributes (no widgets exist yet)."""
+
+    def reset_selection(self):
+        """Clear feature selection state and dependent widget states."""
+
+    def reset_for_new_image(self):
+        """Reset feature state when switching images (default: selection only)."""
+        self.reset_selection()
+
+    def handle_press_override(self, event) -> bool:
+        """Return True to consume a left-button press (modal tools)."""
+        return False
+
+    def handle_drag_override(self, event) -> bool:
+        """Return True to consume a left-button drag (modal tools)."""
+        return False
+
+    def handle_release_override(self, event) -> bool:
+        """Return True to consume a left-button release (modal tools)."""
+        return False
+
+    def on_scroll_override(self, event) -> bool:
+        """Return True to consume a mousewheel event (else base zooms)."""
+        return False
+
+    def on_click(self, canvas_x, canvas_y):
+        """Plain left click."""
+
+    def on_shift_click(self, canvas_x, canvas_y):
+        """Shift + left click."""
+
+    def on_ctrl_click(self, canvas_x, canvas_y):
+        """Ctrl + left click (no drag)."""
+
+    def on_rubber_band(self, ix1, iy1, ix2, iy2, additive):
+        """Rubber-band selection released; coords are image-space, ix1<=ix2,
+        iy1<=iy2. additive=True when Shift was held."""
+
+    # ------------------------------------------------------------------
+    # Hooks: item table  (subclass MUST implement when ITEM_COLS is set)
+    # ------------------------------------------------------------------
+
+    def item_rows(self) -> list:
+        """Return list of row dicts for the current image:
+        {"iid": str, "values": tuple, "tag": semantic-tag str,
+         "sort": {col: sortable value}, ...feature keys...}"""
+        return []
+
+    def item_panel_header_text(self) -> str:
+        return ""
+
+    def on_item_row_selected(self, row):
+        """A table row was selected by the user; sync canvas selection."""
+
+    def is_row_currently_selected(self, row) -> bool:
+        """True when the row's item is already in the canvas selection
+        (powers the Windows deferred-echo guard)."""
+        return False
+
+    def selected_row_iid(self) -> "str | None":
+        """iid of the table row matching the canvas selection, or None."""
+        return None
+
+    def selection_center(self) -> "tuple | None":
+        """(ix, iy) image coords of the selected item, or None."""
+        return None
+
+    # ------------------------------------------------------------------
+    # Hooks: report  (subclass MUST implement)
+    # ------------------------------------------------------------------
+
+    def report_title(self) -> str:
+        return "DEBUG REPORT"
+
+    def report_constants_lines(self) -> list:
+        """Lines describing detection constants in effect."""
+        return []
+
+    def report_body_lines(self) -> list:
+        """Per-image sections + summary."""
+        return []
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        # PanedWindow splits left panel from right
+        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
+                               sashrelief=tk.RAISED, sashwidth=6)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        # ---- LEFT PANEL ----
+        left = tk.Frame(paned, width=220, bg="#484848")
+        left.pack_propagate(False)
+        paned.add(left, minsize=160, stretch="never")
+
+        tk.Label(left, text="Images:", bg="#484848", fg="white",
+                 font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
+
+        lb_frame = tk.Frame(left, bg="#484848")
+        lb_frame.pack(fill=tk.BOTH, expand=True, padx=4)
+        lb_sb = tk.Scrollbar(lb_frame, orient=tk.VERTICAL)
+        self.lb_canvas = tk.Canvas(lb_frame, bg="#363636",
+                                   yscrollcommand=lb_sb.set, highlightthickness=0)
+        lb_sb.config(command=self.lb_canvas.yview)
+        lb_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.lb_canvas.pack(fill=tk.BOTH, expand=True)
+        self.lb_inner = tk.Frame(self.lb_canvas, bg="#363636")
+        self.lb_canvas_window = self.lb_canvas.create_window(
+            0, 0, anchor="nw", window=self.lb_inner)
+        self.lb_inner.bind("<Configure>", self._on_lb_inner_configure)
+        self.lb_inner.bind("<MouseWheel>", self._on_lb_scroll)
+        self.lb_canvas.bind("<Configure>", self._on_lb_outer_configure)
+        self.lb_canvas.bind("<MouseWheel>", self._on_lb_scroll)
+        self.lb_rows = []        # Frame per image row
+        self.lb_photos = []      # PhotoImage refs per row (prevent GC)
+
+        self.build_left_controls(left)
+
+        self.status_label = tk.Label(left, text="", bg="#484848", fg="#c0c0c0",
+                                     font=("", 9), wraplength=200, justify=tk.LEFT)
+        self.status_label.pack(anchor="w", padx=6, pady=2)
+
+        self.build_left_info(left)
+
+        # ---- CENTER PANEL (canvas) ----
+        right = tk.Frame(paned, bg="#363636")
+        paned.add(right, stretch="always")
+
+        # ---- ITEM LIST PANEL ----
+        item_pane = tk.Frame(paned, width=230, bg="#484848")
+        item_pane.pack_propagate(False)
+        paned.add(item_pane, minsize=140, stretch="never")
+        self._build_item_list_panel(item_pane)
+
+        # Canvas + scrollbars
+        canvas_frame = tk.Frame(right, bg="#363636")
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(canvas_frame, bg="#363636",
+                                cursor="crosshair", highlightthickness=0)
+        h_scroll = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL,
+                                command=self.canvas.xview)
+        v_scroll = tk.Scrollbar(canvas_frame, orient=tk.VERTICAL,
+                                command=self.canvas.yview)
+        self.canvas.configure(xscrollcommand=h_scroll.set,
+                              yscrollcommand=v_scroll.set)
+        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Canvas events
+        self.canvas.bind("<ButtonPress-1>", self._on_left_press)
+        self.canvas.bind("<B1-Motion>", self._on_left_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_left_release)
+        self.canvas.bind("<ButtonPress-2>", self._on_pan_start)
+        self.canvas.bind("<B2-Motion>", self._on_pan_move)
+        self.canvas.bind("<ButtonRelease-2>", self._on_pan_end)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)       # Windows
+        self.canvas.bind("<Button-4>", self._on_mousewheel)          # Linux scroll up
+        self.canvas.bind("<Button-5>", self._on_mousewheel)          # Linux scroll down
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.root.bind("<f>", lambda e: self._fit_to_window())
+        self.root.bind("<F>", lambda e: self._fit_to_window())
+        self.root.bind("<h>", lambda e: self._toggle_hide_markers())
+        self.root.bind("<H>", lambda e: self._toggle_hide_markers())
+        self.root.bind("<equal>", lambda e: self._zoom_step(2.0))    # + key (no shift)
+        self.root.bind("<plus>", lambda e: self._zoom_step(2.0))     # + key (with shift)
+        self.root.bind("<minus>", lambda e: self._zoom_step(0.5))
+        pan_step = 80
+        pan_big  = 300
+        self.root.bind("<Left>",          lambda e: self._pan_by( pan_step, 0))
+        self.root.bind("<Right>",         lambda e: self._pan_by(-pan_step, 0))
+        self.root.bind("<Up>",            lambda e: self._pan_by(0,  pan_step))
+        self.root.bind("<Down>",          lambda e: self._pan_by(0, -pan_step))
+        self.root.bind("<Shift-Left>",    lambda e: self._pan_by( pan_big, 0))
+        self.root.bind("<Shift-Right>",   lambda e: self._pan_by(-pan_big, 0))
+        self.root.bind("<Shift-Up>",      lambda e: self._pan_by(0,  pan_big))
+        self.root.bind("<Shift-Down>",    lambda e: self._pan_by(0, -pan_big))
+        self.root.bind("<space>",         lambda e: self._nav_image(+1))
+        self.root.bind("<b>",             lambda e: self._nav_image(-1))
+        self.root.bind("<B>",             lambda e: self._nav_image(-1))
+        self.bind_feature_keys()
+
+        # Bottom panel
+        bottom = tk.Frame(right, bg="#484848", height=190)
+        bottom.pack(fill=tk.X)
+        bottom.pack_propagate(False)
+
+        # Scrollable info text
+        info_frame = tk.Frame(bottom, bg="#484848")
+        info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=6)
+        tk.Label(info_frame, text="Selected:", bg="#484848", fg="#c0c0c0",
+                 font=("", 9, "bold")).pack(anchor="w")
+        info_text_wrap = tk.Frame(info_frame, bg="#484848")
+        info_text_wrap.pack(fill=tk.BOTH, expand=True)
+        info_sb = tk.Scrollbar(info_text_wrap, orient=tk.VERTICAL)
+        self.info_text = tk.Text(info_text_wrap, bg="#363636", fg="white",
+                                 font=("Courier", 9), wrap=tk.WORD,
+                                 state=tk.DISABLED, height=7,
+                                 yscrollcommand=info_sb.set,
+                                 relief=tk.FLAT, padx=4, pady=4,
+                                 cursor="arrow")
+        info_sb.config(command=self.info_text.yview)
+        info_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.info_text.pack(fill=tk.BOTH, expand=True)
+        self._set_info_text(self.default_info_text())
+
+        # Buttons
+        btn_frame = tk.Frame(bottom, bg="#484848")
+        btn_frame.pack(side=tk.RIGHT, padx=8, pady=6)
+
+        btn_cfg = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
+                   "padx": 8, "pady": 4, "width": 20}
+
+        self.build_feature_buttons(btn_frame, btn_cfg)
+
+        tk.Button(btn_frame, text="Clear Selection",
+                  command=self._clear_selection, **btn_cfg).pack(fill=tk.X, pady=1)
+
+        tk.Button(btn_frame, text="Fit to Window  (F)",
+                  command=self._fit_to_window, **btn_cfg).pack(fill=tk.X, pady=(6, 1))
+
+        self.hide_btn = tk.Button(btn_frame, text="Hide Markers  (H)",
+                                  command=self._toggle_hide_markers, **btn_cfg)
+        self.hide_btn.pack(fill=tk.X, pady=1)
+
+    # ------------------------------------------------------------------
+    # Left-panel helpers for subclasses
+    # ------------------------------------------------------------------
+
+    def add_legend(self, parent, entries):
+        """Pack a legend block: entries is a list of (symbol, color, label)."""
+        tk.Label(parent, text="Legend:", bg="#484848", fg="#c0c0c0",
+                 font=("", 8, "bold")).pack(anchor="w", padx=6, pady=(6, 1))
+        for symbol, color, label in entries:
+            row = tk.Frame(parent, bg="#484848")
+            row.pack(anchor="w", padx=6)
+            tk.Label(row, text=symbol, bg="#484848", fg=color,
+                     font=("", 11)).pack(side=tk.LEFT, padx=(0, 4))
+            tk.Label(row, text=label, bg="#484848", fg="#cccccc",
+                     font=("", 8)).pack(side=tk.LEFT)
+
+    def add_hints(self, parent, text):
+        """Pack a monospace key/mouse hints block."""
+        tk.Label(parent, text=text, bg="#484848", fg="white",
+                 font=("Courier", 8), justify=tk.LEFT).pack(
+            anchor="w", padx=6, pady=(8, 4))
+
+    # ------------------------------------------------------------------
+    # Info text helper
+    # ------------------------------------------------------------------
+
+    def _set_info_text(self, text):
+        self.info_text.config(state=tk.NORMAL)
+        self.info_text.delete("1.0", tk.END)
+        self.info_text.insert(tk.END, text)
+        self.info_text.config(state=tk.DISABLED)
+
+    # ------------------------------------------------------------------
+    # Image loading
+    # ------------------------------------------------------------------
+
+    def _load_image_by_idx(self, idx):
+        self.current_idx = idx
+        img_dict = self.images[idx]
+        image_path = img_dict["image_path"]
+
+        if not os.path.exists(image_path):
+            messagebox.showerror("Error", f"Image not found:\n{image_path}")
+            return
+
+        self.pil_image = Image.open(image_path)
+
+        # Fit-to-window zoom
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        iw, ih = img_dict["width"], img_dict["height"]
+        if iw > 0 and ih > 0 and cw > 1 and ch > 1:
+            self.fit_zoom = min(cw / iw, ch / ih)
+        else:
+            self.fit_zoom = 0.2
+        self.zoom = self.fit_zoom
+        self.offset_x = (cw - iw * self.zoom) / 2
+        self.offset_y = (ch - ih * self.zoom) / 2
+        self.at_fit_zoom = True
+
+        # Reset feature selection/tool state
+        self.reset_for_new_image()
+        self._set_info_text(self.default_info_text())
+
+        # Update status
+        self.status_label.config(text=self.image_status_text(img_dict))
+
+        self._redraw()
+        self.update_counts()
+        self._populate_items_list()
+
+        # Highlight selected row and scroll to it
+        self._highlight_lb_row(idx)
+
+    # ------------------------------------------------------------------
+    # Drawing
+    # ------------------------------------------------------------------
+
+    def _redraw(self):
+        self.canvas.delete("all")
+        if self.pil_image is None:
+            return
+
+        img_dict = self.images[self.current_idx]
+        iw, iw_h = img_dict["width"], img_dict["height"]
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+
+        # Draw visible crop of image
+        vis_x1 = max(0, int(-self.offset_x / self.zoom))
+        vis_y1 = max(0, int(-self.offset_y / self.zoom))
+        vis_x2 = min(iw, int((cw - self.offset_x) / self.zoom) + 1)
+        vis_y2 = min(iw_h, int((ch - self.offset_y) / self.zoom) + 1)
+
+        if vis_x2 > vis_x1 and vis_y2 > vis_y1:
+            resample = Image.LANCZOS if self.zoom >= 0.2 else Image.NEAREST
+            crop = self.pil_image.crop((vis_x1, vis_y1, vis_x2, vis_y2))
+            dw = max(1, int((vis_x2 - vis_x1) * self.zoom))
+            dh = max(1, int((vis_y2 - vis_y1) * self.zoom))
+            resized = crop.resize((dw, dh), resample)
+            self.photo_image = ImageTk.PhotoImage(resized)
+            draw_x = self.offset_x + vis_x1 * self.zoom
+            draw_y = self.offset_y + vis_y1 * self.zoom
+            self.canvas.create_image(draw_x, draw_y, anchor="nw",
+                                     image=self.photo_image, tags="bg")
+
+        self._redraw_markers()
+
+    def _redraw_markers(self):
+        self.canvas.delete(*self.overlay_tags(), "rubberband")
+        if self.pil_image is None or self.hide_markers:
+            return
+        self.draw_overlays()
+
+    # ------------------------------------------------------------------
+    # Mouse events / zoom / pan
+    # ------------------------------------------------------------------
+
+    def _zoom_step(self, factor):
+        """Zoom in or out by factor, centered on the canvas centre."""
+        new_zoom = max(0.05, min(20.0, self.zoom * factor))
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        mx, my = cw / 2, ch / 2
+        self.offset_x = mx - (mx - self.offset_x) * (new_zoom / self.zoom)
+        self.offset_y = my - (my - self.offset_y) * (new_zoom / self.zoom)
+        self.zoom = new_zoom
+        self.at_fit_zoom = False
+        self._redraw()
+
+    def _pan_by(self, dx, dy):
+        """Shift the image by dx/dy canvas pixels."""
+        self.offset_x += dx
+        self.offset_y += dy
+        self.at_fit_zoom = False
+        self._redraw()
+
+    def _on_mousewheel(self, event):
+        if self.on_scroll_override(event):
+            return
+
+        # Normal zoom centered on mouse position
+        if event.num == 4:
+            delta = 1
+        elif event.num == 5:
+            delta = -1
+        else:
+            delta = 1 if event.delta > 0 else -1
+
+        factor = 1.15 if delta > 0 else (1 / 1.15)
+        new_zoom = max(0.05, min(20.0, self.zoom * factor))
+
+        mx, my = event.x, event.y
+        self.offset_x = mx - (mx - self.offset_x) * (new_zoom / self.zoom)
+        self.offset_y = my - (my - self.offset_y) * (new_zoom / self.zoom)
+        self.zoom = new_zoom
+        self.at_fit_zoom = False
+        self._redraw()
+
+    def _on_pan_start(self, event):
+        self.pan_start = (event.x, event.y)
+        self.pan_offset_at_start = (self.offset_x, self.offset_y)
+
+    def _on_pan_move(self, event):
+        if self.pan_start is None:
+            return
+        dx = event.x - self.pan_start[0]
+        dy = event.y - self.pan_start[1]
+        self.offset_x = self.pan_offset_at_start[0] + dx
+        self.offset_y = self.pan_offset_at_start[1] + dy
+        self._redraw()
+
+    def _on_pan_end(self, event):
+        self.pan_start = None
+        self.pan_offset_at_start = None
+
+    def _on_left_press(self, event):
+        if self.handle_press_override(event):
+            return
+        self.drag_start = (event.x, event.y)
+        self.is_dragging = False
+        self.ctrl_drag_mode = bool(event.state & 0x4)
+
+    def _on_left_drag(self, event):
+        if self.drag_start is None:
+            return
+
+        if self.handle_drag_override(event):
+            return
+
+        dx = event.x - self.drag_start[0]
+        dy = event.y - self.drag_start[1]
+        if not self.is_dragging and (abs(dx) > 5 or abs(dy) > 5):
+            self.is_dragging = True
+
+        if self.is_dragging:
+            self.canvas.delete("rubberband")
+            x0, y0 = self.drag_start
+            color = "#4488ff" if self.ctrl_drag_mode else "white"
+            self.canvas.create_rectangle(x0, y0, event.x, event.y,
+                                         outline=color, width=2, dash=(4, 2),
+                                         tags="rubberband")
+
+    def _on_left_release(self, event):
+        if self.handle_release_override(event):
+            return
+
+        if self.drag_start is None:
+            return
+
+        if self.ctrl_drag_mode:
+            self.canvas.delete("rubberband")
+            if self.is_dragging:
+                self._zoom_to_rect(self.drag_start, (event.x, event.y))
+            else:
+                self.on_ctrl_click(event.x, event.y)
+            self.drag_start = None
+            self.is_dragging = False
+            self.ctrl_drag_mode = False
+            return
+
+        shift_held = bool(event.state & 0x1)
+
+        if self.is_dragging:
+            # Rubber-band select
+            x0, y0 = self.drag_start
+            x1, y1 = event.x, event.y
+            rx1, rx2 = min(x0, x1), max(x0, x1)
+            ry1, ry2 = min(y0, y1), max(y0, y1)
+            # Convert to image coords
+            ix1, iy1 = canvas_to_image(rx1, ry1, self.offset_x, self.offset_y, self.zoom)
+            ix2, iy2 = canvas_to_image(rx2, ry2, self.offset_x, self.offset_y, self.zoom)
+            self.canvas.delete("rubberband")
+            self.on_rubber_band(ix1, iy1, ix2, iy2, shift_held)
+        else:
+            if shift_held:
+                self.on_shift_click(event.x, event.y)
+            else:
+                self.on_click(event.x, event.y)
+
+        self.drag_start = None
+        self.is_dragging = False
+
+    def _zoom_to_rect(self, start, end):
+        """Zoom and pan so the rubber-band rectangle fills the canvas."""
+        x0, y0 = start
+        x1, y1 = end
+        rx1, rx2 = min(x0, x1), max(x0, x1)
+        ry1, ry2 = min(y0, y1), max(y0, y1)
+        if rx2 - rx1 < 5 or ry2 - ry1 < 5:
+            return
+        # Convert rubber-band corners to image coordinates
+        ix1, iy1 = canvas_to_image(rx1, ry1, self.offset_x, self.offset_y, self.zoom)
+        ix2, iy2 = canvas_to_image(rx2, ry2, self.offset_x, self.offset_y, self.zoom)
+        rect_w = ix2 - ix1
+        rect_h = iy2 - iy1
+        if rect_w <= 0 or rect_h <= 0:
+            return
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        new_zoom = max(0.05, min(20.0, min(cw / rect_w, ch / rect_h)))
+        cx_img = (ix1 + ix2) / 2
+        cy_img = (iy1 + iy2) / 2
+        self.offset_x = cw / 2 - cx_img * new_zoom
+        self.offset_y = ch / 2 - cy_img * new_zoom
+        self.zoom = new_zoom
+        self.at_fit_zoom = False
+        self._redraw()
+
+    def _toggle_hide_markers(self):
+        """Toggle visibility of all markers (H key)."""
+        self.hide_markers = not self.hide_markers
+        label = "Show Markers  (H)" if self.hide_markers else "Hide Markers  (H)"
+        self.hide_btn.config(text=label,
+                             fg="#ffff88" if self.hide_markers else "white")
+        self._redraw_markers()
+
+    def _fit_to_window(self):
+        """Zoom image to fit the canvas, centered."""
+        if self.pil_image is None:
+            return
+        img_dict = self.images[self.current_idx]
+        iw, ih = img_dict["width"], img_dict["height"]
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if iw > 0 and ih > 0 and cw > 1 and ch > 1:
+            self.fit_zoom = min(cw / iw, ch / ih)
+        self.zoom = self.fit_zoom
+        self.offset_x = (cw - iw * self.zoom) / 2
+        self.offset_y = (ch - ih * self.zoom) / 2
+        self.at_fit_zoom = True
+        self._redraw()
+
+    def _on_canvas_configure(self, event):
+        """Canvas resized: re-fit image if we were at fit zoom."""
+        if self.at_fit_zoom and self.pil_image is not None:
+            # Use after() to let the resize settle before measuring
+            self.root.after(50, self._fit_to_window)
+
+    def _center_canvas_on(self, ix, iy):
+        """Pan canvas so image coordinates (ix, iy) appear at the canvas center."""
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        self.offset_x = cw / 2 - ix * self.zoom
+        self.offset_y = ch / 2 - iy * self.zoom
+        self.at_fit_zoom = False
+        self._redraw()
+
+    def _clear_selection(self):
+        self.reset_selection()
+        self._set_info_text(self.default_info_text())
+        self._redraw_markers()
+
+    # ------------------------------------------------------------------
+    # Thumbnail list
+    # ------------------------------------------------------------------
+
+    def _populate_thumb_list(self):
+        self.lb_img_labels = []   # Label widget per row (holds thumb, created lazily)
+        for i, img_dict in enumerate(self.images):
+            row = tk.Frame(self.lb_inner, bg="#363636", cursor="hand2")
+            row.pack(fill=tk.X, padx=2, pady=(2, 0))
+            self.lb_photos.append(None)   # placeholder; filled in lazily
+
+            def _bind_click(w, idx=i):
+                w.bind("<Button-1>", lambda e: self._on_thumb_row_click(idx))
+                w.bind("<MouseWheel>", self._on_lb_scroll)
+
+            # Placeholder label (shows loading indicator, replaced by thumb later)
+            lbl_img = tk.Label(row, text="…", bg="#363636", fg="#808080",
+                               font=("", 8), cursor="hand2", anchor="center",
+                               width=26, height=5)
+            lbl_img.pack(fill=tk.X)
+            _bind_click(lbl_img)
+            self.lb_img_labels.append(lbl_img)
+
+            lbl_txt = tk.Label(row, text=img_dict["stem"], bg="#363636",
+                               fg="#cccccc", font=("", 8), wraplength=200,
+                               cursor="hand2", anchor="w")
+            lbl_txt.pack(fill=tk.X, padx=2, pady=(1, 3))
+            _bind_click(lbl_txt)
+            _bind_click(row)
+            self.lb_rows.append(row)
+
+        # Load thumbnails in background thread; main thread applies them
+        self._thumb_queue = queue.Queue()
+        self._thumb_thread = threading.Thread(
+            target=self._thumb_loader_thread, daemon=True)
+        self._thumb_thread.start()
+        self.root.after(50, self._poll_thumb_queue)
+
+    def _thumb_loader_thread(self):
+        """Background: open + resize each image, push PIL Image to queue."""
+        for i, img_dict in enumerate(self.images):
+            try:
+                pil_img = Image.open(img_dict["image_path"])
+                pil_img.thumbnail((210, 140), Image.LANCZOS)
+            except Exception:
+                pil_img = None
+            self._thumb_queue.put((i, pil_img))
+
+    def _poll_thumb_queue(self):
+        """Main thread: drain queue, create PhotoImages, update labels."""
+        try:
+            while True:
+                i, pil_img = self._thumb_queue.get_nowait()
+                if pil_img is not None:
+                    photo = ImageTk.PhotoImage(pil_img)
+                    self.lb_photos[i] = photo
+                    self.lb_img_labels[i].config(image=photo, text="", width=0, height=0)
+        except queue.Empty:
+            pass
+        if self._thumb_thread.is_alive() or not self._thumb_queue.empty():
+            self.root.after(50, self._poll_thumb_queue)
+
+    def _nav_image(self, delta):
+        """Go to next (+1) or previous (-1) image."""
+        new_idx = self.current_idx + delta
+        if new_idx < 0 or new_idx >= len(self.images):
+            return
+        stem = self.images[self.current_idx]["stem"]
+        self._auto_save(stem)
+        self._load_image_by_idx(new_idx)
+
+    def _on_thumb_row_click(self, idx):
+        if idx == self.current_idx and self.pil_image is not None:
+            return
+        stem = self.images[self.current_idx]["stem"]
+        self._auto_save(stem)
+        self._load_image_by_idx(idx)
+
+    def _highlight_lb_row(self, idx):
+        sel_bg = "#3a5a8f"
+        norm_bg = "#363636"
+        for i, row in enumerate(self.lb_rows):
+            bg = sel_bg if i == idx else norm_bg
+            row.config(bg=bg)
+            for child in row.winfo_children():
+                child.config(bg=bg)
+        # Scroll to show selected row
+        if idx < len(self.lb_rows):
+            self.lb_inner.update_idletasks()
+            row = self.lb_rows[idx]
+            ry = row.winfo_y()
+            rh = row.winfo_height()
+            ch = self.lb_canvas.winfo_height()
+            total = self.lb_inner.winfo_height()
+            if total > ch:
+                frac = max(0.0, min(1.0, (ry - ch // 2 + rh // 2) / total))
+                self.lb_canvas.yview_moveto(frac)
+
+    def _on_lb_inner_configure(self, event):
+        self.lb_canvas.configure(scrollregion=self.lb_canvas.bbox("all"))
+
+    def _on_lb_outer_configure(self, event):
+        self.lb_canvas.itemconfig(self.lb_canvas_window, width=event.width)
+
+    def _on_lb_scroll(self, event):
+        self.lb_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    # ------------------------------------------------------------------
+    # Item list panel  (ttk.Treeview table with sortable columns)
+    # ------------------------------------------------------------------
+
+    def _build_item_list_panel(self, parent):
+        """Build the right-side item table panel (ttk.Treeview)."""
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Item.Treeview",
+                        background="#363636", foreground="#cccccc",
+                        fieldbackground="#363636", borderwidth=1,
+                        font=("Courier", 8), rowheight=20)
+        style.configure("Item.Treeview.Heading",
+                        background="#484848", foreground="#c0c0c0",
+                        font=("", 8, "bold"), relief="groove")
+        style.map("Item.Treeview",
+                  background=[("selected", "#3a5a8f")],
+                  foreground=[("selected", "white")])
+
+        tk.Label(parent, text=self.ITEM_PANEL_TITLE, bg="#484848", fg="white",
+                 font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
+        self.item_list_header = tk.Label(parent, text="", bg="#484848", fg="#c0c0c0",
+                                         font=("", 9))
+        self.item_list_header.pack(anchor="w", padx=6, pady=(0, 2))
+
+        tree_frame = tk.Frame(parent, bg="#484848")
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 2))
+
+        self.item_tree = ttk.Treeview(tree_frame, columns=self.ITEM_COLS,
+                                      show="headings", style="Item.Treeview",
+                                      selectmode="browse")
+        self._sort_state = {}   # col -> currently_descending
+
+        for col in self.ITEM_COLS:
+            self.item_tree.heading(col, text=self.ITEM_HEADERS[col],
+                                   command=lambda c=col: self._sort_column(c))
+            self.item_tree.column(col, width=self.ITEM_WIDTHS[col],
+                                  anchor=self.ITEM_ANCHORS.get(col, "e"),
+                                  stretch=False, minwidth=18)
+
+        self.item_tree.tag_configure("even", background="#414141")
+        # "odd" rows keep the default fieldbackground (#363636)
+        self.configure_item_tags(self.item_tree)
+
+        sb_y = tk.Scrollbar(tree_frame, orient=tk.VERTICAL,
+                            command=self.item_tree.yview)
+        self.item_tree.configure(yscrollcommand=sb_y.set)
+        sb_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.item_tree.pack(fill=tk.BOTH, expand=True)
+
+        self.item_tree.bind("<<TreeviewSelect>>", lambda *e: self._on_item_tree_select())
+
+        self.center_btn = tk.Button(
+            parent, text=self.CENTER_BUTTON_TEXT,
+            command=self._center_on_selected_item,
+            bg="#585858", fg="white", relief=tk.FLAT,
+            padx=6, pady=3, state=tk.DISABLED)
+        self.center_btn.pack(fill=tk.X, padx=4, pady=(2, 4))
+
+    def _populate_items_list(self):
+        """Rebuild the item table for the current image."""
+        for iid in self.item_tree.get_children():
+            self.item_tree.delete(iid)
+        self.item_list_data = {}
+        self._sort_state = {}
+        for col in self.ITEM_COLS:
+            self.item_tree.heading(col, text=self.ITEM_HEADERS[col])
+
+        self.item_list_header.config(text=self.item_panel_header_text())
+
+        for row_num, row in enumerate(self.item_rows()):
+            parity = "even" if row_num % 2 == 0 else "odd"
+            self.item_tree.insert("", tk.END, iid=row["iid"], values=row["values"],
+                                  tags=(row["tag"], parity))
+            self.item_list_data[row["iid"]] = row
+
+    def _sort_column(self, col):
+        """Sort the treeview by the clicked column header; toggle asc/desc."""
+        reverse = not self._sort_state.get(col, False)
+        items = [(self.item_list_data[iid]["sort"][col], iid)
+                 for iid in self.item_tree.get_children()]
+        items.sort(reverse=reverse)
+        for pos, (_key, iid) in enumerate(items):
+            self.item_tree.move(iid, "", pos)
+        self._sort_state[col] = reverse
+        for c in self.ITEM_COLS:
+            arrow = (" ▼" if reverse else " ▲") if c == col else ""
+            self.item_tree.heading(c, text=self.ITEM_HEADERS[c] + arrow)
+        self._reapply_row_parity()
+
+    def _reapply_row_parity(self):
+        """Reapply even/odd background tags after rows are reordered by sort."""
+        for row_num, iid in enumerate(self.item_tree.get_children()):
+            row = self.item_list_data.get(iid, {})
+            parity = "even" if row_num % 2 == 0 else "odd"
+            self.item_tree.item(iid, tags=(row.get("tag", ""), parity))
+
+    def _on_item_tree_select(self):
+        """Treeview row selected: sync canvas selection."""
+        if self._syncing_selection:
+            return
+        sel = self.item_tree.selection()
+        if not sel:
+            return
+        row = self.item_list_data.get(sel[0])
+        if row is None:
+            return
+
+        # On Windows, <<TreeviewSelect>> fired by our own selection_set() in
+        # _sync_item_list_selection is deferred and arrives after _syncing_selection
+        # is already False.  If the treeview row's item is already present in the
+        # current canvas selection, this event is that deferred echo — ignore it so
+        # a rubber-band multi-selection isn't collapsed to one item.
+        if self.is_row_currently_selected(row):
+            return
+
+        self.on_item_row_selected(row)
+
+    def _center_on_selected_item(self):
+        """Button action: pan canvas to center on the selected item."""
+        center = self.selection_center()
+        if center is not None:
+            self._center_canvas_on(center[0], center[1])
+
+    def _sync_item_list_selection(self):
+        """Sync treeview selection to match current canvas selection state."""
+        target_iid = self.selected_row_iid()
+        self.center_btn.config(state=tk.NORMAL if target_iid else tk.DISABLED)
+
+        self._syncing_selection = True
+        try:
+            current = self.item_tree.selection()
+            if target_iid and self.item_tree.exists(target_iid):
+                if not current or current[0] != target_iid:
+                    self.item_tree.selection_set(target_iid)
+                self.item_tree.see(target_iid)
+            elif current:
+                self.item_tree.selection_remove(*current)
+        finally:
+            self._syncing_selection = False
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _auto_save(self, stem):
+        data = self.serialize_annotations(stem)
+        ann_path = os.path.join(self.session_dir, f"{stem}{self.ANNOTATION_SUFFIX}")
+        with open(ann_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def _load_existing_annotations(self):
+        """Load any previously saved annotation files."""
+        for img in self.images:
+            stem = img["stem"]
+            ann_path = os.path.join(self.session_dir, f"{stem}{self.ANNOTATION_SUFFIX}")
+            if not os.path.exists(ann_path):
+                continue
+            try:
+                with open(ann_path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            self.deserialize_annotations(img, data)
+
+    # ------------------------------------------------------------------
+    # Report generation & close
+    # ------------------------------------------------------------------
+
+    def _on_close(self):
+        # Save current image annotations
+        stem = self.images[self.current_idx]["stem"]
+        self._auto_save(stem)
+        self._write_debug_report()
+        self.root.destroy()
+
+    def _write_debug_report(self):
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        lines = [
+            self.report_title(),
+            f"Generated: {now}",
+            f"Export dir: {self.session_dir}",
+            f"Images processed: {len(self.images)}",
+            "",
+        ]
+        lines.extend(self.report_constants_lines())
+        lines.append("")
+        lines.extend(self.report_body_lines())
+
+        report_path = os.path.join(self.session_dir, self.REPORT_FILENAME)
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print(f"Debug report written to: {report_path}")
+
+    # ------------------------------------------------------------------
+    # Entry point helper
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def run_main(cls, usage="Usage: debug_ui.py <session_dir>"):
+        if len(sys.argv) < 2:
+            print(usage)
+            sys.exit(1)
+
+        session_dir = sys.argv[1]
+        if not os.path.isdir(session_dir):
+            print(f"Error: directory not found: {session_dir}")
+            sys.exit(1)
+
+        root = tk.Tk()
+        app = cls(root, session_dir)
+        root.mainloop()
