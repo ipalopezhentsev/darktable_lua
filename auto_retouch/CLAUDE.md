@@ -54,8 +54,17 @@ Current key fields: `cx`, `cy`, `radius_px` (raw detected, for algorithm interna
 
 ### Registered Actions
 
-- **AutoRetouch_Debug** (`export_and_detect_dust_debug`) - export and detect dust spots only, saves visualization overlays.
-- **AutoRetouch_InPlace** (`export_detect_and_apply_retouch_inplace`) - full pipeline: export, detect dust, apply heal retouch to source image's XMP.
+Each feature has three modes: 1) debug UI (detect + annotate, no apply, detached launch so darktable isn't blocked), 2) fully automatic (temp folder removed on success), 3) automatic but temp folder kept for analysis.
+
+Film dust:
+- **AutoRetouch_Debug** (`export_and_detect_dust_debug`) - mode 1: detect + open debug UI, no apply.
+- **AutoRetouch_InPlace** (`export_detect_and_apply_retouch_inplace(false)`) - mode 2: full pipeline: export, detect dust, apply heal retouch to source image's XMP; temp removed on success.
+- **AutoRetouch_InPlace_KeepTemp** (`export_detect_and_apply_retouch_inplace(true)`) - mode 3: same, temp folder kept.
+
+Sensor dust (select >= 2 frames from one scanning session):
+- **AutoRetouch_SensorDust_Debug** (`export_and_detect_sensor_dust_debug`) - mode 1: cross-frame detect + open debug UI (sensor session), no apply.
+- **AutoRetouch_SensorDust** (`export_detect_and_apply_sensor_dust(false)`) - mode 2: detect + heal sensor dust on all frames; temp removed on success.
+- **AutoRetouch_SensorDust_KeepTemp** (`export_detect_and_apply_sensor_dust(true)`) - mode 3: same, temp folder kept.
 
 ## Known Bugs / TODOs
 

@@ -808,8 +808,22 @@ local function export_and_detect_dust_debug()
   export_and_detect(images, true)
 end
 
+-- Sensor dust debug mode: export, detect and open the debug UI - no apply
+local function export_and_detect_sensor_dust_debug()
+  dlog.log_level(dlog.info)
+  local images = dt.gui.selection()
+
+  if #images < 2 then
+    dt.print(_("Select 2 or more images from the same scanning session for sensor dust removal"))
+    return
+  end
+
+  export_and_detect(images, true, true)
+end
+
 -- Full pipeline: export, detect, apply retouch to source images
-local function export_detect_and_apply_retouch_inplace()
+-- keep_temp: if true, the temp folder is kept after a successful run for analysis
+local function export_detect_and_apply_retouch_inplace(keep_temp)
   dlog.log_level(dlog.info)
   math.randomseed(os.time() + os.clock() * 1000)
 
@@ -864,11 +878,12 @@ local function export_detect_and_apply_retouch_inplace()
   dt.print(string.format(_("Auto Retouch Complete: %d applied, %d no dust, %d failed"),
     stats.applied, stats.skipped, stats.failed))
 
-  -- Clean up temp dir if no errors
-  if stats.failed == 0 then
+  -- Clean up temp dir if no errors (keep on failure or in keep-temp mode)
+  if stats.failed == 0 and not keep_temp then
     df.rmdir(export_dir)
     dlog.msg(dlog.info, "export_detect_and_apply_retouch_inplace", "Removed temp dir: " .. export_dir)
   else
+    dt.print(string.format(_("Temp folder kept for analysis: %s"), export_dir))
     dlog.msg(dlog.info, "export_detect_and_apply_retouch_inplace",
       "Keeping temp dir for inspection: " .. export_dir)
   end
@@ -948,21 +963,27 @@ end
 local function destroy()
     dt.gui.libs.image.destroy_action("AutoRetouch_Debug")
     dt.gui.libs.image.destroy_action("AutoRetouch_InPlace")
+    dt.gui.libs.image.destroy_action("AutoRetouch_InPlace_KeepTemp")
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust")
+    dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_KeepTemp")
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_Debug")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoRetouch_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_InPlace", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch_InPlace_KeepTemp", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_SensorDust", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch_SensorDust_KeepTemp", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_SensorDust_Debug", "shortcut")
 end
 
--- Debug action
+-- ============ Film dust ============
+
+-- Mode 1: debug UI (detect + annotate, no apply)
 dt.gui.libs.image.register_action(
     "AutoRetouch_Debug",
-    _("Auto retouch debug (no apply)"),
+    _("Auto retouch debug (open debug UI, no apply)"),
     function() export_and_detect_dust_debug() end,
-    _("Export and detect dust spots only - for debugging")
+    _("Export, detect dust spots and open the debug UI - nothing applied")
 )
 
 dt.register_event(
@@ -972,22 +993,54 @@ dt.register_event(
     "AutoRetouch_Debug"
 )
 
--- In-place action
+-- Mode 2: fully automatic, temp folder removed on success
 dt.gui.libs.image.register_action(
     "AutoRetouch_InPlace",
     _("Auto retouch in-place (heal dust)"),
-    function() export_detect_and_apply_retouch_inplace() end,
+    function() export_detect_and_apply_retouch_inplace(false) end,
     _("Detect dust spots and apply heal retouch to selected images")
 )
 
 dt.register_event(
     "AutoRetouch_InPlace",
     "shortcut",
-    function(event, shortcut) export_detect_and_apply_retouch_inplace() end,
+    function(event, shortcut) export_detect_and_apply_retouch_inplace(false) end,
     "AutoRetouch_InPlace"
 )
 
--- Sensor dust action (cross-frame: select all frames from one scanning session)
+-- Mode 3: fully automatic, temp folder kept for analysis
+dt.gui.libs.image.register_action(
+    "AutoRetouch_InPlace_KeepTemp",
+    _("Auto retouch in-place (keep temp folder)"),
+    function() export_detect_and_apply_retouch_inplace(true) end,
+    _("Same as in-place, but keeps the temp folder and log for analysis")
+)
+
+dt.register_event(
+    "AutoRetouch_InPlace_KeepTemp",
+    "shortcut",
+    function(event, shortcut) export_detect_and_apply_retouch_inplace(true) end,
+    "AutoRetouch_InPlace_KeepTemp"
+)
+
+-- ============ Sensor dust (cross-frame: select all frames from one scanning session) ============
+
+-- Mode 1: debug UI (detect + annotate, no apply)
+dt.gui.libs.image.register_action(
+    "AutoRetouch_SensorDust_Debug",
+    _("Auto retouch sensor dust debug (open debug UI, no apply)"),
+    function() export_and_detect_sensor_dust_debug() end,
+    _("Detect sensor dust across selected frames and open the debug UI - nothing applied")
+)
+
+dt.register_event(
+    "AutoRetouch_SensorDust_Debug",
+    "shortcut",
+    function(event, shortcut) export_and_detect_sensor_dust_debug() end,
+    "AutoRetouch_SensorDust_Debug"
+)
+
+-- Mode 2: fully automatic, temp folder removed on success
 dt.gui.libs.image.register_action(
     "AutoRetouch_SensorDust",
     _("Auto retouch sensor dust (heal sensor dust)"),
@@ -1002,19 +1055,19 @@ dt.register_event(
     "AutoRetouch_SensorDust"
 )
 
--- Sensor dust debug action (same as above but keeps temp folder for inspection)
+-- Mode 3: fully automatic, temp folder kept for analysis
 dt.gui.libs.image.register_action(
-    "AutoRetouch_SensorDust_Debug",
-    _("Auto retouch sensor dust DEBUG (keep log)"),
+    "AutoRetouch_SensorDust_KeepTemp",
+    _("Auto retouch sensor dust (keep temp folder)"),
     function() export_detect_and_apply_sensor_dust(true) end,
-    _("Detect and heal DSLR sensor dust — keeps temp folder and log for inspection")
+    _("Same as sensor dust heal, but keeps the temp folder and log for analysis")
 )
 
 dt.register_event(
-    "AutoRetouch_SensorDust_Debug",
+    "AutoRetouch_SensorDust_KeepTemp",
     "shortcut",
     function(event, shortcut) export_detect_and_apply_sensor_dust(true) end,
-    "AutoRetouch_SensorDust_Debug"
+    "AutoRetouch_SensorDust_KeepTemp"
 )
 
 script_data.destroy = destroy

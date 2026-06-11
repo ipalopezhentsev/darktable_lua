@@ -20,8 +20,11 @@
 
 ### Registered Actions
 
-- **AutoCrop_Debug** (`export_and_find_edges_debug`) - export and detect only, no crop application. For testing edge detection.
-- **AutoCrop_InPlace** (`export_detect_and_apply_inplace`) - full pipeline: export, detect, apply crop directly to source image's XMP (no virtual copies). Updates `darktable:change_timestamp` and `darktable:history_current_hash` to force preview regeneration.
+Three modes (same scheme as auto_retouch):
+
+- **AutoCrop_Debug** (`export_and_find_edges_debug`) - mode 1: export + detect detached (bat/vbs hidden launch on Windows so darktable isn't blocked), opens the crop debug UI when detection finishes. No crop applied; temp folder kept.
+- **AutoCrop_InPlace** (`export_detect_and_apply_inplace(false)`) - mode 2: full pipeline: export, detect, apply crop directly to source image's XMP (no virtual copies). Updates `darktable:change_timestamp` and `darktable:history_current_hash` to force preview regeneration. Temp folder removed on success.
+- **AutoCrop_InPlace_KeepTemp** (`export_detect_and_apply_inplace(true)`) - mode 3: same as InPlace but keeps the temp folder and log for analysis.
 
 ## Known Bugs / TODOs
 
