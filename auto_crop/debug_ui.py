@@ -327,7 +327,11 @@ class CropDebugUI(DebugUIBase):
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         edge = self.selected_edge
-        # Nudge in pixel space from the current effective position
+        # Nudge in pixel space from the current effective position.
+        # Horizontal edges move opposite to vertical ones: scroll up moves
+        # top/bottom lines up (-y) but left/right lines right (+x).
+        if edge in ("top", "bottom"):
+            delta = -delta
         pos = self._edge_pos_px(img_dict, edge, self._effective_pct(img_dict, edge))
         pos += delta * step
         pct = self._edge_px_to_pct(img_dict, edge, pos)
