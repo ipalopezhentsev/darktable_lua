@@ -3022,11 +3022,13 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-def write_debug_spots_json(results, image_paths_by_stem, output_dir):
+def write_debug_spots_json(results, image_paths_by_stem, output_dir, mode=None):
     """Write per-image {stem}_debug_spots.json files for the debug UI.
 
     results: list of (filename_no_ext, spots_or_None, rejected_candidates, img_dims,
                       error_or_None, xmp_data_or_None).
+    mode: optional session marker (e.g. "sensor") so the UI can adapt its
+          title/report to the detection mode that produced the session.
     """
     constants = {k: v for k, v in globals().items()
                  if k.isupper() and isinstance(v, (int, float))}
@@ -3042,6 +3044,8 @@ def write_debug_spots_json(results, image_paths_by_stem, output_dir):
             "rejected": rejected_candidates or [],
             "constants": constants,
         }
+        if mode:
+            data["mode"] = mode
         out_path = os.path.join(output_dir, f"{filename}_debug_spots.json")
         with open(out_path, "w") as f:
             json.dump(data, f, indent=2, cls=NumpyEncoder)
@@ -3502,8 +3506,11 @@ def _compute_frame_pairwise_overlap(consensus_spots):
     return pairwise
 
 
-def run_sensor_dust_mode(image_paths, transforms, output_dir):
+def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
     """Full sensor dust pipeline: per-image candidates → cross-frame consensus → XMP data.
+
+    When debug_ui is True, also writes a per-image debug session
+    ({stem}_debug_spots.json with mode="sensor") and launches debug_ui.py on it.
 
     Returns True if any errors occurred.
     """
@@ -3604,14 +3611,23 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
         projected.sort(key=lambda x: (x[0], -x[1]["n_frames"]))
 
         spots = []
+        rejected = []   # skipped candidates, persisted for debug-UI review
         skipped_texture = 0
         skipped_no_source = 0
+        max_forms_announced = False
         for spot_tex, sd, cx_px, cy_px, radius_px in projected:
             if len(spots) >= MAX_FORMS:
-                remaining = len(projected) - len(spots) - skipped_texture - skipped_no_source
-                print(f"  [{stem}] reached MAX_FORMS={MAX_FORMS} limit, "
-                      f"{remaining} lower-priority spots not applied")
-                break
+                if not max_forms_announced:
+                    max_forms_announced = True
+                    remaining = len(projected) - len(spots) - skipped_texture - skipped_no_source
+                    print(f"  [{stem}] reached MAX_FORMS={MAX_FORMS} limit, "
+                          f"{remaining} lower-priority spots not applied")
+                rejected.append({
+                    "cx": cx_px, "cy": cy_px, "area": 0, "contrast": 0.0,
+                    "reason": "max_forms",
+                    "detail": f"spot_tex={spot_tex:.1f} n_frames={sd['n_frames']}",
+                })
+                continue
 
             brush_r = max(MIN_BRUSH_PX, radius_px * SENSOR_BRUSH_SCALE)
 
@@ -3620,6 +3636,13 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
                     skipped_texture += 1
                     print(f"  [{stem}] skip ({cx_px:.0f},{cy_px:.0f}) "
                           f"spot_texture={spot_tex:.1f} > {SENSOR_MAX_CORRECTION_TEXTURE}")
+                    rejected.append({
+                        "cx": cx_px, "cy": cy_px, "area": 0, "contrast": 0.0,
+                        "reason": "busy_area",
+                        "detail": f"spot_tex={spot_tex:.1f} > "
+                                  f"{SENSOR_MAX_CORRECTION_TEXTURE} "
+                                  f"n_frames={sd['n_frames']}",
+                    })
                     continue
 
                 src_result = _sensor_find_source(gray_export, cx_px, cy_px, radius_px)
@@ -3627,6 +3650,12 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
                     skipped_no_source += 1
                     print(f"  [{stem}] skip ({cx_px:.0f},{cy_px:.0f}) "
                           f"no clean source (all directions > {SENSOR_MAX_SOURCE_TEXTURE})")
+                    rejected.append({
+                        "cx": cx_px, "cy": cy_px, "area": 0, "contrast": 0.0,
+                        "reason": "no_clean_source",
+                        "detail": f"all directions > {SENSOR_MAX_SOURCE_TEXTURE} "
+                                  f"n_frames={sd['n_frames']}",
+                    })
                     continue
                 src_cx, src_cy, src_tex = src_result
                 print(f"  [{stem}] heal ({cx_px:.0f},{cy_px:.0f}) r={radius_px:.0f}px "
@@ -3643,6 +3672,8 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
                 "contrast": 10.0, "area": 0,
                 "texture": spot_tex, "context_texture": 0.0,
                 "excess_sat": 0.0, "spot_sat": 0.0,
+                "n_frames": sd["n_frames"],
+                "radius_norm": sd["radius_norm"],
             })
 
         total_skipped = skipped_texture + skipped_no_source
@@ -3654,10 +3685,18 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir):
         if spots and img_w and img_h:
             xmp_data = generate_xmp_data_for_spots(
                 spots, img_w, img_h, flip=flip, crop=crop, ashift_params=t.get("ashift"))
-        results.append((stem, spots, [], (img_w, img_h), None, xmp_data))
+        results.append((stem, spots, rejected, (img_w, img_h), None, xmp_data))
 
     results.sort(key=lambda r: r[0])
     write_dust_results(results, output_dir)
+
+    if debug_ui:
+        write_debug_spots_json(results, image_paths_by_stem, output_dir, mode="sensor")
+        import subprocess
+        debug_ui_script = Path(__file__).parent / "debug_ui.py"
+        print(f"Launching debug UI: {debug_ui_script}", flush=True)
+        subprocess.Popen([sys.executable, str(debug_ui_script), output_dir])
+
     return any_errors
 
 
@@ -3811,7 +3850,8 @@ def main():
         if len(image_paths) < 2:
             print("Error: --sensor-dust requires at least 2 images for cross-frame correlation")
             sys.exit(1)
-        had_errors = run_sensor_dust_mode(image_paths, transforms, output_dir)
+        had_errors = run_sensor_dust_mode(image_paths, transforms, output_dir,
+                                          debug_ui=debug_ui)
         sys.exit(1 if had_errors else 0)
 
     image_paths_by_stem = {Path(p).stem: p for p in image_paths}

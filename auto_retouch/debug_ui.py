@@ -52,7 +52,13 @@ class DustDebugUI(DebugUIBase):
 
     def load_session(self, session_dir):
         import detect_dust
-        return detect_dust.load_debug_spots_dir(session_dir)
+        images, constants = detect_dust.load_debug_spots_dir(session_dir)
+        # Sensor-dust sessions reuse this UI wholesale (sensor spots are dot
+        # spots in the same dict format); only title and report wording differ.
+        self.sensor_mode = bool(images and images[0].get("mode") == "sensor")
+        if self.sensor_mode:
+            self.root.title("Sensor Dust Debug UI")
+        return images, constants
 
     def new_annotation_state(self, img_dict):
         return {
@@ -970,6 +976,8 @@ class DustDebugUI(DebugUIBase):
                         rc_str = "\n  Scroll to annotate correct radius"
                     rn = s.get("radius_norm")
                     bn_str = f"  radius_norm={rn:.5f}" if rn is not None else ""
+                    nf = s.get("n_frames")
+                    bn_str += f"  n_frames={nf}" if nf is not None else ""
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
                         f"enc_r={s['radius_px']:.1f}px{bn_str}  area={s['area']}\n"
@@ -1229,11 +1237,25 @@ class DustDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def report_title(self):
+        if self.sensor_mode:
+            return "SENSOR DUST DETECTION DEBUG REPORT"
         return "DUST DETECTION DEBUG REPORT"
 
     def report_constants_lines(self):
         constants = self.data.get("constants", {})
         lines = ["Detection constants at time of run:"]
+        if self.sensor_mode:
+            for key in ["SENSOR_SIGMA_INNER_FRAC", "SENSOR_SIGMA_OUTER_FRAC",
+                        "SENSOR_DOG_MIN_CONTRAST", "SENSOR_MIN_RADIUS_FRAC",
+                        "SENSOR_MAX_BLOB_RADIUS_FRAC", "SENSOR_CLUSTER_RADIUS_NORM",
+                        "SENSOR_DUST_MIN_FRAMES", "SENSOR_BRUSH_SCALE",
+                        "SENSOR_MAX_CANDIDATE_TEXTURE",
+                        "SENSOR_MAX_CANDIDATES_FOR_CONSENSUS",
+                        "SENSOR_MAX_CORRECTION_TEXTURE", "SENSOR_MAX_SOURCE_TEXTURE",
+                        "MAX_FORMS", "MIN_BRUSH_PX"]:
+                if key in constants:
+                    lines.append(f"  {key} = {constants[key]}")
+            return lines
         # Key constants
         for key in ["NOISE_THRESHOLD_MULTIPLIER", "MIN_ABSOLUTE_THRESHOLD",
                     "MIN_SPOT_AREA", "MAX_SPOT_AREA", "MIN_ASPECT_RATIO",
