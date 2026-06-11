@@ -10,6 +10,8 @@ Darktable Lua plugins organized in two subdirectories:
 
 Two-component system per plugin: **Lua plugin** (runs inside darktable) calls a **Python script** (runs externally) for image analysis. Each plugin lives in its own subdirectory with its Lua + Python files together.
 
+Shared Python code lives in **`common/`** — notably `common/debug_ui_base.py`, the tkinter annotation-viewer base class (image display, zoom/pan, navigation, sortable item table, annotation save/load lifecycle, report shell). Each feature's `debug_ui.py` subclasses it and implements only feature-specific hooks (overlays, hit-testing, annotation schema, report content). Subclasses: `auto_retouch/debug_ui.py` (`DustDebugUI`, serves both film-dust and sensor-dust sessions) and `auto_crop/debug_ui.py` (`CropDebugUI`).
+
 ## Python rules
 When writing Python scripts, follow rules in @docs/python_rules.md
 

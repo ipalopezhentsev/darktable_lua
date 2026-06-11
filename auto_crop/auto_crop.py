@@ -9,6 +9,7 @@ Usage: auto_crop.py <image_path> [image_path2 ...]
 
 import sys
 import os
+import json
 from pathlib import Path
 import cv2
 import numpy as np
@@ -780,15 +781,58 @@ def write_crop_results(results, output_path):
     except Exception as e:
         print(f"Error writing results file: {e}")
 
+def write_debug_crop_json(debug_entries, output_dir):
+    """Write per-image {stem}_debug_crop.json files for the crop debug UI.
+
+    debug_entries: list of dicts with stem, image_path, width, height,
+    crop {left,top,right,bottom} (%), confidence {left,top,right,bottom},
+    detected_region [x,y,w,h] (pre-tightening px rect).
+    """
+    constants = {k: v for k, v in globals().items()
+                 if k.isupper() and isinstance(v, (int, float))}
+
+    for entry in debug_entries:
+        data = dict(entry)
+        data["constants"] = constants
+        out_path = os.path.join(output_dir, f"{entry['stem']}_debug_crop.json")
+        with open(out_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    print(f"Debug crop data written to: {output_dir} ({len(debug_entries)} file(s))")
+
+
+def load_debug_crop_dir(directory):
+    """Load all per-image {stem}_debug_crop.json files from a directory.
+
+    Returns (images_list, constants_dict) — same shape as
+    detect_dust.load_debug_spots_dir so the shared debug-UI base can use it.
+    """
+    directory = Path(directory)
+    files = sorted(directory.glob("*_debug_crop.json"))
+    if not files:
+        return [], {}
+
+    images = []
+    constants = {}
+    for f in files:
+        with open(f) as fh:
+            data = json.load(fh)
+        if not constants:
+            constants = data.get("constants", {})
+        images.append({k: v for k, v in data.items() if k != "constants"})
+    return images, constants
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: auto_crop.py <image_path> [image_path2 ...]")
+        print("Usage: auto_crop.py [--no-vis] [--debug-ui] <image_path> [image_path2 ...]")
         print("\nThis script processes one or more images exported by the darktable AutoCrop plugin.")
         sys.exit(1)
 
-    # Check for --no-vis flag
+    # Check for flags
     save_visualization = "--no-vis" not in sys.argv
-    image_paths = [a for a in sys.argv[1:] if a != "--no-vis"]
+    debug_ui = "--debug-ui" in sys.argv
+    image_paths = [a for a in sys.argv[1:] if a not in ("--no-vis", "--debug-ui")]
     image_extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'}
 
     # Validate all files first
@@ -815,6 +859,7 @@ def main():
 
     # Collect results for JSON output
     all_results = []
+    debug_entries = []   # richer per-image data for the crop debug UI
     success_count = 0
     error_count = 0
 
@@ -876,6 +921,26 @@ def main():
                 }
             })
 
+            debug_entries.append({
+                "stem": filename_base,
+                "image_path": str(img_file),
+                "width": int(result['image_size'][0]),
+                "height": int(result['image_size'][1]),
+                "crop": {
+                    "left": result['crop_left'],
+                    "top": result['crop_top'],
+                    "right": result['crop_right'],
+                    "bottom": result['crop_bottom'],
+                },
+                "confidence": {
+                    "left": result['confidence_left'],
+                    "top": result['confidence_top'],
+                    "right": result['confidence_right'],
+                    "bottom": result['confidence_bottom'],
+                },
+                "detected_region": [int(v) for v in result['detected_region']],
+            })
+
     # Summary
     print("\n" + "=" * 60)
     if len(image_files) > 1:
@@ -886,6 +951,13 @@ def main():
     # Write crop results file
     results_output_path = output_dir / "crop_results.txt"
     write_crop_results(all_results, results_output_path)
+
+    if debug_ui and debug_entries:
+        write_debug_crop_json(debug_entries, str(output_dir))
+        import subprocess
+        debug_ui_script = Path(__file__).parent / "debug_ui.py"
+        print(f"Launching debug UI: {debug_ui_script}", flush=True)
+        subprocess.Popen([sys.executable, str(debug_ui_script), str(output_dir)])
 
     # Exit with error code if any files failed
     if error_count > 0:

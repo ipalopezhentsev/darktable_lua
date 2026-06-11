@@ -14,6 +14,10 @@
 - Python outputs crop as percentages from each edge; Lua converts to fractions where R/B are edge positions (1 - margin)
 - `darktable:change_timestamp` (microseconds since 0001-01-01) and `darktable:history_current_hash` (random hex) are updated in XMP to force darktable to regenerate previews
 
+### Debug UI
+
+`auto_crop.py --debug-ui <images...>` writes per-image `{stem}_debug_crop.json` (crop %, per-edge confidence, detected_region, constants) and opens `auto_crop/debug_ui.py` (`CropDebugUI`, subclass of `common/debug_ui_base.py`). The user marks wrong edges: select an edge (click its line or keys 1/2/3/4), then Ctrl+Click the correct position (scroll = 1 px nudge, Shift = 10 px; C clears). Corrections auto-save to `{stem}_annotations.json`; closing writes `debug_report.txt` with detected vs corrected per edge (% and px) for tuning. A correction IS the wrong-edge marker. The annotation JSONs are designed to seed the future baseline/tests (see TODO below).
+
 ### Registered Actions
 
 - **AutoCrop_Debug** (`export_and_find_edges_debug`) - export and detect only, no crop application. For testing edge detection.

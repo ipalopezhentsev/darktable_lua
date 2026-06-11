@@ -68,5 +68,5 @@ For auto_retouch feature:
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
 - [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass.
 - [ ] add full negadoctor automation
-- [ ] generalize debug ui - viewer is common part, other features are like modules to it, add other detectors to UI, not only retouching
+- [x] generalize debug ui - viewer is common part, other features are like modules to it, add other detectors to UI, not only retouching — done: `common/debug_ui_base.py` is the shared viewer base; `debug_ui.py` here is `DustDebugUI` (also serves sensor sessions via the `mode="sensor"` marker written by `--sensor-dust --debug-ui`); `auto_crop/debug_ui.py` is `CropDebugUI`
 - [ ] speed up retouching (GPU?)
