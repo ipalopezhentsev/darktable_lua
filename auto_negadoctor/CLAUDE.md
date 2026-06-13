@@ -68,15 +68,38 @@
      base-like lines are scene. A rebate-extended trim is only valid if the
      base-like band TERMINATES within CROP_REBATE_TERM_WINDOW lines —
      unexposed dark scene at the frame edge is base-like too but continues
-     indefinitely (DSC_0021's museum ceiling). NOTE: do NOT use a film
-     aspect-ratio (3:2) constraint — future rolls won't all be 36x24 (user).
+     indefinitely (DSC_0021's museum ceiling) — AND the band is NARROWER than
+     CROP_REBATE_MAX_FRAC (real rebate is a thin strip ≤58px; bright SCENE
+     content — sky/snow/highlights — is base-like too, in DIFFUSE bands
+     hundreds of px deep, and its base-like fraction 0.15-0.34 OVERLAPS legit
+     rebate's 0.3-0.55 so the line threshold can't separate them, but the
+     width can). NOTE: do NOT use a film aspect-ratio (3:2) constraint —
+     future rolls won't all be 36x24 (user). Roll 2510-11-1 (2026-06-13)
+     drove three over-trim modes, all fixed without touching old-roll
+     containment: (1) bright-scene "rebate" rode 99-288px into content →
+     CROP_REBATE_MAX_FRAC width cap (0.04); (2) gently-darker top scene formed
+     77-80px "shadow" runs that got full credit → CROP_SHADOW_MAX_FRAC
+     0.04→0.030 (0.025 breaks old-roll containment, the floor); (3) bright sky
+     with ~4% specular "leak" pixels/line let the gap-tolerant hard run ride
+     276px → CROP_JUNK_LINE_FRAC 0.04→0.05. After: new-roll sum|over-trim|
+     1197→77px, max 276→18; a ~8-15px rebate sliver remains under-trimmed on 4
+     gradient edges (DSC_0014 R/B, 0035 B, 0040 R/T) where true rebate merges
+     into adjacent bright scene — within the picker's ≤2% (P_LOW) junk
+     robustness, far better than the prior scene-eating over-trims.
      **HARD RULE (user, 2026-06-12): the detected crop must NEVER extend
      outside the user's hand-drawn crop annotations** — gated by
      check_crop_containment() in run_quality_tests against the
      2026-06-12_crop_roll fixtures (15 frames, third annotation round;
-     current detector: 0 violations, over-trim medians 0/+6/0/0 px per
-     edge, worst +19px). The film-base SEARCH is separate and may
+     current detector: 0 violations, over-trim medians 0/+12/+1/+1 px per
+     edge, worst +37px). The film-base SEARCH is separate and may
      legitimately sample the rejected ring (base lives in gaps/rebate).
+     **Annotation fixtures are now ROLL-SCOPED** (stems collide across rolls —
+     every roll has a DSC_0013): each session folder and each images_tif carry
+     a `roll.txt`, and run_quality_tests' `_roll_fixtures()` only checks
+     sessions whose roll matches the loaded one (legacy data with no roll.txt
+     is always included). Reference roll = `2512-2601-1`; second roll =
+     `2510-11-1` (crop-correction fixtures, dormant until that roll's TIFFs are
+     in images_tif).
    - per frame: picker percentiles over everything inside the crop (P_LOW=2.0
      keeps the dense anchor robust to junk slivers), D_max from them, offset
      FIXED at -0.05 (darktable default; auto-offset degenerates on
@@ -295,6 +318,18 @@ behavior (and self-test non-trivial checkers).
   approves a debug-UI review.
 - `tests/smoke_debug_ui.py` — builds a 3-frame session in %TEMP% and drives
   the UI programmatically (selection, relocation, notes, view toggles).
+- `tests/test_vignette.py` — pure-math regression for the roll-wide vignette
+  estimator (`fit_vignette_profile`), fixture-free (embeds two rolls' captured
+  radial envelopes, no TIFFs): roll **2512-2601-1** (centre-brightest reference
+  roll, 0.525/0.05/0.375 — must stay unchanged) and roll **2511-12-1** (envelope
+  PEAKS off-centre, innermost bins slightly dimmer). The old monotone-tail cut
+  started at bin 0, mistook that central dip for the corner-leak tail, cut after
+  2 bins and rejected the roll ("profile not vignette-like") → no correction →
+  inverted corners too bright. Fix (2026-06-13): anchor the cut at the envelope
+  peak (`argmin(target)`) and run the monotone/tail cut OUTWARD from it; the
+  leading bins are the flat centre plateau, not a corner leak. Roll 2511-12-1
+  now fits 0.25/0.125/0.825 (~29% falloff). Plus a synthetic corner-leak case
+  proving the OUTER tail is still cut.
 - `tests/test_resolution_invariance.py` — guardrail against reintroducing
   absolute-pixel constants: runs the detectors on a synthetic frame at W and an
   exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).

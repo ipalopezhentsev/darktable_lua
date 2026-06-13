@@ -83,7 +83,12 @@ BORDER_PAD_FRAC = 0.004          # safety pad after the detected border (frac of
 # past the holder edge (the user's hand-drawn crop on DSC_0001 trimmed a
 # 15px top band with NO dark pixels - it was bright leak).
 HOLDER_LUMA_THR = 0.04           # linear luma below this is holder-dark
-CROP_JUNK_LINE_FRAC = 0.04       # dark/leak fraction above which a line is trimmed
+CROP_JUNK_LINE_FRAC = 0.05       # dark/leak fraction above which a line is trimmed
+                                 # (0.04 -> 0.05: roll 2510-11-1's bright sky has
+                                 # ~4% specular "leak" pixels per line; at 0.04 the
+                                 # gap-tolerant hard run rode them 276px into the
+                                 # scene. 0.05 clears the marginal leak; the dark
+                                 # holder edge is far above it. No old-roll change.)
 CROP_LEAK_MARGIN_D = 0.06        # brighter than base by this log10 density
 # Film REBATE (unexposed strip at the frame edge) is base-colored: neither
 # dark nor brighter-than-base. Signature: ALL channels within a small
@@ -102,6 +107,14 @@ CROP_REBATE_LINE_FRAC = 0.15     # base-like fraction above which a line is reba
 # indefinitely (DSC_0021's museum ceiling drove a 151px top over-trim).
 # Rebate-extended trims are only valid if the base-like band ends soon after.
 CROP_REBATE_TERM_FRAC = 0.04     # lines past the trim that must NOT stay base-like (frac of width)
+# A real film rebate is a NARROW strip (the reference roll's rebates span
+# 25-58px at 2000px wide). Bright SCENE content (sky/snow/highlights) is
+# base-like too, but in DIFFUSE bands hundreds of px deep, and its base-like
+# fraction (0.15-0.34) overlaps the legit rebate's (0.3-0.55) — so the line
+# threshold can't separate them, but the band WIDTH can. A base-like run wider
+# than this is scene, not rebate: reject the extension (roll 2510-11-1 drove
+# 99-288px rebate over-trims into bright content; legit rebates stay <80px).
+CROP_REBATE_MAX_FRAC = 0.04      # max rebate-extension depth past the hard run (frac of width)
 CROP_PAD_FRAC = 0.012            # safety pad past the last junk line, frac of width (user
                                  # crops ran ~3-5px inside the detected edges)
 # Holder-edge SHADOW/penumbra: a darkened ramp (line mean luma well below the
@@ -110,10 +123,15 @@ CROP_PAD_FRAC = 0.012            # safety pad past the last junk line, frac of w
 # this ramp, with the luma plateau starting exactly at the user's margin.
 CROP_SHADOW_REL = 0.70           # line mean luma below this fraction of the
                                  # interior reference = holder shadow
-CROP_SHADOW_MAX_FRAC = 0.04      # a shadow run terminating within this depth
+CROP_SHADOW_MAX_FRAC = 0.030     # a shadow run terminating within this depth
                                  # (frac of width) is real penumbra (full
                                  # credit); deeper = dense scene (bright sky is
-                                 # DARK in negative space, drove +30px over-trims)
+                                 # DARK in negative space, drove +30px over-trims).
+                                 # (0.04 -> 0.030: roll 2510-11-1's gently-darker
+                                 # top scene formed 77-80px "shadow" runs that got
+                                 # full credit -> +47-51px top over-trims; 0.030
+                                 # routes them to the penumbra CORE. 0.025 breaks
+                                 # old-roll containment, so 0.030 is the floor.)
 CROP_SHADOW_CORE_FRAC = 0.016    # when the depressed band continues past the
                                  # max depth (dense scene at the edge), the
                                  # first px are still penumbra-contaminated —
@@ -403,6 +421,7 @@ def detect_content_crop(lin, dmin):
     shadow_core = max(1, int(round(w * CROP_SHADOW_CORE_FRAC)))
     crop_pad = max(1, int(round(w * CROP_PAD_FRAC)))
     rebate_term = max(1, int(round(w * CROP_REBATE_TERM_FRAC)))
+    rebate_max = max(1, int(round(w * CROP_REBATE_MAX_FRAC)))
     luma = lin.mean(axis=2)
     dark = luma < HOLDER_LUMA_THR
     dmin_arr = np.maximum(np.asarray(dmin, dtype=np.float32), nm.THR)
@@ -469,6 +488,10 @@ def detect_content_crop(lin, dmin):
         t_hard = run_trim(hard, limit)
         t_all = run_trim(hard | rebate, limit)
         if t_all > t_hard:
+            # a base-like band wider than a real rebate strip is scene content
+            # (bright sky/snow reads base-like) - reject the extension
+            if t_all - t_hard > rebate_max:
+                return t_hard
             # rebate-extended trim: only valid if the base-like band actually
             # terminates (unexposed scene continues, true rebate doesn't)
             end = t_all - crop_pad
@@ -925,6 +948,17 @@ def estimate_vignette(image_paths, exif_by_stem):
     if len(r_centers) < 6:
         return None, {"frames": used, "reason": "too few radial bins"}
 
+    return fit_vignette_profile(r_centers, envs, used)
+
+
+def fit_vignette_profile(r_centers, envs, used=None):
+    """Turn a radial envelope profile into lens-module vignette params.
+
+    Pure (no image data) so it is unit-testable on captured roll profiles:
+    `r_centers` are bin-centre radii in [0,1], `envs` the per-bin envelope
+    brightness. Returns (params dict or None, info dict) exactly as
+    estimate_vignette does. Split out 2026-06-13 so the central-dip
+    regression (roll 2511-12-1) can be tested without the 1.2GB TIFFs."""
     # reference = envelope of the CENTER bins (the global max pixel is an
     # outlier and would shift the whole curve)
     center_envs = [e for r, e in zip(r_centers, envs) if r < 0.15]
@@ -933,10 +967,17 @@ def estimate_vignette(image_paths, exif_by_stem):
 
     # the true correction profile is monotone non-decreasing in r; a falling
     # tail means the base ceiling broke there (corner bright leak surviving
-    # the inset) — cut it and let the model extrapolate the corner
-    r_keep, t_keep = [], []
-    cm = 0.0
-    for r, t in zip(r_centers, targets_all):
+    # the inset) — cut it and let the model extrapolate the corner. The cut
+    # applies only OUTWARD from the envelope peak: the brightest ring is not
+    # always the dead centre (a slightly dimmed/noisy core, as on some rolls,
+    # makes the innermost bins read target>1 falling to 1 at the peak), and
+    # those leading bins are the flat centre plateau — not a corner leak. So
+    # keep everything up to the peak and run the monotone/tail cut from it.
+    peak_i = int(np.argmin(targets_all))   # min target == max envelope (peak)
+    r_keep = list(r_centers[:peak_i + 1])
+    t_keep = list(targets_all[:peak_i + 1])
+    cm = targets_all[peak_i]
+    for r, t in zip(r_centers[peak_i + 1:], targets_all[peak_i + 1:]):
         if t < cm * 0.97:
             break
         cm = max(cm, t)

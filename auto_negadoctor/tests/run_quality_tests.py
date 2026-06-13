@@ -84,6 +84,33 @@ def _rect_to_px(rect, w, h):
             int(round(rw * w)), int(round(rh * h))]
 
 
+# Annotation fixtures span MULTIPLE rolls (stems collide: every roll has a
+# DSC_0013 etc.), but the by-stem checks compare against whatever roll is
+# currently loaded in images_tif. A fixture session from a DIFFERENT roll would
+# be matched against the wrong image. Each roll's images_tif and each session
+# folder carry a `roll.txt` naming the roll; a session is used only when its
+# roll matches the loaded roll. Legacy data with no roll.txt is always included
+# (a session/loaded roll is excluded only when BOTH ids are known and differ).
+def _read_roll_id(path):
+    return path.read_text().strip() if path.is_file() else None
+
+
+def _roll_fixtures():
+    """Committed annotation fixtures whose roll matches the loaded images_tif
+    roll (see _read_roll_id). Replaces a bare ANNOTATIONS_DIR.rglob so a
+    second roll's annotations can coexist without cross-roll stem collisions."""
+    if not ANNOTATIONS_DIR.is_dir():
+        return []
+    loaded = _read_roll_id(IMAGES_TIF_DIR / "roll.txt")
+    out = []
+    for f in sorted(ANNOTATIONS_DIR.rglob("*_annotations.json")):
+        sess = _read_roll_id(f.parent / "roll.txt")
+        if loaded is not None and sess is not None and sess != loaded:
+            continue
+        out.append(f)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Invariants (baseline-independent)
 # ---------------------------------------------------------------------------
@@ -301,8 +328,7 @@ def check_crop_containment(frames):
 
     Returns a list of violation strings."""
     violations = []
-    fixtures = sorted(ANNOTATIONS_DIR.rglob("*_annotations.json")) \
-        if ANNOTATIONS_DIR.is_dir() else []
+    fixtures = _roll_fixtures()
     by_stem = {fr["stem"]: fr for fr in frames}
     checked = 0
     for f in fixtures:
@@ -342,8 +368,7 @@ def report_annotated_frames(frames):
     import auto_negadoctor as an
     import nega_model as nm
     # annotation sessions live in dated subfolders (multiple per stem)
-    fixtures = sorted(ANNOTATIONS_DIR.rglob("*_annotations.json")) \
-        if ANNOTATIONS_DIR.is_dir() else []
+    fixtures = _roll_fixtures()
     if not fixtures:
         print("  (no annotation fixtures)")
         return
@@ -418,8 +443,7 @@ def _load_ground_truth():
     `wb_overrides` -> wb_low/wb_high; `print_overrides` -> black/exposure/gamma.
     Later dated sessions (e.g. 2026-06-13_wb_print_roll) override earlier ones
     (e.g. 2026-06-11_taste) for the same stem+field. Returns {stem: gt}."""
-    fixtures = sorted(ANNOTATIONS_DIR.rglob("*_annotations.json")) \
-        if ANNOTATIONS_DIR.is_dir() else []
+    fixtures = _roll_fixtures()
     gt_by_stem = {}
     for f in fixtures:
         data = json.loads(f.read_text())
