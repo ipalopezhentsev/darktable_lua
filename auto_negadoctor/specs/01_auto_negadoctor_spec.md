@@ -19,6 +19,7 @@ We now need to automate this process. In darktable, I should just be able to sel
 - That is, should have lua + python part, debug UI, regression test suite, and so on
 - Should avoid common darktable pitfalls found and accounted for in auto_retouch: accounting for darktable's mirroring, orientation, perspective corrections, cropping etc
 - Original scanned frames have large dimensions (e.g. 24 megapixels), I think that the analysis can be done on much smaller exported images, e.g. 1000 pixels wide (should be a constant), for speed.
+!!ILYA: note I did not specify here that it shouldn't hardcode this and it went and built everything with absolute pixel sizes and everything around this holy 1000 pixels constant and I had to rework!
 - There should be also action of removing negadoctor from history of all chosen frames, for quick erase after changing algorithm so that new run can be done afresh
 
 # Finding the lightest film base part

@@ -51,8 +51,10 @@ script_data.destroy_method = nil
 script_data.restart = nil
 script_data.show = nil
 
--- Analysis export size (auto_negadoctor.py assumes ~this width)
-local EXPORT_MAX_WIDTH = 1000
+-- Analysis export size. auto_negadoctor.py is resolution-invariant (its
+-- size-dependent constants are fractions of the frame), so this can be
+-- changed freely without retuning anything.
+local EXPORT_MAX_WIDTH = 2000
 
 -- darktable export color profile codes (dt_colorspaces_color_profile_type_t)
 local DT_COLORSPACE_LIN_REC2020 = 4

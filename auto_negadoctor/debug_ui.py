@@ -78,6 +78,36 @@ MASK_VIEW_LABELS = {0: "Analysis Crop  (M)",
                     2: "Normal View  (M)"}
 
 
+# --- resolution-independent annotation coords --------------------------------
+# Annotations are persisted as NORMALIZED fractions of the frame size so they
+# stay valid regardless of the export resolution. The UI works in pixels
+# internally (canvas / hit-testing); we convert only at the JSON boundary.
+# A coord whose magnitude exceeds this is treated as a legacy pixel value.
+_NORM_MAX = 1.5
+
+
+def _norm_xywh(rect, w, h):
+    """[x, y, rw, rh] pixels -> fractions of (w, h)."""
+    x, y, rw, rh = rect
+    return [x / w, y / h, rw / w, rh / h]
+
+
+def _denorm_xywh(rect, w, h):
+    """[x, y, rw, rh] fractions -> integer pixels. Legacy pixel rects (any
+    coord > _NORM_MAX) are passed through rounded, so old session files load."""
+    if max(abs(float(v)) for v in rect) > _NORM_MAX:
+        return [int(round(float(v))) for v in rect]
+    x, y, rw, rh = rect
+    return [int(round(x * w)), int(round(y * h)),
+            int(round(rw * w)), int(round(rh * h))]
+
+
+def _norm_ltrb(border, w, h):
+    """[left, top, right, bottom] margins in pixels -> fractions."""
+    l, t, r, b = border
+    return [l / w, t / h, r / w, b / h]
+
+
 class NegadoctorDebugUI(DebugUIBase):
     WINDOW_TITLE = "Auto Negadoctor Debug UI"
     EMPTY_SESSION_MESSAGE = "No *_debug_nega.json files found in:"
@@ -112,11 +142,15 @@ class NegadoctorDebugUI(DebugUIBase):
         ann = self.annotations[stem]
         img_dict = next((d for d in self.images if d["stem"] == stem), None)
         params = (img_dict.get("params") or {}) if img_dict else {}
+        # frame size for normalizing pixel rects -> resolution-independent fractions
+        W = img_dict["width"] if img_dict else None
+        H = img_dict["height"] if img_dict else None
         out_corr = {}
         for patch, rect in sorted(ann["patch_corrections"].items()):
+            det = self._detected_rect(img_dict, patch) if img_dict else None
             out_corr[patch] = {
-                "detected": self._detected_rect(img_dict, patch) if img_dict else None,
-                "corrected": [int(v) for v in rect],
+                "detected": _norm_xywh(det, W, H) if (det and W) else det,
+                "corrected": _norm_xywh(rect, W, H) if W else [int(v) for v in rect],
             }
         out_over = {}
         for name, val in sorted(ann["print_overrides"].items()):
@@ -133,19 +167,23 @@ class NegadoctorDebugUI(DebugUIBase):
             "bad_inversion_note": ann["bad_inversion_note"],
         }
         if ann.get("crop_correction"):
+            border = list(img_dict.get("border") or []) if img_dict else None
             out["crop_correction"] = {
-                "auto_border": list(img_dict.get("border") or []) if img_dict else None,
-                "corrected": [int(v) for v in ann["crop_correction"]],
+                "auto_border": _norm_ltrb(border, W, H) if (border and W) else border,
+                "corrected": _norm_xywh(ann["crop_correction"], W, H) if W
+                             else [int(v) for v in ann["crop_correction"]],
             }
         return out
 
     def deserialize_annotations(self, img_dict, data):
         stem = img_dict["stem"]
         ann = self.annotations[stem]
+        W, H = img_dict["width"], img_dict["height"]
         for patch, entry in data.get("patch_corrections", {}).items():
             if patch in PATCHES:
                 try:
-                    ann["patch_corrections"][patch] = [int(v) for v in entry["corrected"]]
+                    ann["patch_corrections"][patch] = _denorm_xywh(
+                        entry["corrected"], W, H)
                 except (KeyError, ValueError, TypeError):
                     pass
         for name, entry in data.get("print_overrides", {}).items():
@@ -157,7 +195,7 @@ class NegadoctorDebugUI(DebugUIBase):
         crop = data.get("crop_correction")
         if crop:
             try:
-                ann["crop_correction"] = [int(v) for v in crop["corrected"]]
+                ann["crop_correction"] = _denorm_xywh(crop["corrected"], W, H)
             except (KeyError, ValueError, TypeError):
                 pass
         ann["patch_notes"] = {p: str(n) for p, n in data.get("patch_notes", {}).items()
@@ -633,6 +671,24 @@ class NegadoctorDebugUI(DebugUIBase):
 
     def _crop_rect(self, img_dict):
         return self.annotations[img_dict["stem"]].get("crop_correction")
+
+    # Table coordinates are shown as resolution-independent fractions of the
+    # frame (x and w over width, y and h over height) — the UI works in pixels
+    # internally but never *displays* an export-resolution-tied number.
+    def _fmt_rect(self, rect, img_dict):
+        """Rect [x, y, w, h] in pixels -> 'x,y,w,h' as fractions of the frame."""
+        if not rect:
+            return ""
+        w, h = img_dict["width"], img_dict["height"]
+        x, y, rw, rh = rect
+        return f"{x / w:.3f},{y / h:.3f},{rw / w:.3f},{rh / h:.3f}"
+
+    def _fmt_pos(self, pt, img_dict):
+        """Point [x, y, ...] in pixels -> 'x,y' as fractions of the frame."""
+        if not pt:
+            return "—"
+        w, h = img_dict["width"], img_dict["height"]
+        return f"{pt[0] / w:.3f},{pt[1] / h:.3f}"
 
     # ------------------------------------------------------------------
     # Analysis-area mask view (audit holder/border detection)
@@ -1205,9 +1261,10 @@ class NegadoctorDebugUI(DebugUIBase):
             auto_rect = self._auto_content_rect(img_dict)
             crop = ann.get("crop_correction")
             lines = ["Crop: true photo-content area (audits holder detection)",
-                     f"  auto (border trim): {auto_rect}"]
+                     f"  auto (border trim), x,y,w,h as frac of frame: "
+                     f"{self._fmt_rect(auto_rect, img_dict)}"]
             if crop:
-                lines.append(f"  CORRECTED: {crop}")
+                lines.append(f"  CORRECTED: {self._fmt_rect(crop, img_dict)}")
                 lines.append("  Re-render recomputes percentiles, D_max, "
                              "black/exposure and the print tune inside it.")
                 lines.append("  Drag an EDGE to adjust it, drag elsewhere to "
@@ -1256,14 +1313,16 @@ class NegadoctorDebugUI(DebugUIBase):
                 lines.append("  WB FELL BACK to roll median (no usable patch found)")
 
         if det:
-            lines.append(f"  detected rect: {det}  neg RGB {self._fmt_rgb(det_rgb)}")
+            lines.append(f"  detected rect (x,y,w,h frac): "
+                         f"{self._fmt_rect(det, img_dict)}  neg RGB {self._fmt_rgb(det_rgb)}")
         else:
             lines.append("  not detected on this frame")
 
         corr = ann["patch_corrections"].get(patch)
         if corr:
             corr_rgb = self._neg_rgb_at(img_dict, corr)
-            lines.append(f"  CORRECTED rect: {corr}  neg RGB {self._fmt_rgb(corr_rgb)}")
+            lines.append(f"  CORRECTED rect: {self._fmt_rect(corr, img_dict)}"
+                         f"  neg RGB {self._fmt_rgb(corr_rgb)}")
             wb = self._wb_for_patch(img_dict, patch, corr_rgb)
             if wb:
                 applied = (img_dict.get("params") or {}).get(
@@ -1304,8 +1363,8 @@ class NegadoctorDebugUI(DebugUIBase):
             has_note = bool(ann["patch_notes"].get(patch))
             fallback = (patch != "film_base"
                         and patches.get(patch, {}).get("used_fallback", False))
-            det_str = f"{det[0]},{det[1]}" if det else "—"
-            corr_str = f"{corr[0]},{corr[1]}" if corr else ""
+            det_str = self._fmt_pos(det, img_dict)
+            corr_str = self._fmt_pos(corr, img_dict) if corr else ""
             tag = "corr" if corr else ("fallback" if fallback or not det else "det")
             rows.append({
                 "iid": f"patch_{patch}",
@@ -1343,8 +1402,8 @@ class NegadoctorDebugUI(DebugUIBase):
         has_note = bool(ann["patch_notes"].get(CROP_NAME))
         rows.append({
             "iid": "crop",
-            "values": ("crop", f"{auto_rect[0]},{auto_rect[1]}", "",
-                       f"{crop[0]},{crop[1]}" if crop else "",
+            "values": ("crop", self._fmt_rect(auto_rect, img_dict), "",
+                       self._fmt_rect(crop, img_dict) if crop else "",
                        "✎" if has_note else ""),
             "tag": "corr" if crop else "det",
             "name": CROP_NAME,
@@ -1449,12 +1508,12 @@ class NegadoctorDebugUI(DebugUIBase):
 
             if crop:
                 crop_count += 1
-                l, t, r, b = img_dict.get("border") or (0, 0, 0, 0)
-                auto_rect = [l, t, img_dict["width"] - l - r,
-                             img_dict["height"] - t - b]
+                auto_rect = self._auto_content_rect(img_dict)
                 lines.append("")
-                lines.append(f"  CROP CORRECTION (true content area): {crop}")
-                lines.append(f"    auto border-trim rect was: {auto_rect}")
+                lines.append(f"  CROP CORRECTION (true content area, x,y,w,h "
+                             f"as frac of frame): {self._fmt_rect(crop, img_dict)}")
+                lines.append(f"    auto border-trim rect was: "
+                             f"{self._fmt_rect(auto_rect, img_dict)}")
 
             if corrections:
                 lines.append("")
@@ -1466,14 +1525,16 @@ class NegadoctorDebugUI(DebugUIBase):
                     det = self._detected_rect(img_dict, patch)
                     corr = corrections[patch]
                     corr_rgb = self._neg_rgb_at(img_dict, corr)
-                    line = (f"    {patch:<10} detected={det if det else 'none'}"
-                            f"  ->  corrected={corr}")
+                    line = (f"    {patch:<10} detected="
+                            f"{self._fmt_rect(det, img_dict) if det else 'none'}"
+                            f"  ->  corrected={self._fmt_rect(corr, img_dict)} (x,y,w,h frac)")
                     if corr_rgb:
                         line += f"  neg RGB ({', '.join(f'{v:.4f}' for v in corr_rgb)})"
                     lines.append(line)
                     if det and (corr[2], corr[3]) != (det[2], det[3]):
-                        lines.append(f"      size changed {det[2]}x{det[3]}"
-                                     f" -> {corr[2]}x{corr[3]}")
+                        W, H = img_dict["width"], img_dict["height"]
+                        lines.append(f"      size changed {det[2]/W:.3f}x{det[3]/H:.3f}"
+                                     f" -> {corr[2]/W:.3f}x{corr[3]/H:.3f} (frac)")
                     wb = self._wb_for_patch(img_dict, patch, corr_rgb)
                     if wb:
                         applied = p.get("wb_low" if patch == "shadows" else "wb_high")

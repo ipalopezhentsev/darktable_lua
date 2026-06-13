@@ -54,6 +54,17 @@ WARN_DIFF_FRAC = 0.30
 
 WB_NORM_EPS = 1e-3
 EXPOSURE_ORDER_REL_TOL = 0.02   # Dmin_i/Dmin_j vs factor_i/factor_j
+CROP_CONTAINMENT_ROUND_TOL = 1  # px slack for cross-resolution crop denorm
+
+# Annotation crop rects are stored as NORMALIZED fractions of the frame
+# (resolution-independent). Legacy pixel rects (any coord > 1.5) pass through.
+def _rect_to_px(rect, w, h):
+    """[x, y, rw, rh] fractions -> integer pixels (legacy px rects unchanged)."""
+    if max(abs(float(v)) for v in rect) > 1.5:
+        return [int(round(float(v))) for v in rect]
+    x, y, rw, rh = rect
+    return [int(round(x * w)), int(round(y * h)),
+            int(round(rw * w)), int(round(rh * h))]
 
 
 # ---------------------------------------------------------------------------
@@ -287,11 +298,16 @@ def check_crop_containment(frames):
         if fr is None or fr.get("error") or "border" not in fr:
             continue
         checked += 1
-        x, y, cw, ch = crop["corrected"]
+        x, y, cw, ch = _rect_to_px(crop["corrected"], fr["width"], fr["height"])
         user = (x, y, fr["width"] - x - cw, fr["height"] - y - ch)
         det = fr["border"]
+        # The user crops are stored as normalized fractions; denormalizing them
+        # onto a frame of a different resolution than they were drawn at rounds
+        # by up to 1px. Allow that slack so cross-resolution rounding is not a
+        # spurious "crop extends outside" violation (real over-includes are
+        # many px - DSC_0037's was 50).
         for i, edge in enumerate(("left", "top", "right", "bottom")):
-            if det[i] < user[i]:
+            if det[i] < user[i] - CROP_CONTAINMENT_ROUND_TOL:
                 violations.append(
                     f"{stem}: detected {edge} margin {det[i]} < user "
                     f"{user[i]} (crop extends outside the user rect) "
@@ -333,7 +349,7 @@ def report_annotated_frames(frames):
             rect = entry.get("corrected")
             if not rect:
                 continue
-            x, y, w, h = [int(v) for v in rect]
+            x, y, w, h = _rect_to_px(rect, fr["width"], fr["height"])
             rgb = [float(v) for v in lin[y:y + h, x:x + w].reshape(-1, 3).mean(axis=0)]
             key = {"shadows": "shadow_patch", "highlights": "highlight_patch",
                    "film_base": "base"}.get(kind)
@@ -361,18 +377,27 @@ def report_annotated_frames(frames):
             else:
                 print(f"    print {name}: user {corrected}")
         crop = data.get("crop_correction")
-        if crop:
+        if crop and crop.get("corrected"):
             l, t, r, b = fr.get("border") or (0, 0, 0, 0)
             auto_rect = [l, t, fr["width"] - l - r, fr["height"] - t - b]
-            print(f"    crop: user {crop.get('corrected')} vs auto border "
+            user_rect = _rect_to_px(crop["corrected"], fr["width"], fr["height"])
+            print(f"    crop: user {user_rect} vs auto border "
                   f"rect {auto_rect} (holder detection tuning signal)")
 
 
 def main():
     images, exif = list_test_images()
     if not images:
-        print("FAIL: no test images in", IMAGES_TIF_DIR, "or", IMAGES_DIR)
-        return 1
+        # The heavy TIFF exports are NOT committed (see images_tif/README).
+        # Repopulate them with a fresh darktable export, then re-run.
+        print("SKIP: no fixture images found in", IMAGES_TIF_DIR)
+        print("  Export the reference roll from darktable (AutoNegadoctor"
+              " in-place, keep temp folder) and copy the *.tif files +"
+              " exif_params.txt into:")
+        print("   ", IMAGES_TIF_DIR)
+        print("  Annotations are resolution-independent, so any export width"
+              " works.")
+        return 0
 
     selftest_invariants()
 

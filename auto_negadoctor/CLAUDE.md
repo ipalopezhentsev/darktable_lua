@@ -9,7 +9,11 @@
    inverted — run `AutoNegadoctor_Remove` first), WARNS if a tone mapper
    (agx/filmicrgb/sigmoid/basecurve) is enabled or an XMP is missing.
 2. Lua exports the selected frames as **32-bit float TIFF in linear Rec2020**
-   at 1000px width to `%TEMP%/darktable_autonegadoctor_<timestamp>/`. The
+   at `EXPORT_MAX_WIDTH` (currently 2000px) to
+   `%TEMP%/darktable_autonegadoctor_<timestamp>/`. The analysis is
+   resolution-invariant: every size-dependent constant in `auto_negadoctor.py`
+   is a fraction of the frame dimension (a `*_FRAC`, applied as
+   `int(round(w * FRAC))`) — no reference resolution. The
    export ICC preferences (`plugins/lighttable/export/icctype` = 4 =
    LIN_REC2020) are temporarily overridden and restored — see "Why TIFF"
    below. Float (not 16-bit int) because the integer formats clamp the
@@ -214,17 +218,27 @@ behavior (and self-test non-trivial checkers).
   etc.) as the manual sessions — the newer TIFF fixtures were exported from
   FRESH imports with different WB defaults, so manual-XMP comparison is only
   valid on the JPEGs. Don't "upgrade" this test to the TIFFs.
-- `tests/images_tif/` — 16-bit linear-Rec2020 TIFFs from the first real Lua
-  run (+ its exif_params.txt): the detection/regression fixture set (~143MB;
-  refresh with 32-bit float exports from a future run when convenient).
+- `tests/images_tif/` — linear-Rec2020 float TIFF exports: the
+  detection/regression fixture set. **NOT committed** (`*.tif` is
+  `.gitignore`d; ~1.2GB at 2000px, float doesn't compress) — kept locally and
+  regenerated from a darktable export (see `images_tif/README.md`); only
+  `exif_params.txt` is tracked. Detection is resolution-independent (size
+  constants are fractions of the frame), so any export width works; the local
+  set is currently the 2026-06-13 2000px roll.
 - `tests/fixtures/annotations/<session>/` — committed debug-UI annotation
   files from the user's review sessions, organized in dated subfolders so
   multiple sessions per stem coexist (2026-06-11_taste: patch/print
   corrections; 2026-06-12_crop_roll: 15 hand-drawn content crops, third
-  annotation round — the HARD-TRUTH set for crop containment);
+  annotation round — the HARD-TRUTH set for crop containment). Crop/patch
+  rects are stored as **NORMALIZED fractions** of the frame (resolution-
+  independent); debug_ui.py normalizes on save / denormalizes on load (px
+  internally), and run_quality_tests denormalizes via `_rect_to_px`. The
+  containment check allows a 1px slack (`CROP_CONTAINMENT_ROUND_TOL`) for
+  cross-resolution denorm rounding — real over-includes are many px.
   run_quality_tests reports detector status, user-rect wb vs applied wb and
   user crop vs detected crop on those frames.
-- `tests/run_quality_tests.py` — prefers `images_tif/`; invariants (param
+- `tests/run_quality_tests.py` — prefers `images_tif/` (SKIPs with a
+  repopulate-from-darktable message when no local TIFFs); invariants (param
   ranges, wb normalization max(wb_low)=1 / min(wb_high)=1, Dmin orange
   ordering, exposure-ordering consistency Dmin_i/Dmin_j ≈ factor_i/factor_j,
   patches in bounds/outside border, hex round-trip; checker has a self-test)
@@ -234,14 +248,26 @@ behavior (and self-test non-trivial checkers).
   approves a debug-UI review.
 - `tests/smoke_debug_ui.py` — builds a 3-frame session in %TEMP% and drives
   the UI programmatically (selection, relocation, notes, view toggles).
+- `tests/test_resolution_invariance.py` — guardrail against reintroducing
+  absolute-pixel constants: runs the detectors on a synthetic frame at W and an
+  exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).
+  Checks scaling not absolute values, so threshold tuning is safe.
 
 ## Known Bugs / TODOs
 
-- [x] TIFF fixtures from a real run — `tests/images_tif/` now holds the
-      32-bit FLOAT roll (2026-06-11 fourth run, after darktable restart):
-      Dmin R measured unclipped at 1.0367 (>1.0 is legitimate, slider max
-      1.5). ~284MB — prune to a subset if repo weight matters; deflate
-      doesn't compress float photo data.
+- [x] TIFF fixtures repo weight — RESOLVED by decommitting: `tests/images_tif/
+      *.tif` is now `.gitignore`d (was ~284MB at 1000px, ~1.2GB at 2000px) and
+      regenerated locally from a darktable export (`images_tif/README.md`).
+- [x] Resolution independence (2026-06-13): export width is a free knob (Lua
+      `EXPORT_MAX_WIDTH`, set to 2000); every size-dependent detection constant
+      is a fraction of the frame dimension (`*_FRAC`, applied as
+      `int(round(w * FRAC))`) — no reference resolution (REF_WIDTH/_px were
+      dismantled per user); annotation crop/patch rects are stored normalized.
+      Guarded by `tests/test_resolution_invariance.py` (2x-scaling + asserts no
+      REF_WIDTH/_px leftover). The 2000px re-export tripped one real
+      over-include (DSC_0037 right rebate at ~0.14 max-density), fixed by
+      CROP_REBATE_MARGIN_D 0.12->0.13 (no over-trim regression on the 16 crop
+      fixtures).
 - [x] Patch detection rescue (first live-run feedback): wb_high bootstrap +
       gray-world chroma + luma-floored uniformity + per-channel density
       guard; print auto-tune for normal brightness / max speculars.

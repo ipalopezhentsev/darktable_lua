@@ -1,8 +1,10 @@
 """Auto-negadoctor: derive darktable negadoctor params for a roll of
 DSLR-scanned color negative frames.
 
-Called by auto_negadoctor.lua on ~1000px exports of the uninverted
-negatives (negadoctor absent / disabled in the history):
+Called by auto_negadoctor.lua on linear-Rec2020 exports of the uninverted
+negatives (negadoctor absent / disabled in the history). The export width is
+set Lua-side and analysis is resolution-independent (size-dependent constants
+are fractions of the frame dimension):
 
     python auto_negadoctor.py [--debug-ui] [--no-vis] img1.tif img2.tif ...
 
@@ -57,23 +59,18 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nega_model as nm
 
-# --- export -----------------------------------------------------------------
-EXPORT_MAX_WIDTH = 2000          # Lua exports at this width
-# All absolute-pixel constants below are calibrated at this reference width
-# (the committed test fixtures and the user's hard-truth crop annotations
-# are 1000px); they are scaled to the actual frame width at runtime so the
-# behavior is resolution-invariant.
-REF_WIDTH = 1000
-
-
-def _px(value, w):
-    """Scale a REF_WIDTH-calibrated pixel constant to frame width w."""
-    return max(1, int(round(value * w / REF_WIDTH)))
+# --- resolution independence -------------------------------------------------
+# Every size-dependent constant below is a RATIO of the frame dimension (a
+# *_FRAC), turned into pixels at use sites with `int(round(w * FRAC))` (and a
+# `max(1, …)` floor where a count of zero would be degenerate). There is no
+# reference resolution: detection geometry scales directly with the export,
+# whatever its width. Never introduce a raw pixel count tied to the export
+# size — express it as a fraction of the dimension.
 
 # --- film holder border trim ------------------------------------------------
 BORDER_DARK_THR = 0.02           # linear luminance below this = holder plastic
 BORDER_MAX_FRAC = 0.25           # never trim more than this per edge
-BORDER_PAD_PX = 4                # safety pad after the detected border
+BORDER_PAD_FRAC = 0.004          # safety pad after the detected border (frac of width)
 
 # --- rectangular content crop -------------------------------------------------
 # The holder is a RECTANGULAR frame around the film frame, so the analysis
@@ -93,14 +90,19 @@ CROP_LEAK_MARGIN_D = 0.06        # brighter than base by this log10 density
 # density margin of base. A line mostly made of such pixels near the edge
 # is rebate/gap, not scene (user crop annotations on DSC_0005-0007: ~20-40px
 # rebate bands at the right that the dark/leak tests were blind to).
-CROP_REBATE_MARGIN_D = 0.12      # max-channel density below this = base-like
+CROP_REBATE_MARGIN_D = 0.13      # max-channel density below this = base-like
+                                 # (0.12 -> 0.13: DSC_0037's right rebate sits
+                                 # at ~0.14 max-density median; 0.13 catches it
+                                 # via the per-column pixel distribution, fixing
+                                 # a 50px right-edge over-include, with no
+                                 # over-trim regression on the 16 crop fixtures)
 CROP_REBATE_LINE_FRAC = 0.15     # base-like fraction above which a line is rebate
 # A true rebate band TERMINATES (film content follows within tens of px);
 # unexposed dark scene at the frame edge is base-like too but continues
 # indefinitely (DSC_0021's museum ceiling drove a 151px top over-trim).
 # Rebate-extended trims are only valid if the base-like band ends soon after.
-CROP_REBATE_TERM_WINDOW = 40     # lines past the trim that must NOT stay base-like
-CROP_PAD_PX = 12                 # safety pad past the last junk line (user
+CROP_REBATE_TERM_FRAC = 0.04     # lines past the trim that must NOT stay base-like (frac of width)
+CROP_PAD_FRAC = 0.012            # safety pad past the last junk line, frac of width (user
                                  # crops ran ~3-5px inside the detected edges)
 # Holder-edge SHADOW/penumbra: a darkened ramp (line mean luma well below the
 # frame interior) too bright for HOLDER_LUMA_THR. Found via the user's
@@ -108,22 +110,24 @@ CROP_PAD_PX = 12                 # safety pad past the last junk line (user
 # this ramp, with the luma plateau starting exactly at the user's margin.
 CROP_SHADOW_REL = 0.70           # line mean luma below this fraction of the
                                  # interior reference = holder shadow
-CROP_SHADOW_MAX_PX = 40          # a shadow run terminating within this depth
-                                 # is real penumbra (full credit); deeper =
-                                 # dense scene (bright sky is DARK in negative
-                                 # space and drove +30px top over-trims)
-CROP_SHADOW_CORE_PX = 16         # when the depressed band continues past the
+CROP_SHADOW_MAX_FRAC = 0.04      # a shadow run terminating within this depth
+                                 # (frac of width) is real penumbra (full
+                                 # credit); deeper = dense scene (bright sky is
+                                 # DARK in negative space, drove +30px over-trims)
+CROP_SHADOW_CORE_FRAC = 0.016    # when the depressed band continues past the
                                  # max depth (dense scene at the edge), the
                                  # first px are still penumbra-contaminated —
-                                 # keep only this core
-CROP_GAP_TOL = 20                # junk must form an EDGE-ANCHORED run; up to
-                                 # this many clean lines may interrupt it.
+                                 # keep only this core (frac of width)
+CROP_GAP_TOL_FRAC = 0.02         # junk must form an EDGE-ANCHORED run; up to
+                                 # this many clean lines (frac of width) may
+                                 # interrupt it.
                                  # Without this, detached interior junk lines
                                  # (deep scene shadows are base-like too)
                                  # caused massive over-trims
 
 # --- film base window search (on the negative) -------------------------------
 BASE_WIN_FRAC = 0.04             # window side as fraction of image width
+MIN_WIN_FRAC = 0.016             # floor for the search-window side (frac of width)
 BASE_STRIDE_DIV = 2              # stride = window / this
 CLIP_SRGB_THR = 0.97             # stored-encoding value above this counts as clipped
 CLIP_FRAC_MAX = 0.02             # max fraction of white-clipped px in a base window
@@ -172,7 +176,8 @@ PRINT_MID_BAND = (0.15, 0.40)    # acceptable content median luma (linear).
                                  # to a center target washed out genuinely dark
                                  # scenes (night/museum frames must stay moody)
 PRINT_TUNE_ITERS = 4
-PRINT_TUNE_SUBSAMPLE = 3         # render every Nth pixel during tuning
+PRINT_TUNE_SUBSAMPLE_FRAC = 0.003  # render every Nth pixel during tuning; stride
+                                   # = frac of width (keeps sample count ~constant)
 
 # --- print curve & wb taste (from user annotation feedback) -------------------
 # Paper grade: user's corrections across sessions: 4.0 -> 5.25 -> 7.1 ->
@@ -199,8 +204,9 @@ WB_PRIOR_WEIGHT = 0.5            # 0 = pure patch wb, 1 = prior only
 # some frame is at base there — the spatial envelope IS the vignette field.
 # Fitted in darktable's own lens-module "manual vignette" parameter space
 # (v_strength/v_radius/v_steepness) so the values are directly usable there.
-VIG_DOWNSAMPLE = 4               # accumulate the envelope on a /N grid
-VIG_INSET_PX = 12                # extra inset past the dark-border trim
+VIG_DOWNSAMPLE_FRAC = 0.004      # accumulate the envelope on a /N grid; stride
+                                 # = frac of width (constant grid size vs resolution)
+VIG_INSET_FRAC = 0.012           # extra inset past the dark-border trim (frac of width)
 VIG_BINS = 32                    # radial bins for the envelope profile
 VIG_PROFILE_PCT = 90.0           # per-bin envelope percentile
 VIG_MIN_BIN_SAMPLES = 25         # bins with fewer samples are skipped
@@ -341,6 +347,7 @@ def detect_dark_border(lin):
     """
     luma = lin.mean(axis=2)
     h, w = luma.shape
+    border_pad = max(1, int(round(w * BORDER_PAD_FRAC)))
     col_mean = luma.mean(axis=0)
     row_mean = luma.mean(axis=1)
 
@@ -350,7 +357,7 @@ def detect_dark_border(lin):
             if v >= BORDER_DARK_THR:
                 break
             n += 1
-        return min(n + BORDER_PAD_PX, limit) if n > 0 else 0
+        return min(n + border_pad, limit) if n > 0 else 0
 
     max_w = int(w * BORDER_MAX_FRAC)
     max_h = int(h * BORDER_MAX_FRAC)
@@ -367,6 +374,12 @@ def detect_content_crop(lin, dmin):
     line contaminated by holder-dark pixels or bright leak (lighter than the
     film base). Returns (left, top, right, bottom) margins in px."""
     h, w = lin.shape[:2]
+    # size-dependent constants are fractions of the frame width
+    gap_tol = max(1, int(round(w * CROP_GAP_TOL_FRAC)))
+    shadow_max = max(1, int(round(w * CROP_SHADOW_MAX_FRAC)))
+    shadow_core = max(1, int(round(w * CROP_SHADOW_CORE_FRAC)))
+    crop_pad = max(1, int(round(w * CROP_PAD_FRAC)))
+    rebate_term = max(1, int(round(w * CROP_REBATE_TERM_FRAC)))
     luma = lin.mean(axis=2)
     dark = luma < HOLDER_LUMA_THR
     dmin_arr = np.maximum(np.asarray(dmin, dtype=np.float32), nm.THR)
@@ -393,9 +406,9 @@ def detect_content_crop(lin, dmin):
     row_rebate = line_flags(base_like, 1, CROP_REBATE_LINE_FRAC)
 
     def validated_shadow(flags, limit):
-        """Per-edge shadow validation: a run terminating within
-        CROP_SHADOW_MAX_PX is real penumbra; a band continuing deeper is
-        dense scene and only the penumbra CORE near the edge counts."""
+        """Per-edge shadow validation: a run terminating within shadow_max
+        (CROP_SHADOW_MAX_FRAC of width) is real penumbra; a band continuing
+        deeper is dense scene and only the penumbra CORE near the edge counts."""
         depth = 0
         gap = 0
         for i in range(limit):
@@ -404,13 +417,13 @@ def detect_content_crop(lin, dmin):
                 gap = 0
             else:
                 gap += 1
-                if gap > CROP_GAP_TOL:
+                if gap > gap_tol:
                     break
         out = np.zeros_like(flags)
         if depth == 0:
             return out
-        if depth > CROP_SHADOW_MAX_PX:
-            depth = CROP_SHADOW_CORE_PX
+        if depth > shadow_max:
+            depth = shadow_core
         out[:depth] = flags[:depth]
         return out
 
@@ -425,9 +438,9 @@ def detect_content_crop(lin, dmin):
                 gap = 0
             else:
                 gap += 1
-                if gap > CROP_GAP_TOL:
+                if gap > gap_tol:
                     break
-        return min(depth + CROP_PAD_PX, limit) if depth else 0
+        return min(depth + crop_pad, limit) if depth else 0
 
     def trim(hard, rebate, limit):
         t_hard = run_trim(hard, limit)
@@ -435,8 +448,8 @@ def detect_content_crop(lin, dmin):
         if t_all > t_hard:
             # rebate-extended trim: only valid if the base-like band actually
             # terminates (unexposed scene continues, true rebate doesn't)
-            end = t_all - CROP_PAD_PX
-            window = rebate[end:end + CROP_REBATE_TERM_WINDOW]
+            end = t_all - crop_pad
+            window = rebate[end:end + rebate_term]
             if t_all >= limit or len(window) == 0 or window.mean() > 0.5:
                 return t_hard
         return t_all
@@ -749,7 +762,7 @@ def tune_print_params(lin, params, border, dmin):
     """
     l, t, r, b = border
     h, w = lin.shape[:2]
-    s = PRINT_TUNE_SUBSAMPLE
+    s = max(1, int(round(w * PRINT_TUNE_SUBSAMPLE_FRAC)))
     region = lin[t:h - b:s, l:w - r:s].astype(np.float64)
     if region.size == 0:
         return params, {"tuned": False}
@@ -810,15 +823,17 @@ def estimate_vignette(image_paths, exif_by_stem):
         l, t, r, b = detect_dark_border(lin)
         luma = lin.mean(axis=2) / max(factor, 1e-12)
         valid = np.zeros((h, w), dtype=bool)
-        y0, y1 = t + VIG_INSET_PX, h - b - VIG_INSET_PX
-        x0, x1 = l + VIG_INSET_PX, w - r - VIG_INSET_PX
+        vig_inset = max(1, int(round(w * VIG_INSET_FRAC)))
+        vig_ds = max(1, int(round(w * VIG_DOWNSAMPLE_FRAC)))
+        y0, y1 = t + vig_inset, h - b - vig_inset
+        x0, x1 = l + vig_inset, w - r - vig_inset
         if y1 <= y0 or x1 <= x0:
             continue
         valid[y0:y1, x0:x1] = True
         if enc_f.max() > 0:   # 8/16-bit inputs: exclude clipped pixels
             valid &= ~(enc_f >= CLIP_SRGB_THR).any(axis=2)
         lum = np.where(valid, luma, -np.inf)
-        ds = lum[::VIG_DOWNSAMPLE, ::VIG_DOWNSAMPLE]
+        ds = lum[::vig_ds, ::vig_ds]
         acc = ds if acc is None else np.maximum(acc, ds)
         used += 1
     if acc is None or used < 2:
@@ -826,7 +841,10 @@ def estimate_vignette(image_paths, exif_by_stem):
 
     h, w = shape
     hh, ww = acc.shape
-    yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float64) * VIG_DOWNSAMPLE
+    # same downsample stride used to build acc above (shape is shared across
+    # all accumulated frames, so this matches the per-frame vig_ds)
+    vig_ds = max(1, int(round(w * VIG_DOWNSAMPLE_FRAC)))
+    yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float64) * vig_ds
     cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
     rad = np.hypot(xx - cx, yy - cy) / np.hypot(cx, cy)
     finite = np.isfinite(acc)
@@ -982,7 +1000,7 @@ def process_roll(image_paths, exif_by_stem, progress=None):
             }
             fr["exposure_factor"] = factor
             fr["border"] = detect_dark_border(lin)
-            win = max(int(w * BASE_WIN_FRAC), 16)
+            win = max(int(w * BASE_WIN_FRAC), int(round(w * MIN_WIN_FRAC)))
             fr["base_win"] = win
             fr["base"] = find_film_base_candidate(lin, enc_f, fr["border"], win)
             # picker percentiles need the frame's Dmin (content masking) and
@@ -1037,7 +1055,8 @@ def process_roll(image_paths, exif_by_stem, progress=None):
             offset = OFFSET_DEFAULT
             fr["dmin"], fr["d_max"], fr["offset"] = dmin, d_max, offset
 
-            win = max(int(lin.shape[1] * PATCH_WIN_FRAC), 16)
+            win = max(int(lin.shape[1] * PATCH_WIN_FRAC),
+                      int(round(lin.shape[1] * MIN_WIN_FRAC)))
             base_rect = fr["base"]["rect"] if fr["base"] else None
             neutral = [1.0, 1.0, 1.0]
 
