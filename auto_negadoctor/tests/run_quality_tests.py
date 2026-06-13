@@ -56,6 +56,15 @@ WB_NORM_EPS = 1e-3
 EXPOSURE_ORDER_REL_TOL = 0.02   # Dmin_i/Dmin_j vs factor_i/factor_j
 CROP_CONTAINMENT_ROUND_TOL = 1  # px slack for cross-resolution crop denorm
 
+# Ground-truth gate tolerances (the user's wheel/print annotations are the
+# target the production algorithm must converge to). Deliberately strict; the
+# gate is expected to FAIL until the wb finder + print tune (+ PRINT_GAMMA) are
+# tuned to match. Loosen ONLY with the user's sign-off.
+TOL_GT_WB = 0.05         # abs delta per wb_low/wb_high component
+TOL_GT_BLACK = 0.03
+TOL_GT_EXPOSURE = 0.05
+TOL_GT_GAMMA = 0.10
+
 # Annotation crop rects are stored as NORMALIZED fractions of the frame
 # (resolution-independent). Legacy pixel rects (any coord > 1.5) pass through.
 def _rect_to_px(rect, w, h):
@@ -395,6 +404,129 @@ def report_annotated_frames(frames):
                   f"rect {auto_rect} (holder detection tuning signal)")
 
 
+def _load_ground_truth():
+    """Per-stem, field-level last-writer-wins map of the user's hand-tuned
+    target params, gathered from every annotation session. Wheel-picked
+    `wb_overrides` -> wb_low/wb_high; `print_overrides` -> black/exposure/gamma.
+    Later dated sessions (e.g. 2026-06-13_wb_print_roll) override earlier ones
+    (e.g. 2026-06-11_taste) for the same stem+field. Returns {stem: gt}."""
+    fixtures = sorted(ANNOTATIONS_DIR.rglob("*_annotations.json")) \
+        if ANNOTATIONS_DIR.is_dir() else []
+    gt_by_stem = {}
+    for f in fixtures:
+        data = json.loads(f.read_text())
+        stem = data.get("stem") or f.name.replace("_annotations.json", "")
+        gt = gt_by_stem.setdefault(stem, {})
+        touched = False
+        for kind, key in (("shadows", "wb_low"), ("highlights", "wb_high")):
+            entry = (data.get("wb_overrides") or {}).get(kind) or {}
+            corrected = entry.get("corrected")
+            if corrected:
+                gt[key] = [float(v) for v in corrected]
+                touched = True
+        for name in ("black", "exposure", "gamma"):
+            entry = (data.get("print_overrides") or {}).get(name) or {}
+            corrected = entry.get("corrected")
+            if corrected is not None:
+                gt[name] = float(corrected)
+                touched = True
+        if touched:
+            gt["session"] = f.parent.name
+    return {s: gt for s, gt in gt_by_stem.items() if gt}
+
+
+def _ground_truth_violations(stem, params, gt):
+    """Compare current algorithm params against one stem's ground truth.
+    Returns (violations, deltas): a list of strings and a {param: abs_delta}
+    dict (per wb component keyed e.g. 'wb_low[1]'). Pure — no I/O."""
+    violations, deltas = [], {}
+    session = gt.get("session", "?")
+
+    def note(label, applied, target, tol):
+        d = abs(applied - target)
+        deltas[label] = d
+        if d > tol:
+            violations.append(
+                f"{stem}: {label} target {target:.4f} vs applied "
+                f"{applied:.4f} (Δ{d:.4f} > {tol}) [{session}]")
+
+    for key in ("wb_low", "wb_high"):
+        target = gt.get(key)
+        applied = params.get(key)
+        if target and applied:
+            for c in range(3):
+                note(f"{key}[{c}]", applied[c], target[c], TOL_GT_WB)
+    for name, tol in (("black", TOL_GT_BLACK),
+                      ("exposure", TOL_GT_EXPOSURE),
+                      ("gamma", TOL_GT_GAMMA)):
+        target = gt.get(name)
+        applied = params.get(name)
+        if target is not None and applied is not None:
+            note(name, applied, target, tol)
+    return violations, deltas
+
+
+def check_ground_truth(frames):
+    """HARD gate: the production params must match the user's hand-tuned
+    wheel/print annotations (the ground truth this feature must converge to).
+    Strict tolerances; expected to FAIL until the algorithm is tuned. Returns
+    a list of violation strings and prints a per-param aggregate summary."""
+    gt_by_stem = _load_ground_truth()
+    if not gt_by_stem:
+        print("  (no wb/print ground-truth annotations)")
+        return []
+    by_stem = {fr["stem"]: fr for fr in frames}
+    violations = []
+    all_deltas = {}   # label -> [abs deltas across frames]
+    checked = 0
+    for stem, gt in sorted(gt_by_stem.items()):
+        fr = by_stem.get(stem)
+        if fr is None or fr.get("error") or "params" not in fr:
+            continue
+        checked += 1
+        vios, deltas = _ground_truth_violations(stem, fr["params"], gt)
+        violations.extend(vios)
+        for label, d in deltas.items():
+            all_deltas.setdefault(label, []).append(d)
+
+    # aggregate dashboard: group per-component wb into wb_low/wb_high
+    def group(label):
+        return label.split("[")[0]
+    grouped = {}
+    for label, ds in all_deltas.items():
+        grouped.setdefault(group(label), []).extend(ds)
+    print(f"  checked {checked} frame(s) against ground truth, "
+          f"{len(violations)} violation(s)")
+    if grouped:
+        print("  aggregate abs delta (algorithm vs ground truth):")
+        for name in ("wb_low", "wb_high", "black", "exposure", "gamma"):
+            ds = grouped.get(name)
+            if not ds:
+                continue
+            ds_sorted = sorted(ds)
+            median = ds_sorted[len(ds_sorted) // 2]
+            print(f"    {name:9s} median {median:.4f}  max {max(ds):.4f}  "
+                  f"(n={len(ds)})")
+    return violations
+
+
+def selftest_ground_truth():
+    """Test for the test: clean params pass, off params are flagged per param."""
+    gt = {"wb_low": [1.0, 0.9, 0.8], "wb_high": [1.2, 1.1, 1.0],
+          "black": 0.05, "exposure": 1.1, "gamma": 6.9, "session": "selftest"}
+    clean = {"wb_low": [1.0, 0.9, 0.8], "wb_high": [1.2, 1.1, 1.0],
+             "black": 0.05, "exposure": 1.1, "gamma": 6.9}
+    vios, _ = _ground_truth_violations("CLEAN", clean, gt)
+    assert not vios, f"ground-truth self-test: clean params flagged {vios}"
+
+    off = {"wb_low": [1.0, 0.5, 0.8], "wb_high": [1.2, 1.1, 1.0],
+           "black": 0.5, "exposure": 1.5, "gamma": 6.0}
+    vios, _ = _ground_truth_violations("OFF", off, gt)
+    # wb_low[1], black, exposure, gamma all exceed tolerance
+    assert len(vios) >= 4, f"ground-truth self-test: off params under-flagged {vios}"
+    print("Ground-truth checker self-test: OK")
+
+
 def main():
     images, exif = list_test_images()
     if not images:
@@ -410,6 +542,7 @@ def main():
         return 0
 
     selftest_invariants()
+    selftest_ground_truth()
 
     print(f"Running pipeline on {len(images)} test frame(s) "
           f"({Path(images[0]).suffix})...")
@@ -445,6 +578,13 @@ def main():
     report_annotated_frames(frames)
 
     print()
+    print("--- Ground truth (HARD gate: algorithm must match user's "
+          "wheel/print annotations) ---")
+    ground_truth = check_ground_truth(frames)
+    for v in ground_truth:
+        print(f"  VIOLATION: {v}")
+
+    print()
     print("--- Baseline diff ---")
     baseline = load_baseline()
     diff_frames = 0
@@ -473,7 +613,8 @@ def main():
         print(f"  {diff_frames}/{compared} frame(s) differ from baseline")
 
     print()
-    fail = bool(violations) or bool(errors) or bool(containment)
+    fail = (bool(violations) or bool(errors) or bool(containment)
+            or bool(ground_truth))
     warn = False
     if compared:
         frac = diff_frames / compared

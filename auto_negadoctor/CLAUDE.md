@@ -251,10 +251,12 @@ behavior (and self-test non-trivial checkers).
   files from the user's review sessions, organized in dated subfolders so
   multiple sessions per stem coexist (2026-06-11_taste: patch/print
   corrections; 2026-06-12_crop_roll: 15 hand-drawn content crops, third
-  annotation round — the HARD-TRUTH set for crop containment; wheel-picked
-  `wb_overrides` appear here once the user annotates with the shadows/
-  highlights color wheels — `run_quality_tests` reports user-chosen vs
-  applied wb as the tuning target). Crop/patch
+  annotation round — the HARD-TRUTH set for crop containment;
+  2026-06-13_wb_print_roll: the full 37-frame roll tuned with the shadows/
+  highlights color wheels + print sliders — wheel-picked `wb_overrides`
+  (wb_low/wb_high, normalized) and `print_overrides` (black/exposure/gamma),
+  the HARD-TRUTH set for the wb/print ground-truth gate; `run_quality_tests`
+  also reports user-chosen vs applied wb as the tuning target). Crop/patch
   rects are stored as **NORMALIZED fractions** of the frame (resolution-
   independent); debug_ui.py normalizes on save / denormalizes on load (px
   internally), and run_quality_tests denormalizes via `_rect_to_px`. The
@@ -267,8 +269,14 @@ behavior (and self-test non-trivial checkers).
   ranges, wb normalization max(wb_low)=1 / min(wb_high)=1, Dmin orange
   ordering, exposure-ordering consistency Dmin_i/Dmin_j ≈ factor_i/factor_j,
   patches in bounds/outside border, hex round-trip; checker has a self-test)
-  + annotated-frames report + baseline diff vs `tests/baseline_session/`
-  (params, film-base location, shadows/highlights patch positions AND sizes).
+  + annotated-frames report + **ground-truth HARD gate** (`check_ground_truth`,
+  self-tested: production wb_low/wb_high/black/exposure/gamma must match the
+  wheel/print annotations within strict tolerances `TOL_GT_*`; per-stem
+  field-level last-writer-wins across sessions; prints a per-param aggregate
+  median/max-delta dashboard — currently FAILS by design until the algorithm is
+  tuned to the 2026-06-13 ground truth) + baseline diff vs
+  `tests/baseline_session/` (params, film-base location, shadows/highlights
+  patch positions AND sizes).
 - `tests/generate_baseline.py` — regenerate baseline ONLY after the user
   approves a debug-UI review.
 - `tests/smoke_debug_ui.py` — builds a 3-frame session in %TEMP% and drives
@@ -298,6 +306,14 @@ behavior (and self-test non-trivial checkers).
       guard; print auto-tune for normal brightness / max speculars.
 - [ ] Baseline still not generated — needs a user-approved debug-UI review
       first (`generate_baseline.py`, runs on images_tif now).
+- [ ] Converge to the 2026-06-13 wb/print ground truth (the user hand-tuned the
+      full 37-frame roll with the color wheels + print sliders). The
+      `check_ground_truth` HARD gate in run_quality_tests is intentionally RED
+      until the production wb finder, the print tune (black/exposure) and
+      `PRINT_GAMMA` are tuned to match — run the suite and drive the per-param
+      aggregate deltas toward zero. Same tuning direction as the DSC_0002-class
+      note below (stronger R in wb_high, milder B suppression in wb_low); the
+      ground-truth fixtures now cover the whole roll, not just a couple frames.
 - [ ] Per-frame wb vs roll-wide wb: the user's manual practice is one synced
       wb per roll + per-frame black/soft_clip. Roll-median fallback exists;
       consider a full roll-consensus mode after more debug-UI feedback.
