@@ -65,6 +65,14 @@ TOL_GT_BLACK = 0.03
 TOL_GT_EXPOSURE = 0.05
 TOL_GT_GAMMA = 0.10
 
+# Hard-clip gate: the param gate does NOT measure clipping, yet a tuner that
+# matches the param values can still blow out the highlights (a shadow-anchor
+# attempt clipped 3-60% of pixels on normal scenes — the user reported it
+# unusable on re-export). Rendering the user's own GT params clips ~0% on every
+# frame, so the production print tune must too.
+CLIP_OUT_THR = 0.999     # rendered output at/above this = a hard-clipped pixel
+CLIP_MAX_FRAC = 0.01     # max fraction of hard-clipped pixels allowed per frame
+
 # Annotation crop rects are stored as NORMALIZED fractions of the frame
 # (resolution-independent). Legacy pixel rects (any coord > 1.5) pass through.
 def _rect_to_px(rect, w, h):
@@ -527,6 +535,39 @@ def selftest_ground_truth():
     print("Ground-truth checker self-test: OK")
 
 
+def check_no_clipping(frames):
+    """HARD gate the param ground-truth gate does NOT cover: render each frame's
+    PRODUCTION params and flag any whose hard-clip fraction (pixels with any
+    channel >= CLIP_OUT_THR) exceeds CLIP_MAX_FRAC. Subsamples for speed, using
+    the same stride the print tuner uses. Returns a list of violation strings."""
+    import numpy as np
+    violations, worst = [], []
+    for fr in frames:
+        if fr.get("error") or "params" not in fr or not fr.get("border"):
+            continue
+        try:
+            enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
+        except Exception:
+            continue
+        l, t, r, b = fr["border"]
+        h, w = lin.shape[:2]
+        s = max(1, int(round(w * an.PRINT_TUNE_SUBSAMPLE_FRAC)))
+        region = lin[t:h - b:s, l:w - r:s].reshape(-1, 3)
+        if region.size == 0:
+            continue
+        out = nm.render_negadoctor(region, fr["params"])
+        clip = float(np.mean((out >= CLIP_OUT_THR).any(axis=1)))
+        worst.append((fr["stem"], clip))
+        if clip > CLIP_MAX_FRAC:
+            violations.append(f"{fr['stem']}: hard-clip fraction {clip:.1%} "
+                              f"> {CLIP_MAX_FRAC:.0%} (overexposed / unusable)")
+    worst.sort(key=lambda x: -x[1])
+    if worst:
+        print("  checked {} frame(s); worst clip: {}".format(
+            len(worst), ", ".join(f"{s} {c:.2%}" for s, c in worst[:3])))
+    return violations
+
+
 def main():
     images, exif = list_test_images()
     if not images:
@@ -585,6 +626,15 @@ def main():
         print(f"  VIOLATION: {v}")
 
     print()
+    print("--- No clipping (HARD gate: production render must not blow out "
+          "highlights) ---")
+    clipping = check_no_clipping(frames)
+    for v in clipping:
+        print(f"  VIOLATION: {v}")
+    if not clipping:
+        print("  no frame exceeds the hard-clip limit")
+
+    print()
     print("--- Baseline diff ---")
     baseline = load_baseline()
     diff_frames = 0
@@ -614,7 +664,7 @@ def main():
 
     print()
     fail = (bool(violations) or bool(errors) or bool(containment)
-            or bool(ground_truth))
+            or bool(ground_truth) or bool(clipping))
     warn = False
     if compared:
         frac = diff_frames / compared

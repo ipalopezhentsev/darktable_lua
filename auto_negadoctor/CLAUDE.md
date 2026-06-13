@@ -81,34 +81,48 @@
      keeps the dense anchor robust to junk slivers), D_max from them, offset
      FIXED at -0.05 (darktable default; auto-offset degenerates on
      uncropped scans and the user's manual rolls never change it); render
-     ONE patch-search preview
-     with the **taste-prior wb** (close to the final rendition, so plain
-     chroma = "looks gray in the print") and find a dark-gray patch
-     (→ wb_low) and light-neutral patch (→ wb_high) using the patches'
-     NEGATIVE-space colors. (Earlier approaches failed: chroma on an
-     uncorrected render rejects everything; gray-world normalization breaks
-     on half-lit frames — the user's gray wall measured as the MOST
-     chromatic window.) Chroma has a denominator floor (near-black windows),
-     uniformity has a luma floor (grain noise), and EVERY channel must be >=
-     MIN_PATCH_DENSITY above base (one near-base channel explodes the wb
-     ratios). Frames without usable patches fall back to roll-median wb
-     (`categorize_frame()` is the future LLM hook)
-   - per frame: the patch-derived wb is blended toward the USER-TASTE roll
-     prior (WB_HIGH_PRIOR/WB_LOW_PRIOR = the user's corrected wb on the
-     reference frame, WB_PRIOR_WEIGHT=0.5): pure patch neutralization kills
-     scene-light character — the user corrected the outdoor frame WARMER
-     and the indoor frame COOLER, and blending toward a common prior fixes
-     both directions. gamma = PRINT_GAMMA (6.5: user signals 5.25/7.1/6.15
-     across sessions, manual rolls 6.9). P_LOW=2.0: the user's crop
+     ONE preview with the prior wb (close to the final rendition, so the
+     print-luma bands fall on real shadows/highlights).
+   - per frame **wb — region-cast + gentle neutralization** (2026-06-13 GT
+     tuning; replaced the old taste-prior blend): the user's wheel picks are a
+     per-frame neutralization of the scene's color cast, but consistently
+     MILDER than full gray-world (e.g. the tungsten-lit DSC_0002 inverts warm
+     and the user only cools it partway — wb_low is the INVERSE-of-cast gain).
+     `estimate_region_wb()` reads the cast as the mean NEGATIVE-space color of a
+     dark/bright print-luma band (robust gray-world — most frames have NO clean
+     neutral grey window, so the old single-window shadow search collapsed to a
+     near-constant over-warm value), neutralizes via darktable's exact picker
+     formula, then `desaturate_wb()` pulls it toward neutral by WB_LOW_DESAT
+     (0.45). **wb_low** uses this region estimate; **wb_high** prefers the
+     reliable light-neutral PATCH (`find_neutral_patch`) and falls back to the
+     bright-region estimate only when no clean patch exists (tungsten frames).
+     No more roll-prior blend (the patch wb_high already lands near the GT
+     median; for wb_low the old prior over-suppressed G/B). wb's INTENSITY
+     (spread) is a tonal lever handled jointly downstream (see print tune).
+     gamma = PRINT_GAMMA (6.1 = GT median; per-frame GT gamma 4.55–7.8 is
+     aesthetic intent — fog→soft/low, forest→punch/high — NOT image-derivable,
+     needs the `categorize_frame()` scene hook). P_LOW=2.0: the user's crop
      annotation proved the densest 0.5-2% were edge junk, so the dense-side
-     anchor uses a junk-robust percentile (and true speculars soft-clip,
-     matching the punch taste); on the annotated frame this reproduces the
-     user-crop D_max (0.56 vs 0.55) without needing a crop
-   - per frame: black + exposure start from darktable's auto formulas, then
-     `tune_print_params()` closes the loop on the actual rendered output
-     (spec: "normal brightness, maximise speculars without heavy clipping"):
-     exposure drives content P99.5 luma to PRINT_TARGET_HI, black pulls an
-     out-of-band median into PRINT_MID_BAND
+     anchor uses a junk-robust percentile.
+   - per frame: black + exposure via `tune_print_params()`, the user's process
+     (2026-06-13): **push brightness to the CLIP BOUNDARY — "as bright as
+     possible without the highlights clipping" — which auto-preserves MOOD with
+     no scene labels.** Each iteration exposure pins the content P99.9 to
+     PRINT_HI_CEIL (0.98, just below clip); when exposure SATURATES at its range
+     end and the highlight is still off the ceiling, BLACK takes over to keep
+     brightening (a less-negative black lifts the whole curve on dense snow/sky
+     once exposure can't go higher — without this, snow/sky came out far too
+     dark, P99.5~0.5, exposure maxed while black stayed too negative). A final
+     guard backs exposure off until the hard-clip fraction ≤ PRINT_CLIP_BUDGET
+     (0.3%). Bright scenes use the headroom → bright; genuinely dark scenes
+     (museum) clip early → stay dark (verified: DSC_0021 midtone 0.01 vs snow
+     0.6+). Clip-free on all 37 (rendering the GT params also clips ~0%).
+     **NO HARD CLIPPING is the binding constraint and the param gate does NOT
+     measure it** — an earlier 0.95-highlight-target / shadow-point-anchor tuner
+     matched the param gate better but blew out 3-60% of pixels (the user
+     reported it unusable on re-export); a fixed low 0.86 ceiling was clip-safe
+     but left snow/sky too dark. Clipping is gated separately
+     (`check_no_clipping`).
    - emits `negadoctor_results.txt` with a ready 152-char hex params blob
      per frame (`OK|stem|params=<hex>`; `DETAIL|…` lines are for humans)
 5. Lua writes per frame: a **lens-module entry** (modversion 10) carrying
@@ -306,24 +320,43 @@ behavior (and self-test non-trivial checkers).
       guard; print auto-tune for normal brightness / max speculars.
 - [ ] Baseline still not generated — needs a user-approved debug-UI review
       first (`generate_baseline.py`, runs on images_tif now).
-- [ ] Converge to the 2026-06-13 wb/print ground truth (the user hand-tuned the
-      full 37-frame roll with the color wheels + print sliders). The
-      `check_ground_truth` HARD gate in run_quality_tests is intentionally RED
-      until the production wb finder, the print tune (black/exposure) and
-      `PRINT_GAMMA` are tuned to match — run the suite and drive the per-param
-      aggregate deltas toward zero. Same tuning direction as the DSC_0002-class
-      note below (stronger R in wb_high, milder B suppression in wb_low); the
-      ground-truth fixtures now cover the whole roll, not just a couple frames.
+- [~] Converge to the 2026-06-13 wb/print ground truth — IN PROGRESS. Rebuilt
+      wb (region-cast + gentle neutralization) + print tune (clip-boundary
+      brightness push) + gamma 6.1. NOTE: the param gate (`check_ground_truth`)
+      is a PROXY that can diverge from render quality — the clip-boundary tuner
+      raised the param-gate count (~166→178) while HALVING the rendered-midtone
+      error vs GT (0.088→0.050) and fixing the user's "snow/sky too dark"
+      complaint. Optimize the RENDER (brightness + no clip), not the gate number.
+      The residual is dominated by IRREDUCIBLE per-frame aesthetic taste, established
+      empirically: rendering the GT params shows the user's outputs are NOT
+      tonally invariant (median brightness 0.03–0.87 by design — mood is
+      preserved), GT exposure⊥black are a -0.95 manifold the user picks a point
+      on, and per-frame gamma (fog→4.55 soft, forest→7.8 punch) has ~0 corr with
+      any contrast metric. Closing the residual needs SCENE UNDERSTANDING, not
+      more pixel math → the `categorize_frame()` LLM hook (day/night, fog,
+      foliage, indoor-tungsten) feeding wb-fallback + gamma + brightness intent.
+      Remaining derivable headroom is small (wb_low B channel, warm-frame
+      wb_high R — both partly taste). The gate stays RED by design; do NOT relax
+      `TOL_GT_*`.
+      **CLIPPING IS A SEPARATE, HARDER CONSTRAINT THE PARAM GATE DOES NOT
+      MEASURE.** A tuner can match the gate's black/exposure values yet blow out
+      3-60% of pixels (a shadow-anchor attempt did, on normal scenes — the user
+      reported it unusable on re-export). The production tuner pins highlights
+      below clip as the binding rule and is verified 0/37 frames hard-clipping;
+      ALWAYS re-check rendered hard-clip fraction (out>=0.999) when touching the
+      print tune, not just the gate deltas.
+- [x] Clip-fraction HARD gate added to run_quality_tests (`check_no_clipping`):
+      renders each frame's production params and FAILs if hard-clip fraction
+      (any channel >= CLIP_OUT_THR=0.999) exceeds CLIP_MAX_FRAC=1% — so the
+      suite can't go green on a clipping tuner. Production tune passes 0/37.
 - [ ] Per-frame wb vs roll-wide wb: the user's manual practice is one synced
       wb per roll + per-frame black/soft_clip. Roll-median fallback exists;
       consider a full roll-consensus mode after more debug-UI feedback.
-- [x] gamma: PRINT_GAMMA=5.25 from the user's explicit "more punchy"
-      override (2026-06-11, third session); soft_clip stays at 0.75.
-      wb taste prior encoded the "warmer" direction the same session —
-      verified: applied wb_high on the reference frame moved from
-      (1.34,1.16,1.0) to (1.58,1.23,1.0) vs user target (1.77,1.34,1.0),
-      and tuned black/exposure now land within ~0.01 of the user's values.
-      Raise WB_PRIOR_WEIGHT if the user still wants warmer.
+- [x] gamma: PRINT_GAMMA now 6.1 (= 2026-06-13 GT median; supersedes the
+      earlier 5.25/6.5 single-frame signals). Per-frame GT gamma 4.55–7.8 is
+      aesthetic intent, not derivable — see the convergence TODO above.
+      soft_clip stays at 0.75. (The old WB_PRIOR_WEIGHT taste-prior blend was
+      removed in the 2026-06-13 wb rebuild; wb is now region-cast based.)
 - [ ] LLM scene categorization hook (`categorize_frame()`) for wb fallback
       on gray-less frames (all-green foliage etc.).
 - [ ] Live darktable re-verify after the bpp=32 switch: Debug mode, then

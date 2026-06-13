@@ -164,18 +164,30 @@ MIN_PATCH_DENSITY = 0.05         # patch must be >= this much denser (log10 D) t
                                  # film base, else the wb formulas degenerate
 HIGHLIGHT_CLIP_FRAC_MAX = 0.02   # negative-space clipped fraction guard
 
-# --- print auto-tuning (spec: "normal brightness, then maximise specular
-# --- highlights without heavy clipping") -------------------------------------
-PRINT_TARGET_HI = 0.95           # rendered linear luma target for content P99.5
-                                 # (user accepts specular clipping for punch;
-                                 # soft_clip rolls the top off anyway)
-PRINT_HI_PCT = 99.5
-PRINT_MID_BAND = (0.15, 0.40)    # acceptable content median luma (linear).
-                                 # Out-of-band frames get pulled only to the
-                                 # NEAREST EDGE (minimal intervention): pulling
-                                 # to a center target washed out genuinely dark
-                                 # scenes (night/museum frames must stay moody)
-PRINT_TUNE_ITERS = 4
+# --- print auto-tuning -------------------------------------------------------
+# The user's process (2026-06-13): push brightness up to the CLIP BOUNDARY —
+# "maximise brightness without the highlights clipping" — using black to keep
+# brightening once exposure is maxed, and backing exposure off if it clips. This
+# auto-preserves MOOD: a bright scene (snow/sky) has headroom so it goes bright,
+# a genuinely dark scene (museum) clips early so it stays dark — no scene labels
+# needed. NO HARD CLIPPING is the binding constraint (the param gate does NOT
+# measure it; rendering the user's own GT params clips ~0% everywhere).
+#   each iter: exposure pins the high percentile to PRINT_HI_CEIL (near clip);
+#   when exposure SATURATES at its range end and the highlight is still off the
+#   ceiling, BLACK takes over to keep pushing it there (this is how the user
+#   brightens dense snow/sky — a less-negative black lifts the whole curve when
+#   exposure can't go higher). A final guard lowers exposure until the hard-clip
+#   fraction is within PRINT_CLIP_BUDGET. wb intensity feeds in for free.
+# (Earlier tries failed: a fixed-0.95 highlight target / shadow-point black
+# anchor matched the param gate but blew out 3-60% of pixels; a low fixed 0.86
+# ceiling was clip-safe but left snow/sky far too dark — exposure maxed while
+# black stayed too negative, so highlights sat at ~0.5.)
+PRINT_HI_PCT = 99.9            # control the actual top (not P99.5, which lets the
+                              # top 0.5% spread into hard clip)
+PRINT_HI_CEIL = 0.99          # push the high percentile to just below clipping
+PRINT_CLIP_BUDGET = 0.003     # final guard: lower exposure until hard-clip frac
+                              # (any channel >= 0.999) is at most this
+PRINT_TUNE_ITERS = 12
 PRINT_TUNE_SUBSAMPLE_FRAC = 0.003  # render every Nth pixel during tuning; stride
                                    # = frac of width (keeps sample count ~constant)
 
@@ -185,16 +197,27 @@ PRINT_TUNE_SUBSAMPLE_FRAC = 0.003  # render every Nth pixel during tuning; strid
 # use 6.9. 6.5 sits in the middle of the signals. darktable's default 4.0
 # prints far too flat. The print auto-tune adapts black/exposure around
 # whatever gamma is set here.
-PRINT_GAMMA = 6.5
-# wb prior: the user's corrected wb on the reference frame ("warmer",
-# DSC_0001 session 2026-06-11). Each frame's patch-derived wb is blended
-# toward it: pure patch neutralization kills scene-light character (it
-# over-neutralizes warm-lit indoor frames AND prints outdoor frames too
-# cold - the user corrected in opposite directions on the two annotated
-# frames, which a blend toward a common prior fixes in both).
+PRINT_GAMMA = 6.1
+# --- per-frame wb: estimate the cast HUE, apply a gentler-than-full correction
+# The user's wheel picks are a per-frame neutralization of the scene's color
+# cast, but consistently MILDER than a full gray-world neutralization (e.g. the
+# tungsten-lit DSC_0002 inverts warm and the user only cools it partway). wb is
+# read as the mean NEGATIVE-space color of a dark/bright print-luma BAND (robust
+# region gray-world — most frames have no single clean neutral grey window, so
+# the old single-window shadow search collapsed to a near-constant over-warm
+# value), neutralized by darktable's exact picker formula, then pulled toward
+# neutral by WB_*_DESAT. The intensity (spread) of wb is itself a tonal lever and
+# is handled jointly: tune_print_params renders WITH the chosen wb and adapts
+# black/exposure on that render, so a milder wb is compensated downstream.
+WB_LOW_BAND_PCT = (5.0, 30.0)    # print-luma band whose mean = shadow cast
+WB_HIGH_BAND_PCT = (70.0, 95.0)  # print-luma band whose mean = highlight cast
+WB_LOW_DESAT = 0.45              # pull shadow-cast gain toward neutral (0=full)
+WB_HIGH_DESAT = 0.0              # the light-neutral patch already lands well
+WB_REGION_MIN_FRAC = 1e-4        # min band sample fraction of the cropped area
+# preview wb for band SELECTION only (close to the final rendition so the luma
+# bands fall on real shadows/highlights); no longer used as a result prior.
 WB_HIGH_PRIOR = (1.80, 1.35, 1.0)
 WB_LOW_PRIOR = (1.0, 0.75, 0.70)
-WB_PRIOR_WEIGHT = 0.5            # 0 = pure patch wb, 1 = prior only
 
 # --- roll-wide vignette estimation --------------------------------------------
 # Lens + backlight/holder vignetting darkens corners of the negative -> after
@@ -707,17 +730,43 @@ def categorize_frame(lin, preview):
 # Per-frame parameter assembly
 # ---------------------------------------------------------------------------
 
-def apply_wb_taste(wb_low, wb_high):
-    """Blend patch-derived wb toward the user-taste roll prior and restore
-    the picker normalization (max(wb_low)=1, min(wb_high)=1)."""
-    w = WB_PRIOR_WEIGHT
-    lo = [(1 - w) * wb_low[c] + w * WB_LOW_PRIOR[c] for c in range(3)]
-    m = max(lo)
-    lo = [nm.clamp(v / m, nm.WB_RANGE) for v in lo]
-    hi = [(1 - w) * wb_high[c] + w * WB_HIGH_PRIOR[c] for c in range(3)]
-    m = min(hi)
-    hi = [nm.clamp(v / m, nm.WB_RANGE) for v in hi]
-    return lo, hi
+def _normalize_wb(wb, kind):
+    """Restore the darktable picker normalization: max(wb_low)=1 / min(wb_high)=1."""
+    m = max(wb) if kind == "shadows" else min(wb)
+    return [nm.clamp(v / max(m, nm.THR), nm.WB_RANGE) for v in wb]
+
+
+def desaturate_wb(wb, strength, kind):
+    """Pull a wb gain toward neutral (1,1,1) by `strength` (0=unchanged,
+    1=neutral), preserving hue, then restore the picker normalization. The
+    user neutralizes the cast more gently than a full gray-world correction."""
+    blended = [(1.0 - strength) * wb[c] + strength * 1.0 for c in range(3)]
+    return _normalize_wb(blended, kind)
+
+
+def estimate_region_wb(lin, border, preview, dmin, d_max, offset, band_pct,
+                       kind, wb_low=None):
+    """Robust region gray-world: mean NEGATIVE-space color over a print-luma
+    band -> neutralized wb via darktable's picker formula (no single-window
+    grey patch needed). preview defines the luma band on the (prior-wb)
+    rendition; lin supplies the negative colors the picker would sample.
+    kind: "shadows" -> wb_low, "highlights" -> wb_high. Returns a normalized
+    wb (not yet desaturated) or None when the band has too few samples."""
+    l, t, r, b = border
+    h, w = lin.shape[:2]
+    reg = lin[t:h - b, l:w - r].reshape(-1, 3)
+    if reg.shape[0] == 0:
+        return None
+    p_luma = preview[t:h - b, l:w - r].mean(axis=2).reshape(-1)
+    lo = float(np.percentile(p_luma, band_pct[0]))
+    hi = float(np.percentile(p_luma, band_pct[1]))
+    sel = (p_luma >= lo) & (p_luma <= hi)
+    if int(sel.sum()) < max(10, int(round(reg.shape[0] * WB_REGION_MIN_FRAC))):
+        return None
+    mean_neg = [float(v) for v in reg[sel].mean(axis=0)]
+    if kind == "shadows":
+        return nm.compute_wb_low(dmin, mean_neg, d_max)
+    return nm.compute_wb_high(dmin, mean_neg, d_max, offset, wb_low or [1.0, 1.0, 1.0])
 
 
 def make_params(dmin, d_max, offset, wb_low, wb_high, picked_min, picked_max,
@@ -750,28 +799,21 @@ def render_preview_srgb(lin, params):
 
 
 def tune_print_params(lin, params, border, dmin):
-    """Adjust exposure (and black when needed) so the print hits the spec
-    targets: specular highlights near PRINT_TARGET_HI without hard clipping,
-    median content brightness inside PRINT_MID_BAND.
+    """Push brightness to the clip boundary (the user's process): exposure pins
+    the high percentile (PRINT_HI_PCT) to the near-clip ceiling PRINT_HI_CEIL;
+    when exposure SATURATES at its range end and the highlight is still off the
+    ceiling, BLACK takes over to keep brightening (a less-negative black lifts
+    the whole curve on dense snow/sky once exposure can't go higher). A final
+    guard backs exposure off until the hard-clip fraction is within
+    PRINT_CLIP_BUDGET. This auto-preserves mood — bright scenes use the headroom
+    and go bright, dark scenes clip early and stay dark — with NO hard clipping
+    as the binding constraint (see the PRINT_* block).
 
     Statistics run over EVERYTHING inside the content-crop border (no pixel
-    masks). darktable's auto formulas anchor the curve endpoints in
-    PRE-gamma space, which leaves full-range scans flat and dark; this
-    closes the loop on the actual rendered output instead. Works on a
-    subsampled frame. Returns (tuned params, tuning info dict).
-
-    Exposure is the primary brightness lever (it drives content P99.5 to
-    PRINT_TARGET_HI). On dense negatives — e.g. heavily snowed, high-key
-    scenes whose every channel sits near the film base — darktable's auto
-    black/exposure both pin at their extremes (black floor, exposure
-    ceiling) and the print still lands far below target. When exposure is
-    SATURATED at its ceiling and P99.5 is still short of target, black takes
-    over as the brightness lever: with the steep print gamma a small black
-    raise lifts the highlights strongly while barely touching the (already
-    near-black) shadows. This reproduces the user's manual fix on snow frames
-    (they raised black once exposure was maxed). The median-band pull only
-    runs when exposure is NOT saturated, so it never claws that brightening
-    back down (a high-key frame legitimately carries a high median).
+    masks). darktable's auto formulas anchor the curve endpoints in PRE-gamma
+    space, which leaves full-range scans flat and dark; this closes the loop on
+    the actual rendered output instead. Works on a subsampled frame.
+    Returns (tuned params, tuning info dict).
     """
     l, t, r, b = border
     h, w = lin.shape[:2]
@@ -780,40 +822,38 @@ def tune_print_params(lin, params, border, dmin):
     if region.size == 0:
         return params, {"tuned": False}
 
-    exposure_ceil = nm.EXPOSURE_RANGE[1]
     p = dict(params)
     gamma = p["gamma"]
+    ec = nm.EXPOSURE_RANGE
     content = region.reshape(-1, 3)
     info = {"tuned": True}
     for it in range(PRINT_TUNE_ITERS):
+        # exposure pins the high percentile to the ceiling (both directions)
         out = nm.render_negadoctor(content, p)
-        luma = out.mean(axis=1)
-        hi = float(np.percentile(luma, PRINT_HI_PCT))
-        med = float(np.median(luma))
-        info["hi"], info["med"] = hi, med
-        # exposure scales print_linear linearly -> output by ^gamma
+        hi = float(np.percentile(out.mean(axis=1), PRINT_HI_PCT))
         if hi > 1e-6:
             p["exposure"] = nm.clamp(
-                p["exposure"] * (PRINT_TARGET_HI / hi) ** (1.0 / gamma),
-                nm.EXPOSURE_RANGE)
-        # black shifts print_linear additively by exposure*delta.
-        saturated = p["exposure"] >= exposure_ceil - 1e-6
-        if saturated and hi < PRINT_TARGET_HI:
-            # exposure is maxed and the print is still too dark: finish
-            # driving P99.5 toward the target with black instead
-            delta_pre = (PRINT_TARGET_HI ** (1.0 / gamma)
+                p["exposure"] * (PRINT_HI_CEIL / hi) ** (1.0 / gamma), ec)
+        # when exposure is SATURATED (maxed and still below ceiling, or bottomed
+        # and above it), black takes over to drive the highlight to the ceiling
+        out = nm.render_negadoctor(content, p)
+        hi = float(np.percentile(out.mean(axis=1), PRINT_HI_PCT))
+        info["hi"] = hi
+        sat_hi = p["exposure"] >= ec[1] - 1e-6
+        sat_lo = p["exposure"] <= ec[0] + 1e-6
+        if (sat_hi and hi < PRINT_HI_CEIL) or (sat_lo and hi > PRINT_HI_CEIL):
+            delta_pre = (PRINT_HI_CEIL ** (1.0 / gamma)
                          - max(hi, 1e-6) ** (1.0 / gamma))
             p["black"] = nm.clamp(p["black"] + delta_pre / max(p["exposure"], 1e-6),
                                   nm.BLACK_RANGE)
-            info["black_drives_hi"] = True
-        elif not saturated and (med < PRINT_MID_BAND[0] or med > PRINT_MID_BAND[1]):
-            # pull an out-of-band median only to the nearest band edge so
-            # dark scenes keep their character
-            target_mid = min(max(med, PRINT_MID_BAND[0]), PRINT_MID_BAND[1])
-            delta_pre = (target_mid ** (1.0 / gamma)
-                         - max(med, 1e-6) ** (1.0 / gamma))
-            p["black"] = nm.clamp(p["black"] + delta_pre / max(p["exposure"], 1e-6),
-                                  nm.BLACK_RANGE)
+    # final hard-clip guard: back exposure off until clipping is within budget
+    for _ in range(6):
+        out = nm.render_negadoctor(content, p)
+        clip = float(np.mean((out >= 0.999).any(axis=1)))
+        info["clip"] = clip
+        if clip <= PRINT_CLIP_BUDGET:
+            break
+        p["exposure"] = nm.clamp(p["exposure"] * 0.97, ec)
     return p, info
 
 
@@ -1088,25 +1128,47 @@ def process_roll(image_paths, exif_by_stem, progress=None):
                                               offset, neutral)
             fr["wb_high_boot"] = wb_high_boot
 
-            # ONE patch-search preview rendered with the taste-prior wb: it is
-            # close to the final rendition, so "low chroma" really means
-            # "gray in the print" (see find_neutral_patch docstring)
+            # ONE preview rendered with the prior-wb: close to the final
+            # rendition, so the print-luma bands fall on real shadows /
+            # highlights (and "low chroma" means "gray in the print" for the
+            # still-used highlight patch). The prior-wb auto black/exposure
+            # preview is verified non-clipping on the reference roll, so the
+            # bands aren't skewed by blown highlights. See estimate_region_wb.
             params_prior = make_params(dmin, d_max, offset,
                                        list(WB_LOW_PRIOR), list(WB_HIGH_PRIOR),
                                        fr["picked_min"], fr["picked_max"])
             preview = nm.render_negadoctor(lin, params_prior)
-            shadow = find_neutral_patch(preview, lin, enc_f, fr["border"], win,
-                                        SHADOW_BAND_PCT, "shadows",
-                                        dmin, d_max, base_rect)
-            wb_low = (nm.compute_wb_low(dmin, shadow["rgb_neg_linear"], d_max)
-                      if shadow else None)
+
+            # wb_low: region gray-world over the shadow band, gently neutralized
+            # (the single-window shadow search collapsed to a near-constant
+            # over-warm value; the user's pick is a milder cast correction)
+            wb_low_raw = estimate_region_wb(lin, fr["border"], preview, dmin,
+                                            d_max, offset, WB_LOW_BAND_PCT,
+                                            "shadows")
+            wb_low = (desaturate_wb(wb_low_raw, WB_LOW_DESAT, "shadows")
+                      if wb_low_raw else None)
+
+            # wb_high: prefer the reliable light-neutral PATCH; fall back to the
+            # bright-region cast estimate when no clean patch exists (e.g.
+            # tungsten frames that have no neutral highlight window)
             highlight = find_neutral_patch(preview, lin, enc_f, fr["border"], win,
                                            HIGHLIGHT_BAND_PCT, "highlights",
                                            dmin, d_max, base_rect)
-            wb_high = (nm.compute_wb_high(dmin, highlight["rgb_neg_linear"], d_max,
-                                          offset, wb_low or neutral)
-                       if highlight else None)
+            if highlight:
+                wb_high = nm.compute_wb_high(dmin, highlight["rgb_neg_linear"],
+                                             d_max, offset, wb_low or neutral)
+            else:
+                wb_high_raw = estimate_region_wb(lin, fr["border"], preview,
+                                                 dmin, d_max, offset,
+                                                 WB_HIGH_BAND_PCT, "highlights",
+                                                 wb_low or neutral)
+                wb_high = (desaturate_wb(wb_high_raw, WB_HIGH_DESAT, "highlights")
+                           if wb_high_raw else None)
 
+            # shadow patch kept only as a UI marker (wb_low now region-based)
+            shadow = find_neutral_patch(preview, lin, enc_f, fr["border"], win,
+                                        SHADOW_BAND_PCT, "shadows",
+                                        dmin, d_max, base_rect)
             fr["shadow_patch"] = shadow
             fr["highlight_patch"] = highlight
             fr["wb_low"] = wb_low
@@ -1136,7 +1198,9 @@ def process_roll(image_paths, exif_by_stem, progress=None):
             # one, the per-frame percentile bootstrap beats neutral 1.0
             fr["wb_high"] = list(median_high or fr.get("wb_high_boot")
                                  or [1.0, 1.0, 1.0])
-        fr["wb_low"], fr["wb_high"] = apply_wb_taste(fr["wb_low"], fr["wb_high"])
+        # restore the picker normalization (region/median results may drift it)
+        fr["wb_low"] = _normalize_wb(fr["wb_low"], "shadows")
+        fr["wb_high"] = _normalize_wb(fr["wb_high"], "highlights")
         fr["params"] = make_params(fr["dmin"], fr["d_max"], fr["offset"],
                                    fr["wb_low"], fr["wb_high"],
                                    fr["picked_min"], fr["picked_max"])
