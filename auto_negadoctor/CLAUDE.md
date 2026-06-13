@@ -196,9 +196,28 @@ shadows/highlights re-derive wb_low/wb_high, print overrides replace their
 values (otherwise black/exposure keep their tuned values); **X toggles
 between the corrected render and the algorithm's default** for A/B
 comparison (badges mark which is shown). The info panel shows what wb the
-corrected patch produces vs applied. Corrections auto-save to
+corrected patch produces vs applied. **Shadows/highlights color wheels**
+(spec 02, right panel below the item-table sash): two `ColorWheel` widgets
+set `wb_low` / `wb_high`
+**directly** with live preview — drag the marker, the inverted preview
+re-renders (WB only; black/exposure unchanged unless a crop is also
+present). Each wheel's marker starts at the frame's **auto-found wb** (the
+applied `wb_low`/`wb_high`, or a saved override), so the user nudges from the
+algorithm's choice; the chosen value is stored as a direct abstract
+`wb_overrides` entry (`{"shadows"/"highlights": [r,g,b]}`) — the clean ground
+truth for later tuning of the production wb finder (loss = distance between
+the algorithm's wb and the user's chosen wb). Precedence in the live render:
+`wb_override > patch correction > detected patch`. Selecting a wheel (click
+it or its `wb_lo`/`wb_hi` item-table row) lets `C` revert it to the auto
+value and the note box attach to it. A fixed **gold pin** marks the
+algorithm's auto wb (the draggable black/white marker is the chosen value),
+so the divergence is visible; the wheels **grow to fill the footer pane**
+(drag the right-panel/sash wider for finer precision — `ColorWheel.resize`
+re-renders the disk and re-places marker+pin from the remembered wb). The wb↔wheel mapping is pure math in
+`nega_model.py` (`wb_to_wheel` / `wheel_to_wb`, a log-space zero-sum chroma
+projection). Corrections auto-save to
 `{stem}_annotations.json`; closing writes `debug_report.txt` (patch size
-changes + print overrides included) for tuning.
+changes + print overrides + wb wheel overrides included) for tuning.
 
 ### Testing approach
 
@@ -207,7 +226,10 @@ behavior (and self-test non-trivial checkers).
 
 - `tests/test_forward_model.py` — pure math: tuner-formula round-trips
   (film base → black, densest → 0.96 target, white patch exactly
-  neutralized), hex encode/decode incl. a real manual XMP blob.
+  neutralized), hex encode/decode incl. a real manual XMP blob, and the
+  color-wheel ↔ wb mapping (`test_wheel_mapping`: neutral→center,
+  wb→wheel→wb round-trip, max(wb_low)=1 / min(wb_high)=1 + range clamp over
+  the whole disk).
 - `tests/test_calibration.py` — runs the pipeline on `tests/images/` (the
   ORIGINAL sRGB JPEG exports) and compares against the user's manual
   inversions in `tests/fixtures/manual_xmps/` (same roll). Gates Dmin ONLY;
@@ -229,7 +251,10 @@ behavior (and self-test non-trivial checkers).
   files from the user's review sessions, organized in dated subfolders so
   multiple sessions per stem coexist (2026-06-11_taste: patch/print
   corrections; 2026-06-12_crop_roll: 15 hand-drawn content crops, third
-  annotation round — the HARD-TRUTH set for crop containment). Crop/patch
+  annotation round — the HARD-TRUTH set for crop containment; wheel-picked
+  `wb_overrides` appear here once the user annotates with the shadows/
+  highlights color wheels — `run_quality_tests` reports user-chosen vs
+  applied wb as the tuning target). Crop/patch
   rects are stored as **NORMALIZED fractions** of the frame (resolution-
   independent); debug_ui.py normalizes on save / denormalizes on load (px
   internally), and run_quality_tests denormalizes via `_rect_to_px`. The

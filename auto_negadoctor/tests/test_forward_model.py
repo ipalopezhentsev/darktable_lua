@@ -222,6 +222,52 @@ def test_vignette():
     check("fit residual small", resid < 0.02, str(resid))
 
 
+def test_wheel_mapping():
+    """Color-wheel <-> wb mapping (debug-UI shadows/highlights wheels)."""
+    print("color-wheel wb mapping:")
+    # neutral wb -> wheel center
+    _, r0 = nm.wb_to_wheel([1.0, 1.0, 1.0])
+    check("neutral wb -> radius 0", approx(r0, 0.0, 1e-9), str(r0))
+    check("center -> neutral (low)",
+          all(approx(v, 1.0, 1e-9) for v in nm.wheel_to_wb(0.0, 0.0, "low")))
+    check("center -> neutral (high)",
+          all(approx(v, 1.0, 1e-9) for v in nm.wheel_to_wb(0.0, 0.0, "high")))
+
+    # round-trip: wb -> wheel -> wb is exact for in-gamut normalized vectors
+    low_cases = [[1.0, 0.91, 0.78], [1.0, 0.5, 0.6], [0.8, 1.0, 0.7]]
+    for wb in low_cases:
+        a, r = nm.wb_to_wheel(wb)
+        back = nm.wheel_to_wb(a, r, "low")
+        check(f"low round-trip {wb}",
+              all(approx(x, y, 1e-6) for x, y in zip(wb, back)), str(back))
+    high_cases = [[1.34, 1.16, 1.0], [1.8, 1.2, 1.0], [1.0, 1.1, 1.3]]
+    for wb in high_cases:
+        a, r = nm.wb_to_wheel(wb)
+        back = nm.wheel_to_wb(a, r, "high")
+        check(f"high round-trip {wb}",
+              all(approx(x, y, 1e-6) for x, y in zip(wb, back)), str(back))
+
+    # normalization invariants and range clamping at arbitrary wheel points
+    rng = np.random.default_rng(3)
+    bad = 0
+    for _ in range(200):
+        ang = rng.uniform(-math.pi, math.pi)
+        rad = rng.uniform(0.0, 1.0)
+        lo = nm.wheel_to_wb(ang, rad, "low")
+        hi = nm.wheel_to_wb(ang, rad, "high")
+        if not approx(max(lo), 1.0, 1e-9):
+            bad += 1
+        if not approx(min(hi), 1.0, 1e-9):
+            bad += 1
+        if not all(nm.WB_RANGE[0] <= v <= nm.WB_RANGE[1] for v in lo + hi):
+            bad += 1
+    check("low max==1 / high min==1 / in-range over wheel", bad == 0, f"{bad} bad")
+
+    # radius is clamped to the disk
+    _, rclamp = nm.wb_to_wheel(nm.wheel_to_wb(1.0, 5.0, "high"))
+    check("radius clamped to <=1", rclamp <= 1.0 + 1e-9, str(rclamp))
+
+
 def test_lens_blob():
     print("lens params blob:")
     import auto_negadoctor as an
@@ -261,6 +307,7 @@ def main():
     test_tuner_roundtrip_neutral()
     test_tuner_color_cast()
     test_vignette()
+    test_wheel_mapping()
     test_lens_blob()
     print()
     if FAILURES:

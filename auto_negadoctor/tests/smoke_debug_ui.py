@@ -165,6 +165,46 @@ def main():
             assert "black" in app.annotations[stem]["print_overrides"]
         step("print_override", print_override)
 
+        # Color wheels: dragging sets wb_low/wb_high directly (real event
+        # path), the override lands in corrected params, C reverts to auto
+        def wheel_override():
+            name = "wb_shadows"
+            wheel = app.wheels[name]
+            # the algorithm's auto wb is pinned (fixed divergence reference)
+            assert wheel._auto_pos is not None, "auto wb pin not placed"
+            wheel._on_press(ev(int(wheel._cx + 15), int(wheel._cy - 10)))
+            wheel._on_drag(ev(int(wheel._cx + 20), int(wheel._cy - 12)))
+            ovr = app.annotations[stem]["wb_overrides"].get("shadows")
+            assert ovr and len(ovr) == 3, f"wheel override not stored: {ovr}"
+            assert abs(max(ovr) - 1.0) < 1e-9, f"wb_low not normalized: {ovr}"
+            assert app.selected_patch == name, "wheel did not select itself"
+            params = app._corrected_params(img)
+            assert params is not None and \
+                params["wb_low"] == [float(v) for v in ovr], \
+                "wheel override not applied in corrected params"
+            # highlights wheel, then C reverts to the auto-found value
+            hi = "wb_highlights"
+            hw = app.wheels[hi]
+            hw._on_press(ev(int(hw._cx - 12), int(hw._cy - 8)))
+            assert "highlights" in app.annotations[stem]["wb_overrides"]
+            app._select_patch(hi)
+            app._clear_correction()
+            assert "highlights" not in app.annotations[stem]["wb_overrides"], \
+                "C did not clear the highlights wheel override"
+        step("wheel_override", wheel_override)
+
+        # Wheels resize to fill the panel and keep the marker at the same wb
+        def wheel_resize():
+            wheel = app.wheels["wb_shadows"]
+            wb_before = list(wheel._marker_wb)
+            app._resize_wheels(SimpleNamespace(width=420, height=900))
+            assert wheel.size > 150, f"wheel did not grow: {wheel.size}"
+            exp = wheel._wb_pos(wb_before)     # where the marker should now sit
+            assert abs(wheel._marker_pos[0] - exp[0]) < 1.0 and \
+                abs(wheel._marker_pos[1] - exp[1]) < 1.0, \
+                "marker not re-placed after resize"
+        step("wheel_resize", wheel_resize)
+
         # X: compare corrected vs default render
         def compare_toggle():
             app._toggle_compare()
@@ -341,11 +381,15 @@ def main():
             assert data["bad_inversion"] is True
             assert "black" in data["print_overrides"], "print override not saved"
             assert data["print_overrides"]["black"]["applied"] is not None
+            assert "shadows" in data["wb_overrides"], "wb override not saved"
+            assert data["wb_overrides"]["shadows"]["applied"] is not None
+            assert data["wb_overrides"]["shadows"]["corrected"], "no chosen wb"
             report = session / "debug_report.txt"
             assert report.exists(), "debug_report.txt missing"
             txt = report.read_text(encoding="utf-8")
             assert "CORRECTED PATCHES" in txt and "BAD INVERSION" in txt
             assert "PRINT PARAM OVERRIDES" in txt
+            assert "WB WHEEL OVERRIDES" in txt
         step("verify_outputs", verify_outputs)
 
         if failures:

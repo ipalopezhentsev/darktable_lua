@@ -89,6 +89,11 @@ class DebugUIBase:
     ITEM_ANCHORS = {}         # col -> anchor (default "e")
     ITEM_PANEL_TITLE = "Items:"
     CENTER_BUTTON_TEXT = "Center on item"
+    # When True, the right panel splits vertically (draggable sash): the item
+    # table on top, a feature footer (build_item_panel_footer) below it. The
+    # footer pane opens at its requested height (fully visible) and the table
+    # takes the remaining space.
+    HAS_ITEM_PANEL_FOOTER = False
 
     def __init__(self, root, session_dir):
         self.root = root
@@ -204,6 +209,10 @@ class DebugUIBase:
 
     def build_feature_buttons(self, btn_frame, btn_cfg):
         """Feature buttons/labels packed above the common buttons."""
+
+    def build_item_panel_footer(self, parent):
+        """Feature widgets in the bottom pane of the right panel, below the
+        item table's draggable sash (only used when HAS_ITEM_PANEL_FOOTER)."""
 
     def bind_feature_keys(self):
         """Feature keyboard shortcuts (root.bind)."""
@@ -989,13 +998,31 @@ class DebugUIBase:
                   background=[("selected", "#3a5a8f")],
                   foreground=[("selected", "white")])
 
-        tk.Label(parent, text=self.ITEM_PANEL_TITLE, bg="#484848", fg="white",
-                 font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
-        self.item_list_header = tk.Label(parent, text="", bg="#484848", fg="#c0c0c0",
-                                         font=("", 9))
+        # Optional vertical split: item table on top, feature footer below a
+        # draggable sash. The footer opens at its requested (fully-visible)
+        # height; the table pane stretches into the remaining space.
+        if self.HAS_ITEM_PANEL_FOOTER:
+            vpaned = tk.PanedWindow(parent, orient=tk.VERTICAL,
+                                    sashrelief=tk.RAISED, sashwidth=6,
+                                    bg="#484848")
+            vpaned.pack(fill=tk.BOTH, expand=True)
+            table_host = tk.Frame(vpaned, bg="#484848")
+            footer_host = tk.Frame(vpaned, bg="#484848")
+            vpaned.add(table_host, stretch="always", minsize=120)
+            vpaned.add(footer_host, stretch="never")
+            table_parent = table_host
+        else:
+            table_parent = parent
+            footer_host = None
+
+        tk.Label(table_parent, text=self.ITEM_PANEL_TITLE, bg="#484848",
+                 fg="white", font=("", 10, "bold")).pack(anchor="w", padx=6,
+                                                          pady=(6, 2))
+        self.item_list_header = tk.Label(table_parent, text="", bg="#484848",
+                                         fg="#c0c0c0", font=("", 9))
         self.item_list_header.pack(anchor="w", padx=6, pady=(0, 2))
 
-        tree_frame = tk.Frame(parent, bg="#484848")
+        tree_frame = tk.Frame(table_parent, bg="#484848")
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 2))
 
         self.item_tree = ttk.Treeview(tree_frame, columns=self.ITEM_COLS,
@@ -1023,11 +1050,14 @@ class DebugUIBase:
         self.item_tree.bind("<<TreeviewSelect>>", lambda *e: self._on_item_tree_select())
 
         self.center_btn = tk.Button(
-            parent, text=self.CENTER_BUTTON_TEXT,
+            table_parent, text=self.CENTER_BUTTON_TEXT,
             command=self._center_on_selected_item,
             bg="#585858", fg="white", relief=tk.FLAT,
             padx=6, pady=3, state=tk.DISABLED)
         self.center_btn.pack(fill=tk.X, padx=4, pady=(2, 4))
+
+        if footer_host is not None:
+            self.build_item_panel_footer(footer_host)
 
     def _populate_items_list(self):
         """Rebuild the item table for the current image."""

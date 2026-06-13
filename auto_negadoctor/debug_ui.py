@@ -28,12 +28,13 @@ Interaction (same idiom as the crop UI: select, then Ctrl+Click / scroll):
 """
 
 import sys
+import math
 from pathlib import Path
 
 import tkinter as tk
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageTk
 
 sys.path.insert(0, str(Path(__file__).parent.parent))   # repo root -> common
 sys.path.insert(0, str(Path(__file__).parent))           # feature dir
@@ -61,6 +62,22 @@ PRINT_SHORT = {"black": "blk", "gamma": "gamma", "soft_clip": "gloss",
                "exposure": "pexp"}
 PRINT_STEP = {"black": (0.005, 0.02), "gamma": (0.05, 0.25),
               "soft_clip": (0.01, 0.05), "exposure": (0.01, 0.05)}
+
+# Shadows/highlights as color wheels (spec 02): two wheels drive wb_low /
+# wb_high directly with live preview, an alternative to picking patches. The
+# chosen value is stored as a direct abstract wb override (the exact value
+# that lands in the XMP) — the clean ground truth for tuning the production
+# wb finder. Selection names live in the same selected_patch union as the
+# print params / crop.
+WB_NAMES = ("wb_shadows", "wb_highlights")
+WB_NAME_KIND = {"wb_shadows": "low", "wb_highlights": "high"}
+# override-dict key and the params field each wheel reads/writes
+WB_NAME_OVR = {"wb_shadows": "shadows", "wb_highlights": "highlights"}
+WB_NAME_PARAM = {"wb_shadows": "wb_low", "wb_highlights": "wb_high"}
+WB_NAME_LABEL = {"wb_shadows": "shadows wheel (wb_low)",
+                 "wb_highlights": "highlights wheel (wb_high)"}
+WB_NAME_SHORT = {"wb_shadows": "wb_lo", "wb_highlights": "wb_hi"}
+
 
 # User crop correction: the true photo-content rectangle, drawn by the user
 # with a rubber-band drag while "crop" (key 8) is selected. Everything
@@ -108,8 +125,156 @@ def _norm_ltrb(border, w, h):
     return [l / w, t / h, r / w, b / h]
 
 
+# --- color-wheel widget -------------------------------------------------------
+# Cache the rendered hue/chroma disk per size (identical for both wheels — it
+# is only a visual guide; the live image preview is the real feedback).
+_WHEEL_DISK_CACHE = {}
+
+
+def _render_wheel_disk(size):
+    """RGBA PIL image of the hue/chroma disk for the given pixel size.
+
+    The displayed color at a point is the cast that point's wb pushes toward
+    (computed via the same projection as nm.wheel_to_wb, normalized so the
+    max channel is full) — center = white (neutral), rim = saturated."""
+    if size in _WHEEL_DISK_CACHE:
+        return _WHEEL_DISK_CACHE[size]
+    c = (size - 1) / 2.0
+    maxr = size / 2.0 - 1.0
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float64)
+    dx = xx - c
+    dy = c - yy                                   # canvas y grows downward
+    rr = np.hypot(dx, dy) / maxr
+    ang = np.arctan2(dy, dx)
+    mag = np.clip(rr, 0.0, 1.0) * nm.WHEEL_MAX_CHROMA
+    px = np.cos(ang) * mag
+    py = np.sin(ang) * mag
+    # d_c = (2/3) * axis_c . (px, py)   (inverse zero-sum projection)
+    axes = nm._WHEEL_AXES                          # (3, 2)
+    d = (2.0 / 3.0) * (axes[:, 0][:, None, None] * px
+                       + axes[:, 1][:, None, None] * py)   # (3, H, W)
+    wb = np.exp(d)
+    col = wb / wb.max(axis=0, keepdims=True)       # max channel -> 1.0
+    rgb = (np.clip(col, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    rgb = np.transpose(rgb, (1, 2, 0))             # (H, W, 3)
+    alpha = np.where(rr <= 1.0, 255, 0).astype(np.uint8)
+    rgba = np.dstack([rgb, alpha])
+    img = Image.fromarray(rgba, mode="RGBA")
+    _WHEEL_DISK_CACHE[size] = img
+    return img
+
+
+class ColorWheel:
+    """A resizable hue/chroma disk that edits one normalized wb vector.
+
+    Dragging inside the disk maps the cursor (angle, radius) to a wb via
+    nm.wheel_to_wb(kind) and fires on_change(wb). set_wb() moves the marker to
+    an externally-set value (the auto-found wb on load, or a saved override);
+    set_auto() places a fixed pin at the algorithm's wb. resize() re-renders
+    the disk at a new pixel size (a bigger wheel = finer manual precision) and
+    re-places the marker/pin from the remembered wb values."""
+
+    MIN_SIZE = 90
+
+    def __init__(self, parent, kind, on_change, size=150, bg="#484848"):
+        self.kind = kind                  # "low" or "high"
+        self.on_change = on_change
+        self._marker_wb = [1.0, 1.0, 1.0]
+        self._auto_wb = None
+        self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0,
+                                cursor="crosshair")
+        self.canvas.bind("<ButtonPress-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self._apply_size(size)
+
+    def pack(self, **kw):
+        self.canvas.pack(**kw)
+
+    def resize(self, size):
+        """Re-render the disk at a new square pixel size."""
+        size = max(self.MIN_SIZE, int(size))
+        if size == self.size:
+            return
+        self._apply_size(size)
+
+    def _apply_size(self, size):
+        self.size = size
+        self._cx = self._cy = (size - 1) / 2.0
+        self._maxr = size / 2.0 - 1.0
+        self.canvas.config(width=size, height=size)
+        self.canvas.delete("disk")
+        self._photo = ImageTk.PhotoImage(_render_wheel_disk(size))
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo,
+                                 tags="disk")
+        self.canvas.tag_lower("disk")
+        self._marker_pos = self._wb_pos(self._marker_wb)
+        self._auto_pos = self._wb_pos(self._auto_wb) if self._auto_wb else None
+        self._draw_marker()
+        self._draw_auto()
+
+    # --- view ---
+    def _wb_pos(self, wb):
+        angle, radius = nm.wb_to_wheel(wb)
+        r = radius * self._maxr
+        return (self._cx + math.cos(angle) * r, self._cy - math.sin(angle) * r)
+
+    def _draw_marker(self):
+        self.canvas.delete("marker")
+        x, y = self._marker_pos
+        # ring + center dot, dark/light pair so it shows on any hue
+        self.canvas.create_oval(x - 6, y - 6, x + 6, y + 6, outline="#000000",
+                                width=3, tags="marker")
+        self.canvas.create_oval(x - 6, y - 6, x + 6, y + 6, outline="#ffffff",
+                                width=1, tags="marker")
+        self.canvas.tag_raise("marker")    # keep the draggable marker on top
+
+    def _draw_auto(self):
+        self.canvas.delete("autopin")
+        if self._auto_pos is None:
+            return
+        x, y = self._auto_pos
+        # small fixed gold pin = the algorithm's auto-detected wb
+        self.canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill="#ffd700",
+                                outline="#000000", width=1, tags="autopin")
+        self.canvas.tag_raise("marker")
+
+    def set_wb(self, wb):
+        """Move the draggable marker to reflect a wb vector (no callback)."""
+        self._marker_wb = list(wb)
+        self._marker_pos = self._wb_pos(wb)
+        self._draw_marker()
+
+    def set_auto(self, wb):
+        """Place (or clear) the fixed pin at the algorithm's auto wb."""
+        self._auto_wb = list(wb) if wb else None
+        self._auto_pos = self._wb_pos(wb) if wb else None
+        self._draw_auto()
+
+    # --- input ---
+    def _emit(self, ex, ey):
+        dx = ex - self._cx
+        dy = self._cy - ey
+        radius = min(1.0, math.hypot(dx, dy) / self._maxr)
+        angle = math.atan2(dy, dx)
+        # clamp the marker to the rim so it never leaves the disk
+        r = radius * self._maxr
+        self._marker_pos = (self._cx + math.cos(angle) * r,
+                            self._cy - math.sin(angle) * r)
+        self._draw_marker()
+        wb = nm.wheel_to_wb(angle, radius, self.kind)
+        self._marker_wb = wb              # remember so resize keeps the spot
+        self.on_change(wb)
+
+    def _on_press(self, event):
+        self._emit(event.x, event.y)
+
+    def _on_drag(self, event):
+        self._emit(event.x, event.y)
+
+
 class NegadoctorDebugUI(DebugUIBase):
     WINDOW_TITLE = "Auto Negadoctor Debug UI"
+    HAS_ITEM_PANEL_FOOTER = True   # color wheels live below the item table
     EMPTY_SESSION_MESSAGE = "No *_debug_nega.json files found in:"
     ITEM_PANEL_TITLE = "Patches:"
     CENTER_BUTTON_TEXT = "Center on patch"
@@ -132,8 +297,9 @@ class NegadoctorDebugUI(DebugUIBase):
         return {
             "patch_corrections": {},   # {patch: [x, y, w, h] corrected rect}
             "print_overrides": {},     # {print param: corrected value}
+            "wb_overrides": {},        # {"shadows"/"highlights": [r, g, b] wb}
             "crop_correction": None,   # [x, y, w, h] true photo-content rect
-            "patch_notes": {},         # {patch / print param / "crop": str}
+            "patch_notes": {},         # {patch / print param / wb / "crop": str}
             "bad_inversion": False,
             "bad_inversion_note": "",
         }
@@ -158,10 +324,20 @@ class NegadoctorDebugUI(DebugUIBase):
                 "applied": params.get(name),
                 "corrected": float(val),
             }
+        # wb wheel overrides (direct abstract wb — the ground truth for tuning
+        # the production wb finder); store applied alongside for comparison
+        out_wb = {}
+        for kind, wb in sorted(ann["wb_overrides"].items()):
+            applied = params.get("wb_low" if kind == "shadows" else "wb_high")
+            out_wb[kind] = {
+                "applied": list(applied) if applied else None,
+                "corrected": [float(v) for v in wb],
+            }
         out = {
             "stem": stem,
             "patch_corrections": out_corr,
             "print_overrides": out_over,
+            "wb_overrides": out_wb,
             "patch_notes": {p: n for p, n in sorted(ann["patch_notes"].items())},
             "bad_inversion": bool(ann["bad_inversion"]),
             "bad_inversion_note": ann["bad_inversion_note"],
@@ -192,6 +368,14 @@ class NegadoctorDebugUI(DebugUIBase):
                     ann["print_overrides"][name] = float(entry["corrected"])
                 except (KeyError, ValueError, TypeError):
                     pass
+        for kind, entry in data.get("wb_overrides", {}).items():
+            if kind in ("shadows", "highlights"):
+                try:
+                    wb = [float(v) for v in entry["corrected"]]
+                    if len(wb) == 3 and all(math.isfinite(v) for v in wb):
+                        ann["wb_overrides"][kind] = wb
+                except (KeyError, ValueError, TypeError):
+                    pass
         crop = data.get("crop_correction")
         if crop:
             try:
@@ -200,7 +384,7 @@ class NegadoctorDebugUI(DebugUIBase):
                 pass
         ann["patch_notes"] = {p: str(n) for p, n in data.get("patch_notes", {}).items()
                               if (p in PATCHES or p in PRINT_PARAMS
-                                  or p == CROP_NAME) and n}
+                                  or p in WB_NAMES or p == CROP_NAME) and n}
         ann["bad_inversion"] = bool(data.get("bad_inversion", False))
         ann["bad_inversion_note"] = str(data.get("bad_inversion_note", ""))
 
@@ -296,9 +480,10 @@ class NegadoctorDebugUI(DebugUIBase):
         ann = self.annotations[img_dict["stem"]]
         corr = ann["patch_corrections"]
         overrides = ann["print_overrides"]
+        wb_overrides = ann["wb_overrides"]
         crop = ann.get("crop_correction")
         p = img_dict.get("params")
-        if (not corr and not overrides and not crop) or not p:
+        if (not corr and not overrides and not wb_overrides and not crop) or not p:
             return None
         out = {k: (list(v) if isinstance(v, list) else v) for k, v in p.items()}
         dmin, d_max = list(p["Dmin"]), p["D_max"]
@@ -354,6 +539,15 @@ class NegadoctorDebugUI(DebugUIBase):
                                                     out["offset"], out["wb_low"])
             except (ValueError, ZeroDivisionError, OverflowError):
                 pass
+
+        # Wheel overrides set the abstract wb directly and WIN over any
+        # patch-derived value. WB-only: black/exposure keep their tuned values
+        # (unless a crop is also present, where the block below re-derives them
+        # from whatever wb is in `out`, including these overrides).
+        if "shadows" in wb_overrides:
+            out["wb_low"] = [float(v) for v in wb_overrides["shadows"]]
+        if "highlights" in wb_overrides:
+            out["wb_high"] = [float(v) for v in wb_overrides["highlights"]]
 
         if crop_border is not None and picked_min and picked_max:
             # full production chain inside the user's crop: black/exposure
@@ -465,6 +659,7 @@ class NegadoctorDebugUI(DebugUIBase):
             self.pil_image = self._decorate(self._display_base_pil)
             self._redraw()
         self._refresh_histogram()
+        self._sync_wheels()
         # re-apply the corrected render when entering a frame that has
         # corrections saved
         self._schedule_live_render()
@@ -515,8 +710,55 @@ class NegadoctorDebugUI(DebugUIBase):
             "  H — hide/show markers\n"
             "  +/- zoom, Arrows pan, F fit\n"
             "Corrections re-render the\n"
-            "inversion live."
+            "inversion live.\n"
+            "Shadows/highlights color\n"
+            "wheels are in the right\n"
+            "panel (set wb directly,\n"
+            "start at the auto value)."
         ))
+
+    def build_item_panel_footer(self, parent):
+        """Two color wheels (shadows -> wb_low, highlights -> wb_high) below
+        the item table's draggable sash. Each sets the abstract wb directly
+        with live preview; the marker starts at the frame's auto-found wb and
+        dragging stores a wb_override."""
+        wrap = tk.Frame(parent, bg="#484848")
+        wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
+        tk.Label(wrap, text="Shadows / Highlights wheels:", bg="#484848",
+                 fg="#c0c0c0", font=("", 9, "bold")).pack(anchor="w")
+        tk.Label(wrap, text="● gold pin = auto wb (divergence ref)",
+                 bg="#484848", fg="#ffd700", font=("", 8)).pack(anchor="w")
+        self.wheels = {}
+        self.wheel_readouts = {}
+        for name in WB_NAMES:
+            kind = WB_NAME_KIND[name]
+            tk.Label(wrap, text=WB_NAME_LABEL[name], bg="#484848", fg="#cccccc",
+                     font=("", 8)).pack(anchor="w", pady=(4, 0))
+            wheel = ColorWheel(wrap, kind,
+                               on_change=lambda wb, n=name: self._on_wheel_change(n, wb),
+                               size=150)
+            wheel.pack(anchor="center")
+            self.wheels[name] = wheel
+            ro = tk.Label(wrap, text="", bg="#484848", fg="#9fd0ff",
+                          font=("Courier", 8))
+            ro.pack(anchor="w")
+            self.wheel_readouts[name] = ro
+        # grow the wheels to fill the pane (wider panel / taller pane = finer
+        # manual precision), bounded so both wheels stay fully visible
+        parent.bind("<Configure>", self._resize_wheels)
+
+    # reserved vertical space in the footer for the labels/readouts around the
+    # two wheels (title + caption + per-wheel name + readout + paddings)
+    _WHEEL_CHROME_H = 150
+
+    def _resize_wheels(self, event):
+        if not getattr(self, "wheels", None):
+            return
+        per_h = (event.height - self._WHEEL_CHROME_H) / 2.0
+        size = int(min(event.width - 14, per_h))
+        size -= size % 2                       # even sizes: less resize churn
+        for wheel in self.wheels.values():
+            wheel.resize(size)
 
     def build_feature_buttons(self, btn_frame, btn_cfg):
         self.count_label = tk.Label(btn_frame, text="Corrected patches: 0/3",
@@ -620,9 +862,10 @@ class NegadoctorDebugUI(DebugUIBase):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
         n = len(ann["patch_corrections"])
         m = len(ann["print_overrides"])
+        w = len(ann["wb_overrides"])
         crop = ", crop✓" if ann.get("crop_correction") else ""
         self.count_label.config(
-            text=f"Corrected: {n}/3 patches, {m}/4 print{crop}")
+            text=f"Corrected: {n}/3 patches, {w}/2 wb, {m}/4 print{crop}")
 
     # ------------------------------------------------------------------
     # View toggle (inverted preview <-> raw negative)
@@ -658,7 +901,59 @@ class NegadoctorDebugUI(DebugUIBase):
     def _has_corrections(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
         return bool(ann["patch_corrections"] or ann["print_overrides"]
-                    or ann.get("crop_correction"))
+                    or ann["wb_overrides"] or ann.get("crop_correction"))
+
+    # ------------------------------------------------------------------
+    # Color-wheel shadows/highlights
+    # ------------------------------------------------------------------
+
+    def _effective_wb(self, img_dict, name):
+        """wb the wheel should show: saved override, else the auto-found
+        params wb, else neutral."""
+        ann = self.annotations[img_dict["stem"]]
+        ovr = ann["wb_overrides"].get(WB_NAME_OVR[name])
+        if ovr:
+            return list(ovr)
+        applied = (img_dict.get("params") or {}).get(WB_NAME_PARAM[name])
+        return list(applied) if applied else [1.0, 1.0, 1.0]
+
+    def _sync_wheels(self):
+        """Position both wheel markers + readouts for the current frame."""
+        if not getattr(self, "wheels", None):
+            return
+        img_dict = self.images[self.current_idx]
+        params = img_dict.get("params") or {}
+        for name, wheel in self.wheels.items():
+            wb = self._effective_wb(img_dict, name)
+            wheel.set_wb(wb)
+            wheel.set_auto(params.get(WB_NAME_PARAM[name]))   # fixed auto pin
+            self._update_wheel_readout(name, wb)
+
+    def _update_wheel_readout(self, name, wb=None):
+        if not getattr(self, "wheel_readouts", None):
+            return
+        img_dict = self.images[self.current_idx]
+        if wb is None:
+            wb = self._effective_wb(img_dict, name)
+        ann = self.annotations[img_dict["stem"]]
+        tag = "OVR" if WB_NAME_OVR[name] in ann["wb_overrides"] else "auto"
+        self.wheel_readouts[name].config(
+            text=f"{tag} ({wb[0]:.2f},{wb[1]:.2f},{wb[2]:.2f})",
+            fg="#9fff9f" if tag == "OVR" else "#9fd0ff")
+
+    def _on_wheel_change(self, name, wb):
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        self.annotations[stem]["wb_overrides"][WB_NAME_OVR[name]] = \
+            [float(v) for v in wb]
+        self.selected_patch = name
+        self._auto_save(stem)
+        self._update_wheel_readout(name, wb)
+        self._update_count_label()
+        self._populate_items_list()
+        self._update_info_from_selection()
+        self._redraw_markers()
+        self._schedule_live_render()
 
     # ------------------------------------------------------------------
     # Crop correction helpers
@@ -1025,6 +1320,10 @@ class NegadoctorDebugUI(DebugUIBase):
         adjusted size lands in the annotations and the regression data."""
         if self.selected_patch is None:
             return False
+        # wheels are edited by dragging the wheel widget, not by scrolling the
+        # image — let the canvas zoom normally when one is selected
+        if self.selected_patch in WB_NAMES:
+            return False
         if event.num == 4:
             delta = 1
         elif event.num == 5:
@@ -1228,6 +1527,21 @@ class NegadoctorDebugUI(DebugUIBase):
                 self._schedule_live_render()
             self._update_info_from_selection()
             return
+        if self.selected_patch in WB_NAMES:
+            name = self.selected_patch
+            if WB_NAME_OVR[name] in ann["wb_overrides"]:
+                del ann["wb_overrides"][WB_NAME_OVR[name]]
+                self._auto_save(stem)
+                # snap the wheel marker back to the auto-found wb
+                if getattr(self, "wheels", None):
+                    wb = self._effective_wb(self.images[self.current_idx], name)
+                    self.wheels[name].set_wb(wb)
+                    self._update_wheel_readout(name, wb)
+                self._update_count_label()
+                self._populate_items_list()
+                self._schedule_live_render()
+            self._update_info_from_selection()
+            return
         store = (ann["print_overrides"] if self.selected_patch in PRINT_PARAMS
                  else ann["patch_corrections"])
         if self.selected_patch in store:
@@ -1298,6 +1612,24 @@ class NegadoctorDebugUI(DebugUIBase):
             self._sync_item_list_selection()
             return
 
+        if patch in WB_NAMES:
+            params = img_dict.get("params") or {}
+            applied = params.get(WB_NAME_PARAM[patch])
+            override = ann["wb_overrides"].get(WB_NAME_OVR[patch])
+            lines = [f"Color wheel: {WB_NAME_LABEL[patch]}",
+                     f"  auto (algorithm): {self._fmt_rgb(applied)}"]
+            if override is not None:
+                lines.append(f"  CHOSEN (wheel): {self._fmt_rgb(override)}")
+                lines.append("  Drag the wheel to adjust (live preview), "
+                             "C reverts to the auto value,")
+                lines.append("  X compares with the default render.")
+            else:
+                lines.append("  Drag the wheel to set wb directly with live "
+                             "preview (starts at the auto value).")
+            self._set_info_text("\n".join(lines))
+            self._sync_item_list_selection()
+            return
+
         det = self._detected_rect(img_dict, patch)
         lines = [f"Patch: {patch.upper()}"]
 
@@ -1348,7 +1680,8 @@ class NegadoctorDebugUI(DebugUIBase):
     def item_panel_header_text(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
         return (f"{len(ann['patch_corrections'])}/3 patches, "
-                f"{len(ann['print_overrides'])}/4 print corrected")
+                f"{len(ann['wb_overrides'])}/2 wb, "
+                f"{len(ann['print_overrides'])}/4 print")
 
     def item_rows(self):
         img_dict = self.images[self.current_idx]
@@ -1397,6 +1730,25 @@ class NegadoctorDebugUI(DebugUIBase):
                          "corr": override if override is not None else -1,
                          "nt": 1 if has_note else 0},
             })
+        for k, name in enumerate(WB_NAMES):
+            applied = params.get(WB_NAME_PARAM[name])
+            override = ann["wb_overrides"].get(WB_NAME_OVR[name])
+            has_note = bool(ann["patch_notes"].get(name))
+            fmt = lambda v: f"{v[0]:.2f},{v[1]:.2f},{v[2]:.2f}"
+            rows.append({
+                "iid": name,
+                "values": (WB_NAME_SHORT[name],
+                           fmt(applied) if applied else "—", "",
+                           fmt(override) if override else "",
+                           "✎" if has_note else ""),
+                "tag": "corr" if override else "det",
+                "name": name,
+                "sort": {"patch": len(PATCHES) + len(PRINT_PARAMS) + k,
+                         "det": applied[0] if applied else -1,
+                         "fb": 0,
+                         "corr": override[0] if override else -1,
+                         "nt": 1 if has_note else 0},
+            })
         auto_rect = self._auto_content_rect(img_dict)
         crop = ann.get("crop_correction")
         has_note = bool(ann["patch_notes"].get(CROP_NAME))
@@ -1407,7 +1759,7 @@ class NegadoctorDebugUI(DebugUIBase):
                        "✎" if has_note else ""),
             "tag": "corr" if crop else "det",
             "name": CROP_NAME,
-            "sort": {"patch": len(PATCHES) + len(PRINT_PARAMS),
+            "sort": {"patch": len(PATCHES) + len(PRINT_PARAMS) + len(WB_NAMES),
                      "det": auto_rect[0], "fb": 0,
                      "corr": crop[0] if crop else -1,
                      "nt": 1 if has_note else 0},
@@ -1423,6 +1775,8 @@ class NegadoctorDebugUI(DebugUIBase):
     def selected_row_iid(self):
         if self.selected_patch == CROP_NAME:
             return "crop"
+        if self.selected_patch in WB_NAMES:
+            return self.selected_patch
         if self.selected_patch in PRINT_PARAMS:
             return f"print_{self.selected_patch}"
         if self.selected_patch is not None:
@@ -1459,6 +1813,7 @@ class NegadoctorDebugUI(DebugUIBase):
         lines = []
         corrected_by_patch = {p: 0 for p in PATCHES}
         overridden_by_param = {p: 0 for p in PRINT_PARAMS}
+        wb_override_count = {n: 0 for n in WB_NAMES}
         crop_count = 0
         bad_count = 0
         fallback_count = 0
@@ -1472,6 +1827,7 @@ class NegadoctorDebugUI(DebugUIBase):
             patches = img_dict.get("patches") or {}
             corrections = ann["patch_corrections"]
             overrides = ann["print_overrides"]
+            wb_overrides = ann["wb_overrides"]
             notes = ann["patch_notes"]
 
             lines.append("=" * 48)
@@ -1497,13 +1853,13 @@ class NegadoctorDebugUI(DebugUIBase):
                 lines.append(f"  ** BAD INVERSION flagged by user{note}")
 
             crop = ann.get("crop_correction")
-            if (not corrections and not overrides and not crop and not notes
-                    and not ann["bad_inversion"]):
+            if (not corrections and not overrides and not wb_overrides
+                    and not crop and not notes and not ann["bad_inversion"]):
                 lines.append("  No corrections — accepted.")
                 lines.append("")
                 continue
 
-            if corrections or overrides or crop:
+            if corrections or overrides or wb_overrides or crop:
                 images_with_corrections += 1
 
             if crop:
@@ -1558,10 +1914,28 @@ class NegadoctorDebugUI(DebugUIBase):
                     else:
                         lines.append(f"    {PRINT_LABEL[name]:<38} -> {val:.4f}")
 
+            if wb_overrides:
+                lines.append("")
+                lines.append("  WB WHEEL OVERRIDES (auto -> chosen) — tuning "
+                             "ground truth:")
+                for name in WB_NAMES:
+                    key = WB_NAME_OVR[name]
+                    if key not in wb_overrides:
+                        continue
+                    wb_override_count[name] += 1
+                    chosen = wb_overrides[key]
+                    applied = p.get(WB_NAME_PARAM[name])
+                    line = (f"    {key:<10} chosen "
+                            f"({', '.join(f'{v:.3f}' for v in chosen)})")
+                    if applied:
+                        line += (f"  vs auto "
+                                 f"({', '.join(f'{v:.3f}' for v in applied)})")
+                    lines.append(line)
+
             if notes:
                 lines.append("")
                 lines.append("  USER NOTES:")
-                for key in PATCHES + PRINT_PARAMS + (CROP_NAME,):
+                for key in PATCHES + PRINT_PARAMS + WB_NAMES + (CROP_NAME,):
                     if key in notes:
                         lines.append(f"    {key:<10} {notes[key]}")
             lines.append("")
@@ -1574,6 +1948,9 @@ class NegadoctorDebugUI(DebugUIBase):
         lines.append(f"  Total print overrides: {sum(overridden_by_param.values())}")
         for name in PRINT_PARAMS:
             lines.append(f"    {name:<10} {overridden_by_param[name]}")
+        lines.append(f"  Total wb wheel overrides: {sum(wb_override_count.values())}")
+        for name in WB_NAMES:
+            lines.append(f"    {WB_NAME_OVR[name]:<10} {wb_override_count[name]}")
         lines.append(f"  Crop corrections: {crop_count}")
         lines.append(f"  Bad inversions flagged: {bad_count} / {len(self.images)}")
         lines.append(f"  wb fallbacks (patch missing): {fallback_count}")

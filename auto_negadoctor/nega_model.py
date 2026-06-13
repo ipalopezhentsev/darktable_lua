@@ -196,6 +196,66 @@ def compute_exposure(dmin, picked_min, d_max, wb_high, wb_low, offset, black):
     return clamp(min(out), EXPOSURE_RANGE)
 
 
+# ---------------------------------------------------------------------------
+# Color-wheel <-> white-balance mapping (debug-UI shadows/highlights wheels)
+# ---------------------------------------------------------------------------
+# A wb vector (wb_low or wb_high) is a normalized 3-channel multiplier with
+# only 2 degrees of freedom (wb_low has max==1, wb_high has min==1). A color
+# wheel encodes exactly 2 DOF: hue (angle) + chroma (radius). We map between
+# them in LOG space via a zero-sum chroma vector projected onto three unit
+# axes 120 deg apart (R at 90 deg, G at 210 deg, B at 330 deg) — the standard
+# vectorscope embedding, which is a faithful bijection between zero-sum
+# 3-vectors and the 2D plane. Neutral wb [1,1,1] -> wheel center (radius 0).
+
+# Log-space chroma magnitude that maps to wheel radius 1.0. At the WB_RANGE
+# extreme a single channel reaches ln(2.0) ~ 0.693 away from neutral while the
+# other two sit near ln(0.79); the resulting zero-sum vector has magnitude
+# ~0.85, so this rim value keeps the usable wb gamut comfortably inside the
+# disk.
+WHEEL_MAX_CHROMA = 0.9
+
+# Unit axes for R, G, B at 90, 210, 330 degrees (counter-clockwise).
+_WHEEL_AXES = np.array(
+    [[math.cos(math.radians(a)), math.sin(math.radians(a))]
+     for a in (90.0, 210.0, 330.0)],
+    dtype=np.float64,
+)
+
+
+def wb_to_wheel(wb):
+    """Normalized wb (3-seq) -> (angle_rad, radius in [0,1]).
+
+    Inverse of wheel_to_wb up to the wb normalization/clamp. Neutral -> r=0.
+    """
+    log_wb = np.log(np.clip(np.asarray(wb[:3], dtype=np.float64),
+                            WB_RANGE[0], WB_RANGE[1]))
+    d = log_wb - log_wb.mean()                 # zero-sum chroma
+    p = _WHEEL_AXES.T @ d                       # 2D point (x, y)
+    radius = float(np.hypot(p[0], p[1]) / WHEEL_MAX_CHROMA)
+    return math.atan2(p[1], p[0]), min(radius, 1.0)
+
+
+def wheel_to_wb(angle_rad, radius, kind):
+    """(angle_rad, radius in [0,1], kind) -> normalized wb (list of 3).
+
+    kind: "low" normalizes so max(wb)==1, "high" so min(wb)==1. Each channel
+    is clamped to WB_RANGE.
+    """
+    mag = max(0.0, min(float(radius), 1.0)) * WHEEL_MAX_CHROMA
+    p = np.array([math.cos(angle_rad), math.sin(angle_rad)],
+                 dtype=np.float64) * mag
+    # invert the 3->2 zero-sum projection: d_c = (2/3) * p . axis_c
+    d = (2.0 / 3.0) * (_WHEEL_AXES @ p)
+    wb = np.exp(d)
+    if kind == "low":
+        wb = wb / wb.max()
+    elif kind == "high":
+        wb = wb / wb.min()
+    else:
+        raise ValueError(f"kind must be 'low' or 'high', got {kind!r}")
+    return [clamp(float(v), WB_RANGE) for v in wb]
+
+
 def default_params():
     """darktable's color-film preset values."""
     return {

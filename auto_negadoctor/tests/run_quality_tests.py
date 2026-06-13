@@ -368,6 +368,16 @@ def report_annotated_frames(frames):
             except (ValueError, ZeroDivisionError, OverflowError):
                 line += "; user-rect wb DEGENERATE (patch too close to film base)"
             print(line)
+        for kind, entry in (data.get("wb_overrides") or {}).items():
+            chosen = entry.get("corrected")
+            applied = p.get("wb_low" if kind == "shadows" else "wb_high")
+            if chosen and applied:
+                print(f"    wb {kind} (wheel-picked): user "
+                      f"({', '.join(f'{v:.3f}' for v in chosen)}) vs applied "
+                      f"({', '.join(f'{v:.3f}' for v in applied)})  "
+                      "<- tuning target")
+            else:
+                print(f"    wb {kind} (wheel-picked): user {chosen}")
         for name, entry in (data.get("print_overrides") or {}).items():
             applied = p.get(name)
             corrected = entry.get("corrected")
