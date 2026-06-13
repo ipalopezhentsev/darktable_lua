@@ -759,6 +759,19 @@ def tune_print_params(lin, params, border, dmin):
     PRE-gamma space, which leaves full-range scans flat and dark; this
     closes the loop on the actual rendered output instead. Works on a
     subsampled frame. Returns (tuned params, tuning info dict).
+
+    Exposure is the primary brightness lever (it drives content P99.5 to
+    PRINT_TARGET_HI). On dense negatives — e.g. heavily snowed, high-key
+    scenes whose every channel sits near the film base — darktable's auto
+    black/exposure both pin at their extremes (black floor, exposure
+    ceiling) and the print still lands far below target. When exposure is
+    SATURATED at its ceiling and P99.5 is still short of target, black takes
+    over as the brightness lever: with the steep print gamma a small black
+    raise lifts the highlights strongly while barely touching the (already
+    near-black) shadows. This reproduces the user's manual fix on snow frames
+    (they raised black once exposure was maxed). The median-band pull only
+    runs when exposure is NOT saturated, so it never claws that brightening
+    back down (a high-key frame legitimately carries a high median).
     """
     l, t, r, b = border
     h, w = lin.shape[:2]
@@ -767,6 +780,7 @@ def tune_print_params(lin, params, border, dmin):
     if region.size == 0:
         return params, {"tuned": False}
 
+    exposure_ceil = nm.EXPOSURE_RANGE[1]
     p = dict(params)
     gamma = p["gamma"]
     content = region.reshape(-1, 3)
@@ -782,10 +796,19 @@ def tune_print_params(lin, params, border, dmin):
             p["exposure"] = nm.clamp(
                 p["exposure"] * (PRINT_TARGET_HI / hi) ** (1.0 / gamma),
                 nm.EXPOSURE_RANGE)
-        # black shifts print_linear additively by exposure*delta; pull an
-        # out-of-band median only to the nearest band edge so dark scenes
-        # keep their character
-        if med < PRINT_MID_BAND[0] or med > PRINT_MID_BAND[1]:
+        # black shifts print_linear additively by exposure*delta.
+        saturated = p["exposure"] >= exposure_ceil - 1e-6
+        if saturated and hi < PRINT_TARGET_HI:
+            # exposure is maxed and the print is still too dark: finish
+            # driving P99.5 toward the target with black instead
+            delta_pre = (PRINT_TARGET_HI ** (1.0 / gamma)
+                         - max(hi, 1e-6) ** (1.0 / gamma))
+            p["black"] = nm.clamp(p["black"] + delta_pre / max(p["exposure"], 1e-6),
+                                  nm.BLACK_RANGE)
+            info["black_drives_hi"] = True
+        elif not saturated and (med < PRINT_MID_BAND[0] or med > PRINT_MID_BAND[1]):
+            # pull an out-of-band median only to the nearest band edge so
+            # dark scenes keep their character
             target_mid = min(max(med, PRINT_MID_BAND[0]), PRINT_MID_BAND[1])
             delta_pre = (target_mid ** (1.0 / gamma)
                          - max(med, 1e-6) ** (1.0 / gamma))
