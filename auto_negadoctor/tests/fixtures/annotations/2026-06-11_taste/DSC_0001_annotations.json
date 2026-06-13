@@ -1,0 +1,31 @@
+{
+  "stem": "DSC_0001",
+  "patch_corrections": {},
+  "print_overrides": {
+    "exposure": {
+      "applied": 1.1995717078316157,
+      "corrected": 1.3195717078316158
+    },
+    "gamma": {
+      "applied": 7.0,
+      "corrected": 6.150000000000003
+    }
+  },
+  "patch_notes": {},
+  "bad_inversion": false,
+  "bad_inversion_note": "",
+  "crop_correction": {
+    "auto_border": [
+      11,
+      0,
+      0,
+      11
+    ],
+    "corrected": [
+      24,
+      15,
+      954,
+      631
+    ]
+  }
+}

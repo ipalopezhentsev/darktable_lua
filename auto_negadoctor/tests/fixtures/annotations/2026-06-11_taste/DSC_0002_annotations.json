@@ -1,0 +1,31 @@
+{
+  "stem": "DSC_0002",
+  "patch_corrections": {
+    "highlights": {
+      "detected": [
+        28,
+        228,
+        39,
+        39
+      ],
+      "corrected": [
+        81,
+        215,
+        39,
+        39
+      ]
+    },
+    "shadows": {
+      "detected": null,
+      "corrected": [
+        845,
+        193,
+        39,
+        39
+      ]
+    }
+  },
+  "patch_notes": {},
+  "bad_inversion": false,
+  "bad_inversion_note": ""
+}

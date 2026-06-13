@@ -1,0 +1,2078 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 4.4.0-Exiv2">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:darktable="http://darktable.sf.net/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
+   exif:DateTimeOriginal="2026:02:07 15:00:03.330"
+   xmpMM:DerivedFrom="DSC_0025.nef"
+   xmp:Rating="1"
+   darktable:import_timestamp="63906065784776367"
+   darktable:change_timestamp="63916637828801690"
+   darktable:export_timestamp="63906306403327822"
+   darktable:print_timestamp="-1"
+   darktable:xmp_version="5"
+   darktable:raw_params="0"
+   darktable:auto_presets_applied="1"
+   darktable:history_end="17"
+   darktable:iop_order_version="4"
+   darktable:history_current_hash="e4c20428f9081cb386653f19b7a9cd64">
+   <darktable:masks_history>
+    <rdf:Seq>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770670506"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #1"
+      darktable:mask_version="6"
+      darktable:mask_points="363c2d3fdf78573f0c3c2d3fa078573f5f3c2d3f1e79573f5726173b5726173b0000803fc3f5283f01000000b33c2d3f9a79573f8a3c2d3f5c79573fdc3c2d3fda79573f5726173b5726173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="92cb2f3f83e9543f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770670513"
+      darktable:mask_type="12"
+      darktable:mask_name="group `retouch'"
+      darktable:mask_version="6"
+      darktable:mask_points="aa498a69b1498a69030000000000803fb4498a69b1498a690b0000000000803f"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000000000000000"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770670516"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #2"
+      darktable:mask_version="6"
+      darktable:mask_points="636a193f729d5c3f3a6a193f349d5c3f8c6a193fb29d5c3f5726173b5726173b0000803fc3f5283f01000000df6a193f2d9e5c3fb66a193fef9d5c3f086b193f6c9e5c3f5726173b5726173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="bff91b3f160e5a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711409"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #1"
+      darktable:mask_version="6"
+      darktable:mask_points="9e656c3d737b7d3f78626c3d417b7d3fc3686c3da67b7d3f4320173b4320173b0000803fc3f5283f010000001a706c3d1b7c7d3ff56c6c3de97b7d3f3f736c3d4d7c7d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b0ad8a3d17ec7a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711410"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #2"
+      darktable:mask_version="6"
+      darktable:mask_points="3ce8bd3e1071693fd8e7bd3ede70693fa1e8bd3e4271693f4320173b4320173b0000803fc3f5283f010000008ce9bd3eb871693f27e9bd3e8571693ff1e9bd3eea71693f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f506c33eb4e1663f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711411"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #3"
+      darktable:mask_version="6"
+      darktable:mask_points="8413db3eee751b3f1f13db3ebc751b3fe913db3e21761b3f4320173b4320173b0000803fc3f5283f01000000d314db3e96761b3f6f14db3e64761b3f3815db3ec8761b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3c32e03e92e6183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711412"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #4"
+      darktable:mask_version="6"
+      darktable:mask_points="1ee56f3f2599723febe46f3ff298723f50e56f3f5799723f4320173b4320173b0000803fc3f5283f01000000c5e56f3fcd99723f93e56f3f9a99723ff8e56f3fff99723f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7a74723fc909703f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711413"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #5"
+      darktable:mask_version="6"
+      darktable:mask_points="3ce4493fd9aa623f0ae4493fa7aa623f6fe4493f0bab623f4320173b4320173b0000803fc3f5283f01000000e4e4493f81ab623fb2e4493f4eab623f16e5493fb3ab623f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="98734c3f7d1b603f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711414"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #6"
+      darktable:mask_version="6"
+      darktable:mask_points="90407f3fc1b7173f5d407f3f8fb7173fc2407f3ff4b7173f4320173b4320173b0000803fc3f5283f0100000037417f3f69b8173f05417f3f37b8173f6a417f3f9bb8173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803f6528153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711415"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #7"
+      darktable:mask_version="6"
+      darktable:mask_points="e792483fd9b15c3fb592483fa7b15c3f1993483f0bb25c3f4320173b4320173b0000803fc3f5283f010000008f93483f81b25c3f5d93483f4eb25c3fc193483fb3b25c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="43224b3f7d225a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711416"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #8"
+      darktable:mask_version="6"
+      darktable:mask_points="9813023f399a1d3f6513023f079a1d3fca13023f6b9a1d3f4320173b4320173b0000803fc3f5283f010000003f14023fe19a1d3f0d14023fae9a1d3f7214023f139b1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f4a2043fdd0a1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711417"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #9"
+      darktable:mask_version="6"
+      darktable:mask_points="7b0f833d77ee433fe90d833d45ee433f0e11833da9ee433f4320173b4320173b0000803fc3f5283f01000000ba14833d1fef433f2713833decee433f4c16833d51ef433f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="5d8a973d1b5f413f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711418"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #10"
+      darktable:mask_version="6"
+      darktable:mask_points="c305503f5961613f9005503f2661613ff505503f8b61613f4320173b4320173b0000803fc3f5283f010000006b06503f0062613f3806503fce61613f9d06503f3362613f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1f95523ffdd15e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711419"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #11"
+      darktable:mask_version="6"
+      darktable:mask_points="731a7f3f7a20183f411a7f3f4720183fa61a7f3fac20183f4320173b4320173b0000803fc3f5283f010000001b1b7f3f2121183fe91a7f3fef20183f4d1b7f3f5421183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803f1d91153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711420"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #12"
+      darktable:mask_version="6"
+      darktable:mask_points="d9634f3f8e18213fa7634f3f5c18213f0c644f3fc018213f4320173b4320173b0000803fc3f5283f0100000081644f3f3619213f4f644f3f0419213fb4644f3f6819213f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="36f3513f32891e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711421"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #13"
+      darktable:mask_version="6"
+      darktable:mask_points="48b6643f144f203f16b6643fe14e203f7bb6643f464f203f4320173b4320173b0000803fc3f5283f01000000f0b6643fbb4f203fbeb6643f894f203f22b7643fee4f203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a445673fb7bf1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711422"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #14"
+      darktable:mask_version="6"
+      darktable:mask_points="57826a3f21b41f3f25826a3feeb31f3f89826a3f53b41f3f4320173b4320173b0000803fc3f5283f01000000ff826a3fc9b41f3fcd826a3f96b41f3f31836a3ffbb41f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b3116d3fc5241d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711423"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #15"
+      darktable:mask_version="6"
+      darktable:mask_points="531f1f3f59f4633f211f1f3f27f4633f861f1f3f8bf4633f4320173b4320173b0000803fc3f5283f01000000fb1f1f3f01f5633fc91f1f3fcff4633f2d201f3f33f5633f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="afae213ffd64613f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711424"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #16"
+      darktable:mask_version="6"
+      darktable:mask_points="87d67e3f930c463f55d67e3f610c463fbad67e3fc60c463f4320173b4320173b0000803fc3f5283f010000002fd77e3f3b0d463ffdd67e3f090d463f61d77e3f6d0d463f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803f377d433f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711425"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #17"
+      darktable:mask_version="6"
+      darktable:mask_points="f18f6e3f9fee1e3fbf8f6e3f6cee1e3f24906e3fd1ee1e3f4320173b4320173b0000803fc3f5283f0100000099906e3f47ef1e3f67906e3f14ef1e3fcb906e3f79ef1e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4d1f713f435f1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711426"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #18"
+      darktable:mask_version="6"
+      darktable:mask_points="de09dd3efc1e1f3f7909dd3eca1e1f3f420add3e2f1f1f3f4320173b4320173b0000803fc3f5283f010000002d0bdd3ea41f1f3fc80add3e721f1f3f920bdd3ed61f1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9628e23ea08f1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711427"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #19"
+      darktable:mask_version="6"
+      darktable:mask_points="9f3eb13e35057f3f3b3eb13e02057f3f043fb13e67057f3f4320173b4320173b0000803fc3f5283f01000000ef3fb13edc057f3f8a3fb13eaa057f3f5340b13e0f067f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="585db63ed9757c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711428"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #20"
+      darktable:mask_version="6"
+      darktable:mask_points="c65f213f50e11e3f945f213f1ee11e3ff95f213f82e11e3f4320173b4320173b0000803fc3f5283f010000006e60213ff8e11e3f3c60213fc5e11e3fa060213f2ae21e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="23ef233ff4511c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711429"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #21"
+      darktable:mask_version="6"
+      darktable:mask_points="b800423f1ffb173f8600423fedfa173feb00423f52fb173f4320173b4320173b0000803fc3f5283f010000006001423fc7fb173f2e01423f95fb173f9201423ff9fb173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1590443fc36b153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711430"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #22"
+      darktable:mask_version="6"
+      darktable:mask_points="574dda3ec9981d3ff24cda3e97981d3fbc4dda3efc981d3f4320173b4320173b0000803fc3f5283f01000000a74eda3e71991d3f424eda3e3f991d3f0b4fda3ea4991d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0f6cdf3e6d091b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711431"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #23"
+      darktable:mask_version="6"
+      darktable:mask_points="534f103fb5041f3f204f103f82041f3f854f103fe7041f3f4320173b4320173b0000803fc3f5283f01000000fb4f103f5c051f3fc84f103f2a051f3f2d50103f8f051f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="afde123f58751c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711432"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #24"
+      darktable:mask_version="6"
+      darktable:mask_points="db36ae3e2e3d1d3f7636ae3efc3c1d3f4037ae3e603d1d3f4320173b4320173b0000803fc3f5283f010000002b38ae3ed63d1d3fc637ae3ea33d1d3f8f38ae3e083e1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9355b33ed2ad1a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711433"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #25"
+      darktable:mask_version="6"
+      darktable:mask_points="18a9213ff296203fe6a8213fc096203f4aa9213f2497203f4320173b4320173b0000803fc3f5283f01000000c0a9213f9a97203f8da9213f6797203ff2a9213fcc97203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7438243f96071e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711434"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #26"
+      darktable:mask_version="6"
+      darktable:mask_points="8ee6833da7a4373ffce4833d75a4373f21e8833dd9a4373f4320173b4320173b0000803fc3f5283f01000000cdeb833d4fa5373f3aea833d1da5373f5fed833d81a5373f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7061983d4b15353f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711435"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #27"
+      darktable:mask_version="6"
+      darktable:mask_points="011be33e74f2173f9c1ae33e41f2173f661be33ea6f2173f4320173b4320173b0000803fc3f5283f01000000511ce33e1bf3173fec1be33ee9f2173fb51ce33e4ef3173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b939e83e1763153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711436"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #28"
+      darktable:mask_version="6"
+      darktable:mask_points="b488f93e588f143f4f88f93e268f143f1889f93e8a8f143f4320173b4320173b0000803fc3f5283f01000000038af93e0090143f9e89f93ecd8f143f688af93e3290143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="6ca7fe3efcff113f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711437"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #29"
+      darktable:mask_version="6"
+      darktable:mask_points="4e3b4f3f19d31f3f1c3b4f3fe6d21f3f813b4f3f4bd31f3f4320173b4320173b0000803fc3f5283f01000000f63b4f3fc0d31f3fc43b4f3f8ed31f3f293c4f3ff3d31f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="abca513fbc431d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711438"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #30"
+      darktable:mask_version="6"
+      darktable:mask_points="5b46c53ecda81b3ff645c53e9ba81b3fc046c53e00a91b3f4320173b4320173b0000803fc3f5283f01000000aa47c53e75a91b3f4647c53e43a91b3f0f48c53ea7a91b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1365ca3e7119193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711439"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #31"
+      darktable:mask_version="6"
+      darktable:mask_points="e390ec3ec24b1e3f7e90ec3e904b1e3f4891ec3ef44b1e3f4320173b4320173b0000803fc3f5283f010000003392ec3e6a4c1e3fce91ec3e384c1e3f9792ec3e9c4c1e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9baff13e66bc1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711440"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #32"
+      darktable:mask_version="6"
+      darktable:mask_points="4e3b4f3f3d31203f1c3b4f3f0b31203f813b4f3f7031203f4320173b4320173b0000803fc3f5283f01000000f63b4f3fe531203fc43b4f3fb331203f293c4f3f1732203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="abca513fe1a11d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711441"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #33"
+      darktable:mask_version="6"
+      darktable:mask_points="77a33e3fc741273f45a33e3f9541273faaa33e3ffa41273f4320173b4320173b0000803fc3f5283f010000001fa43e3f6f42273feda33e3f3d42273f51a43e3fa142273f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d332413f6bb2243f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711442"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #34"
+      darktable:mask_version="6"
+      darktable:mask_points="466a193ff806213f136a193fc506213f786a193f2a07213f4320173b4320173b0000803fc3f5283f01000000ed6a193f9f07213fbb6a193f6d07213f206b193fd207213f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a2f91b3f9b771e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711443"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #35"
+      darktable:mask_version="6"
+      darktable:mask_points="2cf3203fa7e21e3ff9f2203f75e21e3f5ef3203fdae21e3f4320173b4320173b0000803fc3f5283f01000000d3f3203f4fe31e3fa1f3203f1de31e3f06f4203f81e31e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8882233f4b531c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711444"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #36"
+      darktable:mask_version="6"
+      darktable:mask_points="622b3d3f62a1163f302b3d3f30a1163f952b3d3f94a1163f4320173b4320173b0000803fc3f5283f010000000a2c3d3f0aa2163fd82b3d3fd7a1163f3c2c3d3f3ca2163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="beba3f3f0612143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711445"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #37"
+      darktable:mask_version="6"
+      darktable:mask_points="7aeb7e3f13c0163f48eb7e3fe0bf163faceb7e3f45c0163f4320173b4320173b0000803fc3f5283f0100000022ec7e3fbbc0163fefeb7e3f88c0163f54ec7e3fedc0163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803fb730143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711446"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #38"
+      darktable:mask_version="6"
+      darktable:mask_points="807b3b3fc779173f4d7b3b3f9579173fb27b3b3ffa79173f4320173b4320173b0000803fc3f5283f01000000287c3b3f6f7a173ff57b3b3f3d7a173f5a7c3b3fa27a173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="dc0a3e3f6bea143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711447"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #39"
+      darktable:mask_version="6"
+      darktable:mask_points="d4b0c43e7da61b3f6fb0c43e4ba61b3f39b1c43eb0a61b3f4320173b4320173b0000803fc3f5283f0100000023b2c43e25a71b3fbfb1c43ef3a61b3f88b2c43e57a71b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8ccfc93e2117193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711448"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #40"
+      darktable:mask_version="6"
+      darktable:mask_points="a3ed743f1a801f3f71ed743fe87f1f3fd5ed743f4c801f3f4320173b4320173b0000803fc3f5283f010000004bee743fc2801f3f19ee743f8f801f3f7dee743ff4801f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ff7c773fbef01c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711449"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #41"
+      darktable:mask_version="6"
+      darktable:mask_points="f20faa3e59ee1f3f8d0faa3e27ee1f3f5710aa3e8bee1f3f4320173b4320173b0000803fc3f5283f010000004211aa3e01ef1f3fdd10aa3ecfee1f3fa611aa3e33ef1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="aa2eaf3efd5e1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711450"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #42"
+      darktable:mask_version="6"
+      darktable:mask_points="07a8583f415e223fd4a7583f0e5e223f39a8583f735e223f4320173b4320173b0000803fc3f5283f01000000aea8583fe85e223f7ca8583fb65e223fe1a8583f1b5f223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="63375b3fe5ce1f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711451"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #43"
+      darktable:mask_version="6"
+      darktable:mask_points="cf7d1b3f79dc153f9d7d1b3f47dc153f027e1b3facdc153f4320173b4320173b0000803fc3f5283f01000000777e1b3f21dd153f457e1b3fefdc153faa7e1b3f54dd153f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="2c0d1e3f1d4d133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711452"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #44"
+      darktable:mask_version="6"
+      darktable:mask_points="ce132f3efdf6163f04132f3ecbf6163f97142f3e30f7163f4320173b4320173b0000803fc3f5283f010000006d162f3ea5f7163fa3152f3e73f7163f36172f3ed8f7163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3e51393ea167143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711453"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #45"
+      darktable:mask_version="6"
+      darktable:mask_points="8918333f05eb173f5718333fd3ea173fbb18333f37eb173f4320173b4320173b0000803fc3f5283f010000003119333fadeb173ffe18333f7aeb173f6319333fdfeb173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="e5a7353fa95b153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711454"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #46"
+      darktable:mask_version="6"
+      darktable:mask_points="efbe003f15a4313fbcbe003fe3a3313f21bf003f48a4313f4320173b4320173b0000803fc3f5283f0100000097bf003fbda4313f64bf003f8ba4313fc9bf003fefa4313f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4b4e033fb9142f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711455"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #47"
+      darktable:mask_version="6"
+      darktable:mask_points="8e64103fa8af153f5b64103f76af153fc064103fdbaf153f4320173b4320173b0000803fc3f5283f010000003665103f50b0153f0365103f1eb0153f6865103f82b0153f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="eaf3123f4c20133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711456"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #48"
+      darktable:mask_version="6"
+      darktable:mask_points="dc40e23e5cea173f7740e23e29ea173f4041e23e8eea173f4320173b4320173b0000803fc3f5283f010000002b42e23e04eb173fc741e23ed1ea173f9042e23e36eb173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="945fe73e005b153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711457"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #49"
+      darktable:mask_version="6"
+      darktable:mask_points="fd26ea3e90e81d3f9926ea3e5de81d3f6227ea3ec2e81d3f4320173b4320173b0000803fc3f5283f010000004d28ea3e37e91d3fe827ea3e05e91d3fb128ea3e6ae91d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b545ef3e33591b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711458"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #50"
+      darktable:mask_version="6"
+      darktable:mask_points="46d2183f17661f3f14d2183fe4651f3f78d2183f49661f3f4320173b4320173b0000803fc3f5283f01000000eed2183fbe661f3fbbd2183f8c661f3f20d3183ff1661f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a2611b3fbad61c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711459"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #51"
+      darktable:mask_version="6"
+      darktable:mask_points="ec07263f2582183fba07263ff281183f1e08263f5782183f4320173b4320173b0000803fc3f5283f010000009408263fcd82183f6108263f9a82183fc608263fff82183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4897283fc9f2153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711460"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #52"
+      darktable:mask_version="6"
+      darktable:mask_points="404bd93e1a801f3fdc4ad93ee87f1f3fa54bd93e4c801f3f4320173b4320173b0000803fc3f5283f01000000904cd93ec2801f3f2b4cd93e8f801f3ff54cd93ef4801f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f969de3ebef01c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711461"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #53"
+      darktable:mask_version="6"
+      darktable:mask_points="28f06f3fbb7d203ff6ef6f3f897d203f5bf06f3fed7d203f4320173b4320173b0000803fc3f5283f01000000d0f06f3f637e203f9ef06f3f307e203f02f16f3f957e203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="847f723f5fee1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711462"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #54"
+      darktable:mask_version="6"
+      darktable:mask_points="1af7bc3ead04293fb5f6bc3e7a04293f7ff7bc3edf04293f4320173b4320173b0000803fc3f5283f010000006af8bc3e5405293f05f8bc3e2205293fcef8bc3e8705293f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d215c23e5075263f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711463"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #55"
+      darktable:mask_version="6"
+      darktable:mask_points="a26a123f5f051f3f6f6a123f2d051f3fd46a123f92051f3f4320173b4320173b0000803fc3f5283f010000004a6b123f07061f3f176b123fd5051f3f7c6b123f39061f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="fef9143f03761c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711464"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #56"
+      darktable:mask_version="6"
+      darktable:mask_points="5394093fa40c1f3f2194093f710c1f3f8594093fd60c1f3f4320173b4320173b0000803fc3f5283f01000000fb94093f4b0d1f3fc894093f190d1f3f2d95093f7e0d1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="af230c3f487d1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711465"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #57"
+      darktable:mask_version="6"
+      darktable:mask_points="dfc3103ff307203fadc3103fc007203f11c4103f2508203f4320173b4320173b0000803fc3f5283f0100000087c4103f9b08203f54c4103f6808203fb9c4103fcd08203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3b53133f97781d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711466"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #58"
+      darktable:mask_version="6"
+      darktable:mask_points="8462793fec8e1b3f5262793fba8e1b3fb762793f1e8f1b3f4320173b4320173b0000803fc3f5283f010000002c63793f948f1b3ffa62793f618f1b3f5e63793fc68f1b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="e0f17b3f90ff183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711467"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #59"
+      darktable:mask_version="6"
+      darktable:mask_points="7d781b3f7b781f3f4b781b3f49781f3faf781b3fae781f3f4320173b4320173b0000803fc3f5283f0100000025791b3f23791f3ff2781b3ff1781f3f57791b3f55791f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d9071e3f1fe91c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711468"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #60"
+      darktable:mask_version="6"
+      darktable:mask_points="b4055d3fb158393f82055d3f7f58393fe6055d3fe458393f4320173b4320173b0000803fc3f5283f010000005c065d3f5959393f29065d3f2759393f8e065d3f8b59393f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="10955f3f55c9363f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711469"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #61"
+      darktable:mask_version="6"
+      darktable:mask_points="acce6e3f35bd1d3f7ace6e3f02bd1d3fdece6e3f67bd1d3f4320173b4320173b0000803fc3f5283f0100000054cf6e3fdcbd1d3f22cf6e3faabd1d3f86cf6e3f0fbe1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="085e713fd82d1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711470"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #62"
+      darktable:mask_version="6"
+      darktable:mask_points="52fe553dcbfc1d3f2dfb553d99fc1d3f7701563dfdfc1d3f4320173b4320173b0000803fc3f5283f01000000ce08563d73fd1d3fa905563d41fd1d3ff40b563da5fd1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="14f47e3d6f6d1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711471"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #63"
+      darktable:mask_version="6"
+      darktable:mask_points="f0e0c83e09ad1f3f8be0c83ed6ac1f3f55e1c83e3bad1f3f4320173b4320173b0000803fc3f5283f010000003fe2c83eb0ad1f3fdbe1c83e7ead1f3fa4e2c83ee3ad1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a8ffcd3eac1d1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711472"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #64"
+      darktable:mask_version="6"
+      darktable:mask_points="75d3813d51941a3fe2d1813d1f941a3f07d5813d84941a3f4320173b4320173b0000803fc3f5283f01000000b3d8813df9941a3f20d7813dc7941a3f46da813d2c951a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="564e963df504183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711473"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #65"
+      darktable:mask_version="6"
+      darktable:mask_points="93ce7d3fbd9a1a3f61ce7d3f8a9a1a3fc5ce7d3fef9a1a3f4320173b4320173b0000803fc3f5283f010000003bcf7d3f649b1a3f08cf7d3f329b1a3f6dcf7d3f979b1a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803f600b183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711474"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #66"
+      darktable:mask_version="6"
+      darktable:mask_points="3dee733f4da01d3f0aee733f1ba01d3f6fee733f80a01d3f4320173b4320173b0000803fc3f5283f01000000e5ee733ff5a01d3fb2ee733fc3a01d3f17ef733f27a11d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="997d763ff1101b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711475"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #67"
+      darktable:mask_version="6"
+      darktable:mask_points="9300083fd7001e3f6100083fa5001e3fc600083f09011e3f4320173b4320173b0000803fc3f5283f010000003b01083f7f011e3f0901083f4c011e3f6e01083fb1011e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f08f0a3f7b711b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711476"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #68"
+      darktable:mask_version="6"
+      darktable:mask_points="acc5cd3e1d3a1f3f47c5cd3eeb391f3f10c6cd3e4f3a1f3f4320173b4320173b0000803fc3f5283f01000000fbc6cd3ec53a1f3f97c6cd3e933a1f3f60c7cd3ef73a1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="64e4d23ec1aa1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711477"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #69"
+      darktable:mask_version="6"
+      darktable:mask_points="da7a723f9cd11f3fa87a723f6ad11f3f0c7b723fced11f3f4320173b4320173b0000803fc3f5283f01000000827b723f44d21f3f4f7b723f12d21f3fb47b723f76d21f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="360a753f40421d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711478"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #70"
+      darktable:mask_version="6"
+      darktable:mask_points="c77a053f2561223f957a053ff260223ffa7a053f5761223f4320173b4320173b0000803fc3f5283f010000006f7b053fcc61223f3d7b053f9a61223fa27b053fff61223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="240a083fc8d11f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711479"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #71"
+      darktable:mask_version="6"
+      darktable:mask_points="dfe55b3fe658263face55b3fb458263f11e65b3f1859263f4320173b4320173b0000803fc3f5283f0100000087e65b3f8e59263f54e65b3f5b59263fb9e65b3fc059263f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3b755e3f8ac9233f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711480"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #72"
+      darktable:mask_version="6"
+      darktable:mask_points="16f2363e316e143f4cf1363efe6d143fdff2363e636e143f4320173b4320173b0000803fc3f5283f01000000b5f4363ed86e143febf3363ea66e143f7ef5363e0b6f143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="862f413ed4de113f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711481"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #73"
+      darktable:mask_version="6"
+      darktable:mask_points="6304163fb7c6153f3104163f85c6153f9504163fe9c6153f4320173b4320173b0000803fc3f5283f010000000b05163f5fc7153fd804163f2cc7153f3d05163f91c7153f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="bf93183f5b37133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711482"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #74"
+      darktable:mask_version="6"
+      darktable:mask_points="32397d3f74851a3fff387d3f42851a3f64397d3fa6851a3f4320173b4320173b0000803fc3f5283f01000000d9397d3f1c861a3fa7397d3fe9851a3f0c3a7d3f4e861a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8ec87f3f18f6173f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711483"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #75"
+      darktable:mask_version="6"
+      darktable:mask_points="4163793f13b91c3f0f63793fe0b81c3f7463793f45b91c3f4320173b4320173b0000803fc3f5283f01000000e963793fbbb91c3fb763793f88b91c3f1c64793fedb91c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9ef27b3fb7291a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711484"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #76"
+      darktable:mask_version="6"
+      darktable:mask_points="08c6d63e739e1f3fa3c5d63e419e1f3f6dc6d63ea69e1f3f4320173b4320173b0000803fc3f5283f0100000057c7d63e1b9f1f3ff3c6d63ee99e1f3fbcc7d63e4d9f1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="c0e4db3e170f1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711485"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #77"
+      darktable:mask_version="6"
+      darktable:mask_points="79a4dc3e85a41f3f15a4dc3e53a41f3fdea4dc3eb7a41f3f4320173b4320173b0000803fc3f5283f01000000c9a5dc3e2da51f3f64a5dc3efba41f3f2da6dc3e5fa51f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="32c3e13e29151d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711486"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #78"
+      darktable:mask_version="6"
+      darktable:mask_points="f047673f369b203fbe47673f049b203f2348673f699b203f4320173b4320173b0000803fc3f5283f010000009848673fde9b203f6648673fac9b203fcb48673f109c203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4dd7693fda0b1e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711487"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #79"
+      darktable:mask_version="6"
+      darktable:mask_points="77a44f3f4329223f45a44f3f1129223faaa44f3f7629223f4320173b4320173b0000803fc3f5283f010000001fa54f3feb29223feda44f3fb929223f51a54f3f1d2a223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d333523fe7991f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711488"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #80"
+      darktable:mask_version="6"
+      darktable:mask_points="40487e3faee0123f0e487e3f7ce0123f73487e3fe0e0123f4320173b4320173b0000803fc3f5283f01000000e8487e3f56e1123fb6487e3f24e1123f1a497e3f88e1123f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803f5251103f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711489"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #81"
+      darktable:mask_version="6"
+      darktable:mask_points="2b2fcb3ef3c11b3fc62ecb3ec0c11b3f902fcb3e25c21b3f4320173b4320173b0000803fc3f5283f010000007a30cb3e9ac21b3f1630cb3e68c21b3fdf30cb3ecdc21b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="e34dd03e9632193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711490"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #82"
+      darktable:mask_version="6"
+      darktable:mask_points="8965da3ebf541f3f2565da3e8d541f3fee65da3ef1541f3f4320173b4320173b0000803fc3f5283f01000000d966da3e67551f3f7466da3e34551f3f3d67da3e99551f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4284df3e63c51c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711491"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #83"
+      darktable:mask_version="6"
+      darktable:mask_points="9585d33ef2971f3f3085d33ec0971f3ff985d33e25981f3f4320173b4320173b0000803fc3f5283f01000000e486d33e9a981f3f8086d33e68981f3f4987d33ecd981f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4da4d83e96081d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711492"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #84"
+      darktable:mask_version="6"
+      darktable:mask_points="1172f03e0da11f3fac71f03edba01f3f7672f03e40a11f3f4320173b4320173b0000803fc3f5283f010000006073f03eb5a11f3ffc72f03e83a11f3fc573f03ee7a11f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="c990f53eb1111d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711493"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #85"
+      darktable:mask_version="6"
+      darktable:mask_points="da4e733f1b40203fa84e733fe83f203f0d4f733f4d40203f4320173b4320173b0000803fc3f5283f01000000824f733fc240203f504f733f9040203fb44f733ff540203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="36de753fbeb01d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711494"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #86"
+      darktable:mask_version="6"
+      darktable:mask_points="779a053f8d61203f449a053f5a61203fa99a053fbf61203f4320173b4320173b0000803fc3f5283f010000001f9b053f3462203fec9a053f0262203f519b053f6762203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d329083f31d21d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711495"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #87"
+      darktable:mask_version="6"
+      darktable:mask_points="57185a3f6f0a223f25185a3f3c0a223f89185a3fa10a223f4320173b4320173b0000803fc3f5283f01000000ff185a3f160b223fcc185a3fe40a223f31195a3f490b223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b3a75c3f137b1f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711496"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #88"
+      darktable:mask_version="6"
+      darktable:mask_points="b91a7c3f556e1a3f871a7c3f226e1a3fec1a7c3f876e1a3f4320173b4320173b0000803fc3f5283f01000000611b7c3ffc6e1a3f2f1b7c3fca6e1a3f931b7c3f2f6f1a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="16aa7e3ff8de173f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711497"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #89"
+      darktable:mask_version="6"
+      darktable:mask_points="47225c3fd2ca1a3f15225c3fa0ca1a3f79225c3f05cb1a3f4320173b4320173b0000803fc3f5283f01000000ef225c3f7acb1a3fbc225c3f48cb1a3f21235c3fadcb1a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a3b15e3f763b183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711498"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #90"
+      darktable:mask_version="6"
+      darktable:mask_points="5b46153fc166203f2946153f8e66203f8d46153ff366203f4320173b4320173b0000803fc3f5283f010000000347153f6867203fd046153f3667203f3547153f9b67203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b7d5173f64d71d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711499"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #91"
+      darktable:mask_version="6"
+      darktable:mask_points="f6fa453ff851223fc3fa453fc651223f28fb453f2a52223f4320173b4320173b0000803fc3f5283f010000009dfb453fa052223f6bfb453f6d52223fd0fb453fd252223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="528a483f9cc21f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711500"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #92"
+      darktable:mask_version="6"
+      darktable:mask_points="1ad5213f78051f3fe8d4213f45051f3f4cd5213faa051f3f4320173b4320173b0000803fc3f5283f01000000c2d5213f20061f3f90d5213fed051f3ff4d5213f52061f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7664243f1c761c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711501"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #93"
+      darktable:mask_version="6"
+      darktable:mask_points="d8e96f3fcdbc1f3fa5e96f3f9abc1f3f0aea6f3fffbc1f3f4320173b4320173b0000803fc3f5283f0100000080ea6f3f74bd1f3f4dea6f3f42bd1f3fb2ea6f3fa7bd1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3479723f702d1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711502"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #94"
+      darktable:mask_version="6"
+      darktable:mask_points="4d8f4e3f97af203f1b8f4e3f65af203f808f4e3fc9af203f4320173b4320173b0000803fc3f5283f01000000f58f4e3f3fb0203fc38f4e3f0cb0203f28904e3f71b0203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="aa1e513f3b201e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711503"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #95"
+      darktable:mask_version="6"
+      darktable:mask_points="d397d33eca35223f6e97d33e9735223f3898d33efc35223f4320173b4320173b0000803fc3f5283f010000002299d33e7136223fbe98d33e3f36223f8799d33ea436223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8bb6d83e6ea61f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711504"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #96"
+      darktable:mask_version="6"
+      darktable:mask_points="6b68b23ed9562a3f0668b23ea6562a3fcf68b23e0b572a3f4320173b4320173b0000803fc3f5283f01000000ba69b23e80572a3f5569b23e4e572a3f1f6ab23eb3572a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="2387b73e7cc7273f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711505"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #97"
+      darktable:mask_version="6"
+      darktable:mask_points="3cdf2c3ef1bb153f73de2c3ebfbb153f05e02c3e23bc153f4320173b4320173b0000803fc3f5283f01000000dbe12c3e99bc153f12e12c3e66bc153fa5e22c3ecbbc153f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ad1c373e952c133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711506"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #98"
+      darktable:mask_version="6"
+      darktable:mask_points="26ba253f636b163ff4b9253f306b163f58ba253f956b163f4320173b4320173b0000803fc3f5283f01000000ceba253f0b6c163f9cba253fd86b163f00bb253f3d6c163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8249283f07dc133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711507"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #99"
+      darktable:mask_version="6"
+      darktable:mask_points="62c5793f9b18183f30c5793f6818183f94c5793fcd18183f4320173b4320173b0000803fc3f5283f010000000ac6793f4219183fd7c5793f1019183f3cc6793f7519183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="be547c3f3f89153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711508"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #100"
+      darktable:mask_version="6"
+      darktable:mask_points="bf3e323ff1581a3f8d3e323fbf581a3ff13e323f23591a3f4320173b4320173b0000803fc3f5283f01000000673f323f99591a3f343f323f67591a3f993f323fcb591a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1bce343f95c9173f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711509"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #101"
+      darktable:mask_version="6"
+      darktable:mask_points="acd7ef3ec9a21f3f48d7ef3e97a21f3f11d8ef3efca21f3f4320173b4320173b0000803fc3f5283f01000000fcd8ef3e71a31f3f97d8ef3e3fa31f3f61d9ef3ea3a31f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="65f6f43e6d131d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711510"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #102"
+      darktable:mask_version="6"
+      darktable:mask_points="f070873e7b0b113f8b70873e480b113f5571873ead0b113f4320173b4320173b0000803fc3f5283f010000004072873e220c113fdb71873ef00b113fa472873e550c113f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a88f8c3e1e7c0e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711511"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #103"
+      darktable:mask_version="6"
+      darktable:mask_points="70ef513ffe89193f3eef513fcc89193fa2ef513f308a193f4320173b4320173b0000803fc3f5283f0100000018f0513fa68a193fe5ef513f738a193f4af0513fd88a193f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="cc7e543fa2fa163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711512"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #104"
+      darktable:mask_version="6"
+      darktable:mask_points="1515ef3e5ce81e3fb114ef3e29e81e3f7a15ef3e8ee81e3f4320173b4320173b0000803fc3f5283f010000006516ef3e03e91e3f0016ef3ed1e81e3fca16ef3e36e91e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ce33f43eff581c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711513"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #105"
+      darktable:mask_version="6"
+      darktable:mask_points="12c2b33ebd60243fadc1b33e8a60243f77c2b33eef60243f4320173b4320173b0000803fc3f5283f0100000062c3b33e6461243ffdc2b33e3261243fc6c3b33e9761243f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="cae0b83e60d1213f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711514"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #106"
+      darktable:mask_version="6"
+      darktable:mask_points="ebec623e3304163f21ec623e0104163fb4ed623e6604163f4320173b4320173b0000803fc3f5283f010000008aef623edb04163fc1ee623ea904163f53f0623e0d05163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="5b2a6d3ed774133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711515"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #107"
+      darktable:mask_version="6"
+      darktable:mask_points="9d5da43dfe821f3f0b5ca43dcc821f3f305fa43d30831f3f4320173b4320173b0000803fc3f5283f01000000dc62a43da6831f3f4961a43d73831f3f6e64a43dd8831f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7fd8b83da2f31c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711516"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #108"
+      darktable:mask_version="6"
+      darktable:mask_points="c2892d3ffa49143f90892d3fc749143ff4892d3f2c4a143f4320173b4320173b0000803fc3f5283f010000006a8a2d3fa14a143f378a2d3f6f4a143f9c8a2d3fd44a143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1e19303f9dba113f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711517"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #109"
+      darktable:mask_version="6"
+      darktable:mask_points="6299fa3e3497183ffe98fa3e0197183fc799fa3e6697183f4320173b4320173b0000803fc3f5283f01000000b29afa3edb97183f4d9afa3ea997183f179bfa3e0e98183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1bb8ff3ed807163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711518"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #110"
+      darktable:mask_version="6"
+      darktable:mask_points="44e3643fbd1c193f12e3643f8a1c193f77e3643fef1c193f4320173b4320173b0000803fc3f5283f01000000ece3643f641d193fbae3643f321d193f1fe4643f971d193f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a172673f608d163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711519"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #111"
+      darktable:mask_version="6"
+      darktable:mask_points="10956e3f35bd1d3fde946e3f02bd1d3f43956e3f67bd1d3f4320173b4320173b0000803fc3f5283f01000000b8956e3fdcbd1d3f86956e3faabd1d3fea956e3f0fbe1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="6c24713fd82d1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711520"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #112"
+      darktable:mask_version="6"
+      darktable:mask_points="f94b513fc9e5203fc64b513f96e5203f2b4c513ffbe5203f4320173b4320173b0000803fc3f5283f01000000a14c513f70e6203f6e4c513f3ee6203fd34c513fa3e6203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="55db533f6c561e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711521"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #113"
+      darktable:mask_version="6"
+      darktable:mask_points="ab227e3fbccd213f79227e3f8acd213fdd227e3feecd213f4320173b4320173b0000803fc3f5283f0100000053237e3f64ce213f21237e3f32ce213f85237e3f96ce213f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0000803f603e1f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711522"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #114"
+      darktable:mask_version="6"
+      darktable:mask_points="5b570a3f4a94113f29570a3f1894113f8d570a3f7c94113f4320173b4320173b0000803fc3f5283f0100000003580a3ff294113fd0570a3fbf94113f35580a3f2495113f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b7e60c3fee040f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711523"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #115"
+      darktable:mask_version="6"
+      darktable:mask_points="d80eb33e229d1c3f730eb33ef09c1c3f3c0fb33e549d1c3f4320173b4320173b0000803fc3f5283f010000002710b33eca9d1c3fc30fb33e989d1c3f8c10b33efc9d1c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="902db83ec60d1a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711524"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #116"
+      darktable:mask_version="6"
+      darktable:mask_points="923dc33e28e81f3f2d3dc33ef5e71f3ff63dc33e5ae81f3f4320173b4320173b0000803fc3f5283f01000000e13ec33ecfe81f3f7d3ec33e9de81f3f463fc33e02e91f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="4a5cc83ecb581d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711525"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #117"
+      darktable:mask_version="6"
+      darktable:mask_points="2d6e423f9ac9203ffb6d423f68c9203f606e423fcdc9203f4320173b4320173b0000803fc3f5283f01000000d56e423f42ca203fa36e423f10ca203f076f423f74ca203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8afd443f3e3a1e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711526"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #118"
+      darktable:mask_version="6"
+      darktable:mask_points="8f5b2d3ff2b5143f5d5b2d3fbfb5143fc15b2d3f24b6143f4320173b4320173b0000803fc3f5283f01000000375c2d3f99b6143f045c2d3f67b6143f695c2d3fccb6143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ebea2f3f9626123f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711527"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #119"
+      darktable:mask_version="6"
+      darktable:mask_points="bbb25a3f25a6173f89b25a3ff3a5173feeb25a3f58a6173f4320173b4320173b0000803fc3f5283f0100000063b35a3fcda6173f31b35a3f9ba6173f95b35a3fffa6173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="18425d3fc916153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711528"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #120"
+      darktable:mask_version="6"
+      darktable:mask_points="c7d25b3f33a11a3f95d25b3f01a11a3ff9d25b3f66a11a3f4320173b4320173b0000803fc3f5283f010000006fd35b3fdba11a3f3cd35b3fa9a11a3fa1d35b3f0da21a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="23625e3fd711183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711529"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #121"
+      darktable:mask_version="6"
+      darktable:mask_points="4808df3eb09c1d3fe307df3e7e9c1d3fad08df3ee39c1d3f4320173b4320173b0000803fc3f5283f010000009809df3e589d1d3f3309df3e269d1d3ffc09df3e8b9d1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0027e43e540d1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711530"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #122"
+      darktable:mask_version="6"
+      darktable:mask_points="86096e3da8cb1d3f60066e3d76cb1d3fab0c6e3ddbcb1d3f4320173b4320173b0000803fc3f5283f0100000002146e3d50cc1d3fdd106e3d1ecc1d3f27176e3d82cc1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a47f8b3d4c3c1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711531"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #123"
+      darktable:mask_version="6"
+      darktable:mask_points="f06af13e77b81f3f8b6af13e44b81f3f546bf13ea9b81f3f4320173b4320173b0000803fc3f5283f010000003f6cf13e1eb91f3fdb6bf13eecb81f3fa46cf13e51b91f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a889f63e1b291d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711532"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #124"
+      darktable:mask_version="6"
+      darktable:mask_points="c420d33e7ff91f3f5f20d33e4df91f3f2921d33eb1f91f3f4320173b4320173b0000803fc3f5283f010000001322d33e27fa1f3faf21d33ef5f91f3f7822d33e59fa1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7c3fd83e236a1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711533"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #125"
+      darktable:mask_version="6"
+      darktable:mask_points="a002dd3e140c203f3b02dd3ee20b203f0403dd3e460c203f4320173b4320173b0000803fc3f5283f01000000ef03dd3ebc0c203f8a03dd3e890c203f5404dd3eee0c203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="5821e23eb87c1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711534"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #126"
+      darktable:mask_version="6"
+      darktable:mask_points="31c84c3e3676253f68c74c3e0476253ffac84c3e6876253f4320173b4320173b0000803fc3f5283f01000000d0ca4c3ede76253f07ca4c3eab76253f99cb4c3e1077253f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a205573edae6223f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711535"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #127"
+      darktable:mask_version="6"
+      darktable:mask_points="a974843e4360113f4474843e1160113f0d75843e7660113f4320173b4320173b0000803fc3f5283f01000000f875843eeb60113f9375843eb960113f5d76843e1d61113f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="6193893ee7d00e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711536"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #128"
+      darktable:mask_version="6"
+      darktable:mask_points="7ae27d3e5822173fb0e17d3e2622173f43e37d3e8b22173f4320173b4320173b0000803fc3f5283f0100000019e57d3e0023173f4fe47d3ece22173fe2e57d3e3323173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f50f843efc92143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711537"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #129"
+      darktable:mask_version="6"
+      darktable:mask_points="5bc7533f3f22193f29c7533f0c22193f8ec7533f7122193f4320173b4320173b0000803fc3f5283f0100000003c8533fe722193fd1c7533fb422193f35c8533f1923193f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b756563fe392163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711538"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #130"
+      darktable:mask_version="6"
+      darktable:mask_points="adec2c3f2c36193f7bec2c3ffa35193fe0ec2c3f5e36193f4320173b4320173b0000803fc3f5283f0100000055ed2c3fd436193f23ed2c3fa136193f87ed2c3f0637193f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="097c2f3fd0a6163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711539"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #131"
+      darktable:mask_version="6"
+      darktable:mask_points="4c62013fc5f51c3f1962013f93f51c3f7e62013ff8f51c3f4320173b4320173b0000803fc3f5283f01000000f362013f6df61c3fc162013f3bf61c3f2663013f9ff61c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a8f1033f69661a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711540"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #132"
+      darktable:mask_version="6"
+      darktable:mask_points="6a5c7a3f8e6b1d3f385c7a3f5b6b1d3f9c5c7a3fc06b1d3f4320173b4320173b0000803fc3f5283f01000000125d7a3f356c1d3fe05c7a3f036c1d3f445d7a3f686c1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="c6eb7c3f31dc1a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711541"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #133"
+      darktable:mask_version="6"
+      darktable:mask_points="b1203e3fc79a203f7f203e3f959a203fe4203e3ffa9a203f4320173b4320173b0000803fc3f5283f0100000059213e3f6f9b203f27213e3f3d9b203f8c213e3fa19b203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0eb0403f6b0b1e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711542"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #134"
+      darktable:mask_version="6"
+      darktable:mask_points="ced6ae3ec97e2d3f6ad6ae3e977e2d3f33d7ae3efc7e2d3f4320173b4320173b0000803fc3f5283f010000001ed8ae3e717f2d3fb9d7ae3e3f7f2d3f82d8ae3ea37f2d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="86f5b33e6def2a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711543"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #135"
+      darktable:mask_version="6"
+      darktable:mask_points="f7ed7f3e177f173f2eed7f3ee47e173fc1ee7f3e497f173f4320173b4320173b0000803fc3f5283f0100000096f07f3ebe7f173fcdef7f3e8c7f173f60f17f3ef17f173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b415853ebaef143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711544"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #136"
+      darktable:mask_version="6"
+      darktable:mask_points="6b68023f422c183f3868023f102c183f9d68023f752c183f4320173b4320173b0000803fc3f5283f010000001269023fea2c183fe068023fb82c183f4569023f1c2d183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="c7f7043fe69c153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711545"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #137"
+      darktable:mask_version="6"
+      darktable:mask_points="d4b5f93eb6aa183f6fb5f93e84aa183f39b6f93ee9aa183f4320173b4320173b0000803fc3f5283f0100000024b7f93e5eab183fbfb6f93e2cab183f88b7f93e90ab183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8cd4fe3e5a1b163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711546"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #138"
+      darktable:mask_version="6"
+      darktable:mask_points="7e5a263f5fbc1a3f4c5a263f2cbc1a3fb15a263f91bc1a3f4320173b4320173b0000803fc3f5283f01000000265b263f07bd1a3ff45a263fd4bc1a3f595b263f39bd1a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="dbe9283f032d183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711547"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #139"
+      darktable:mask_version="6"
+      darktable:mask_points="cab0c33e31101b3f65b0c33efe0f1b3f2eb1c33e63101b3f4320173b4320173b0000803fc3f5283f0100000019b2c33ed9101b3fb5b1c33ea6101b3f7eb2c33e0b111b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="82cfc83ed580183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711548"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #140"
+      darktable:mask_version="6"
+      darktable:mask_points="27d2053fd8841d3ff5d1053fa6841d3f59d2053f0a851d3f4320173b4320173b0000803fc3f5283f01000000cfd2053f80851d3f9dd2053f4d851d3f01d3053fb2851d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8361083f7cf51a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711549"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #141"
+      darktable:mask_version="6"
+      darktable:mask_points="7b32013f9f5d1e3f4932013f6d5d1e3fad32013fd15d1e3f4320173b4320173b0000803fc3f5283f010000002333013f475e1e3ff032013f145e1e3f5533013f795e1e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d7c1033f43ce1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711550"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #142"
+      darktable:mask_version="6"
+      darktable:mask_points="1516a83ebc3a1f3fb115a83e893a1f3f7a16a83eee3a1f3f4320173b4320173b0000803fc3f5283f010000006517a83e633b1f3f0017a83e313b1f3fca17a83e963b1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ce34ad3e5fab1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711551"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #143"
+      darktable:mask_version="6"
+      darktable:mask_points="af1f183f0e251f3f7d1f183fdc241f3fe21f183f40251f3f4320173b4320173b0000803fc3f5283f010000005720183fb6251f3f2520183f84251f3f8920183fe8251f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0caf1a3fb2951c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711552"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #144"
+      darktable:mask_version="6"
+      darktable:mask_points="5475873e568f113fef74873e238f113fb875873e888f113f4320173b4320173b0000803fc3f5283f01000000a376873efd8f113f3f76873ecb8f113f0877873e3090113f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0c948c3ef9ff0e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711553"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #145"
+      darktable:mask_version="6"
+      darktable:mask_points="5625b43e2f53133ff124b43efc52133fba25b43e6153133f4320173b4320173b0000803fc3f5283f01000000a526b43ed753133f4126b43ea453133f0a27b43e0954133f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="0e44b93ed3c3103f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711554"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #146"
+      darktable:mask_version="6"
+      darktable:mask_points="dfba2f3f007e143facba2f3fce7d143f11bb2f3f337e143f4320173b4320173b0000803fc3f5283f0100000086bb2f3fa87e143f54bb2f3f767e143fb9bb2f3fdb7e143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3b4a323fa4ee113f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711555"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #147"
+      darktable:mask_version="6"
+      darktable:mask_points="d2765a3f9770163f9f765a3f6470163f04775a3fc970163f4320173b4320173b0000803fc3f5283f0100000079775a3f3e71163f47775a3f0c71163fac775a3f7171163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="2e065d3f3ae1133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711556"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #148"
+      darktable:mask_version="6"
+      darktable:mask_points="3e0a803efb2b173fd909803ec92b173fa30a803e2d2c173f4320173b4320173b0000803fc3f5283f010000008d0b803ea32c173f290b803e702c173ff20b803ed52c173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f628853e9f9c143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711557"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #149"
+      darktable:mask_version="6"
+      darktable:mask_points="6175763eb974173f9874763e8674173f2a76763eeb74173f4320173b4320173b0000803fc3f5283f010000000078763e6075173f3777763e2e75173fc978763e9375173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="6959803e5ce5143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711558"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #150"
+      darktable:mask_version="6"
+      darktable:mask_points="bc517b3fd551183f89517b3fa351183fee517b3f0852183f4320173b4320173b0000803fc3f5283f0100000063527b3f7d52183f31527b3f4b52183f96527b3faf52183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="18e17d3f79c2153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711559"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #151"
+      darktable:mask_version="6"
+      darktable:mask_points="6fac7c3f65891a3f3dac7c3f33891a3fa1ac7c3f97891a3f4320173b4320173b0000803fc3f5283f0100000017ad7c3f0d8a1a3fe5ac7c3fda891a3f49ad7c3f3f8a1a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="cb3b7f3f09fa173f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711560"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #152"
+      darktable:mask_version="6"
+      darktable:mask_points="d276623f96891b3f9f76623f64891b3f0477623fc8891b3f4320173b4320173b0000803fc3f5283f010000007977623f3e8a1b3f4777623f0b8a1b3fac77623f708a1b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="2e06653f3afa183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711561"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #153"
+      darktable:mask_version="6"
+      darktable:mask_points="2145603f2a6f1d3fef44603ff86e1d3f5445603f5d6f1d3f4320173b4320173b0000803fc3f5283f01000000c945603fd26f1d3f9745603fa06f1d3ffc45603f05701d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7ed4623fcedf1a3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711562"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #154"
+      darktable:mask_version="6"
+      darktable:mask_points="da420f3f05041e3fa7420f3fd3031e3f0c430f3f37041e3f4320173b4320173b0000803fc3f5283f0100000081430f3fad041e3f4f430f3f7a041e3fb4430f3fdf041e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="36d2113fa9741b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711563"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #155"
+      darktable:mask_version="6"
+      darktable:mask_points="347d203fd2de1e3f027d203f9fde1e3f667d203f04df1e3f4320173b4320173b0000803fc3f5283f01000000dc7d203f7adf1e3faa7d203f47df1e3f0e7e203facdf1e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="900c233f764f1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711564"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #156"
+      darktable:mask_version="6"
+      darktable:mask_points="398ea33dbd471f3fa68ca33d8b471f3fcc8fa33df0471f3f4320173b4320173b0000803fc3f5283f010000007793a33d65481f3fe491a33d33481f3f0a95a33d97481f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1a09b83d61b81c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711565"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #157"
+      darktable:mask_version="6"
+      darktable:mask_points="c82b203f087f203f962b203fd67e203ffb2b203f3a7f203f4320173b4320173b0000803fc3f5283f01000000702c203fb07f203f3e2c203f7d7f203fa32c203fe27f203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="25bb223facef1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711566"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #158"
+      darktable:mask_version="6"
+      darktable:mask_points="a750283f60d0143f7550283f2ed0143fd950283f93d0143f4320173b4320173b0000803fc3f5283f010000004f51283f08d1143f1d51283fd6d0143f8151283f3bd1143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="03e02a3f0441123f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711567"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #159"
+      darktable:mask_version="6"
+      darktable:mask_points="f603633e042b173f2d03633ed22a173fbf04633e372b173f4320173b4320173b0000803fc3f5283f010000009506633eac2b173fcc05633e7a2b173f5e07633ede2b173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="67416d3ea89b143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711568"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #160"
+      darktable:mask_version="6"
+      darktable:mask_points="7b75543f49e0183f4975543f17e0183fae75543f7ce0183f4320173b4320173b0000803fc3f5283f010000002376543ff1e0183ff175543fbfe0183f5576543f23e1183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="d704573fed50163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711569"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #161"
+      darktable:mask_version="6"
+      darktable:mask_points="456df33e79411a3fe06cf33e47411a3faa6df33eab411a3f4320173b4320173b0000803fc3f5283f01000000956ef33e21421a3f306ef33eee411a3ff96ef33e53421a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="fd8bf83e1db2173f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711570"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #162"
+      darktable:mask_version="6"
+      darktable:mask_points="f250f33e1b811c3f8e50f33ee9801c3f5751f33e4d811c3f4320173b4320173b0000803fc3f5283f010000004252f33ec3811c3fdd51f33e90811c3fa752f33ef5811c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ab6ff83ebff1193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711571"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #163"
+      darktable:mask_version="6"
+      darktable:mask_points="0beb003f24971e3fd9ea003ff1961e3f3eeb003f56971e3f4320173b4320173b0000803fc3f5283f01000000b3eb003fcb971e3f81eb003f99971e3fe6eb003ffe971e3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="687a033fc7071c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711572"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #164"
+      darktable:mask_version="6"
+      darktable:mask_points="2b62033f2d051f3ff961033ffb041f3f5d62033f5f051f3f4320173b4320173b0000803fc3f5283f01000000d362033fd5051f3fa162033fa3051f3f0563033f07061f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="87f1053fd1751c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711573"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #165"
+      darktable:mask_version="6"
+      darktable:mask_points="e275e93ebcc31f3f7d75e93e8ac31f3f4776e93eefc31f3f4320173b4320173b0000803fc3f5283f010000003177e93e64c41f3fcd76e93e32c41f3f9677e93e97c41f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9a94ee3e60341d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711574"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #166"
+      darktable:mask_version="6"
+      darktable:mask_points="849a043fb733203f529a043f8533203fb69a043fea33203f4320173b4320173b0000803fc3f5283f010000002c9b043f5f34203ff99a043f2d34203f5e9b043f9234203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="e029073f5ba41d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711575"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #167"
+      darktable:mask_version="6"
+      darktable:mask_points="d92a6f3ff197203fa62a6f3fbf97203f0b2b6f3f2398203f4320173b4320173b0000803fc3f5283f01000000812b6f3f9998203f4e2b6f3f6698203fb32b6f3fcb98203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="35ba713f95081e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711576"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #168"
+      darktable:mask_version="6"
+      darktable:mask_points="0d3a2b3e49cd153f43392b3e16cd153fd63a2b3e7bcd153f4320173b4320173b0000803fc3f5283f01000000ac3c2b3ef0cd153fe23b2b3ebecd153f753d2b3e23ce153f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7d77353eec3d133f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711577"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #169"
+      darktable:mask_version="6"
+      darktable:mask_points="0354543f7839173fd153543f4639173f3654543faa39173f4320173b4320173b0000803fc3f5283f01000000ab54543f203a173f7954543fed39173fdd54543f523a173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="60e3563f1caa143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711578"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #170"
+      darktable:mask_version="6"
+      darktable:mask_points="f839113fd444183fc639113fa144183f2a3a113f0645183f4320173b4320173b0000803fc3f5283f01000000a03a113f7b45183f6e3a113f4945183fd23a113fae45183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="54c9133f77b5153f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711579"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #171"
+      darktable:mask_version="6"
+      darktable:mask_points="8f567a3f3ce71b3f5c567a3f09e71b3fc1567a3f6ee71b3f4320173b4320173b0000803fc3f5283f0100000036577a3fe3e71b3f04577a3fb1e71b3f69577a3f16e81b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ebe57c3fe057193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711580"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #172"
+      darktable:mask_version="6"
+      darktable:mask_points="17cda03da1601c3f84cba03d6f601c3fa9cea03dd3601c3f4320173b4320173b0000803fc3f5283f0100000055d2a03d49611c3fc2d0a03d16611c3fe7d3a03d7b611c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f847b53d45d1193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711581"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #173"
+      darktable:mask_version="6"
+      darktable:mask_points="8502df3e05511c3f2102df3ed3501c3fea02df3e38511c3f4320173b4320173b0000803fc3f5283f01000000d503df3ead511c3f7003df3e7b511c3f3904df3edf511c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3e21e43ea9c1193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711582"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #174"
+      darktable:mask_version="6"
+      darktable:mask_points="fb78b03e0c851c3f9678b03eda841c3f5f79b03e3e851c3f4320173b4320173b0000803fc3f5283f010000004a7ab03eb4851c3fe579b03e81851c3faf7ab03ee6851c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b397b53eb0f5193f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711583"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #175"
+      darktable:mask_version="6"
+      darktable:mask_points="e44a203fc6881f3fb24a203f93881f3f174b203ff8881f3f4320173b4320173b0000803fc3f5283f010000008c4b203f6e891f3f5a4b203f3b891f3fbe4b203fa0891f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="40da223f6af91c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711584"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #176"
+      darktable:mask_version="6"
+      darktable:mask_points="b861713f4e851f3f8661713f1c851f3fea61713f80851f3f4320173b4320173b0000803fc3f5283f010000006062713ff6851f3f2e62713fc3851f3f9262713f28861f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="14f1733ff2f51c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711585"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #177"
+      darktable:mask_version="6"
+      darktable:mask_points="be87713fe472203f8b87713fb272203ff087713f1773203f4320173b4320173b0000803fc3f5283f010000006688713f8c73203f3388713f5a73203f9888713fbe73203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1a17743f88e31d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711586"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #178"
+      darktable:mask_version="6"
+      darktable:mask_points="fb8a623f7224223fc98a623f4024223f2e8b623fa424223f4320173b4320173b0000803fc3f5283f01000000a38b623f1a25223f718b623fe824223fd58b623f4c25223f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="571a653f16951f3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711587"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #179"
+      darktable:mask_version="6"
+      darktable:mask_points="8738753f5b01243f5538753f2901243fba38753f8d01243f4320173b4320173b0000803fc3f5283f010000002f39753f0302243ffd38753fd001243f6139753f3502243f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="e4c7773fff71213f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711588"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #180"
+      darktable:mask_version="6"
+      darktable:mask_points="fa66ae3ec54d2c3f9566ae3e924d2c3f5f67ae3ef74d2c3f4320173b4320173b0000803fc3f5283f010000004968ae3e6d4e2c3fe567ae3e3a4e2c3fae68ae3e9f4e2c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="b285b33e69be293f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711589"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #181"
+      darktable:mask_version="6"
+      darktable:mask_points="352b383eafb9d93e6c2a383e4ab9d93efe2b383e14bad93e4320173b4320173b0000803fc3f5283f01000000d42d383efebad93e0b2d383e9abad93e9d2e383e63bbd93e4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="a668423ef79ad43e"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711590"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #182"
+      darktable:mask_version="6"
+      darktable:mask_points="4128fb3e47aa183fdc27fb3e15aa183fa628fb3e7aaa183f4320173b4320173b0000803fc3f5283f010000009129fb3eefaa183f2c29fb3ebdaa183ff529fb3e21ab183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="7d23003feb1a163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711591"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #183"
+      darktable:mask_version="6"
+      darktable:mask_points="34a6543ff6cc183f01a6543fc4cc183f66a6543f29cd183f4320173b4320173b0000803fc3f5283f01000000dba6543f9ecd183fa9a6543f6ccd183f0ea7543fd1cd183f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9035573f9a3d163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711592"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #184"
+      darktable:mask_version="6"
+      darktable:mask_points="9ce95b3f3cf21a3f6ae95b3f0af21a3fcfe95b3f6ff21a3f4320173b4320173b0000803fc3f5283f0100000044ea5b3fe4f21a3f12ea5b3fb2f21a3f77ea5b3f16f31a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f9785e3fe062183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711593"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #185"
+      darktable:mask_version="6"
+      darktable:mask_points="f8427a3fe34c1b3fc6427a3fb14c1b3f2b437a3f164d1b3f4320173b4320173b0000803fc3f5283f01000000a0437a3f8b4d1b3f6e437a3f594d1b3fd3437a3fbd4d1b3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="55d27c3f87bd183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711594"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #186"
+      darktable:mask_version="6"
+      darktable:mask_points="c5f01c3f56be1d3f92f01c3f24be1d3ff7f01c3f89be1d3f4320173b4320173b0000803fc3f5283f010000006cf11c3ffebe1d3f3af11c3fccbe1d3f9ff11c3f30bf1d3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="21801f3ffa2e1b3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711595"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #187"
+      darktable:mask_version="6"
+      darktable:mask_points="c25d0e3f71081f3f905d0e3f3f081f3ff55d0e3fa3081f3f4320173b4320173b0000803fc3f5283f010000006a5e0e3f19091f3f385e0e3fe6081f3f9c5e0e3f4b091f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="1eed103f15791c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711596"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #188"
+      darktable:mask_version="6"
+      darktable:mask_points="4278de3e64291f3fde77de3e32291f3fa778de3e96291f3f4320173b4320173b0000803fc3f5283f010000009279de3e0c2a1f3f2d79de3ed9291f3ff679de3e3e2a1f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="fb96e33e089a1c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711597"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #189"
+      darktable:mask_version="6"
+      darktable:mask_points="30ad203f36611f3ffeac203f04611f3f62ad203f68611f3f4320173b4320173b0000803fc3f5283f01000000d8ad203fde611f3fa5ad203fab611f3f0aae203f10621f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="8c3c233fdad11c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711598"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #190"
+      darktable:mask_version="6"
+      darktable:mask_points="b02eaf3ea21c2c3f4b2eaf3e701c2c3f152faf3ed41c2c3f4320173b4320173b0000803fc3f5283f01000000ff2faf3e4a1d2c3f9b2faf3e171d2c3f6430af3e7c1d2c3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="684db43e468d293f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711599"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #191"
+      darktable:mask_version="6"
+      darktable:mask_points="4e982f3f5575143f1b982f3f2275143f80982f3f8775143f4320173b4320173b0000803fc3f5283f01000000f6982f3ffc75143fc3982f3fca75143f28992f3f2f76143f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="aa27323ff8e5113f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711600"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #192"
+      darktable:mask_version="6"
+      darktable:mask_points="e0d5423ffce9163fadd5423fc9e9163f12d6423f2eea163f4320173b4320173b0000803fc3f5283f0100000087d6423fa4ea163f55d6423f71ea163fbad6423fd6ea163f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="3c65453fa05a143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711601"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #193"
+      darktable:mask_version="6"
+      darktable:mask_points="6c8c763e5715173fa38b763e2415173f358d763e8915173f4320173b4320173b0000803fc3f5283f010000000b8f763eff15173f428e763ecc15173fd48f763e3116173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ee64803efb85143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711602"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #194"
+      darktable:mask_version="6"
+      darktable:mask_points="161c7e3e0e79173f4c1b7e3edc78173fdf1c7e3e4179173f4320173b4320173b0000803fc3f5283f01000000b51e7e3eb679173feb1d7e3e8479173f7e1f7e3ee979173f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="c32c843eb2e9143f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711603"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #195"
+      darktable:mask_version="6"
+      darktable:mask_points="1bc9373fdd45193fe9c8373faa45193f4ec9373f0f46193f4320173b4320173b0000803fc3f5283f01000000c3c9373f8446193f91c9373f5246193ff5c9373fb746193f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="78583a3f81b6163f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711604"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #196"
+      darktable:mask_version="6"
+      darktable:mask_points="43814f3fcc961a3f10814f3f99961a3f75814f3ffe961a3f4320173b4320173b0000803fc3f5283f01000000ea814f3f73971a3fb8814f3f41971a3f1d824f3fa6971a3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="9f10523f6f07183f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711605"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #197"
+      darktable:mask_version="6"
+      darktable:mask_points="19671f3ffc751f3fe6661f3fca751f3f4b671f3f2f761f3f4320173b4320173b0000803fc3f5283f01000000c0671f3fa4761f3f8e671f3f72761f3ff3671f3fd6761f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="75f6213fa0e61c3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711606"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #198"
+      darktable:mask_version="6"
+      darktable:mask_points="161cde3ec9a21f3fb11bde3e97a21f3f7a1cde3efca21f3f4320173b4320173b0000803fc3f5283f01000000651dde3e71a31f3f001dde3e3fa31f3fca1dde3ea3a31f3f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="ce3ae33e6d131d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711607"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #199"
+      darktable:mask_version="6"
+      darktable:mask_points="94470a3fb06d203f62470a3f7e6d203fc7470a3fe36d203f4320173b4320173b0000803fc3f5283f010000003c480a3f586e203f0a480a3f266e203f6e480a3f8b6e203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="f0d60c3f54de1d3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711608"
+      darktable:mask_type="72"
+      darktable:mask_name="brush #200"
+      darktable:mask_version="6"
+      darktable:mask_points="50221e3f7f9a203f1e221e3f4d9a203f82221e3fb29a203f4320173b4320173b0000803fc3f5283f01000000f8221e3f279b203fc5221e3ff59a203f2a231e3f599b203f4320173b4320173b0000803fc3f5283f01000000"
+      darktable:mask_nb="2"
+      darktable:mask_src="acb1203f230b1e3f"/>
+     <rdf:li
+      darktable:mask_num="0"
+      darktable:mask_id="1770711609"
+      darktable:mask_type="12"
+      darktable:mask_name="group `retouch'"
+      darktable:mask_version="6"
+      darktable:mask_points="gz08eJxdx1dXDgAAANBIQiXZO6PICpHx5Pf0aCWET/YnW/aeiRDZZK+M7JFNRp8VIVk5zunFvW93eHkwbWgomBYe9k9g2IjaR9V+JB/FR/N0PoZn8LF8HB/PM/kEPpFP4gE+mWfxKXwqn8an8xl8Jp/Fg3w2z+Zz+Fw+j8/nC/hCvogv5jl8CV/Kl/HlfAVfyVfx1XwNX8vX8fV8A9/IN/HNfAvfynP5Np7Ht/MdPJ/v5Lv4bl7A9/C9vJDv4/v5AX6QH+KH+RF+lB/jRfw4P8FP8lP8ND/Dz/Jz/Dy/wC/yYn6JX+ZX+FVewq/x6/wGv8lv8dv8Dr/L7/H7vJQ/4A/5I/6YP+FP+TP+nL/gZfwlf8Vf8ze8nIf4W/6Ov+cf+EdewT/xz7ySf+Ff+Tdexb/zav6D/+S/+G/+h9fwsND/r8Pr8nBej0fw+jySN+ANeSMexaN5DG/MY3kTHseb8ma8OW/BW/JWvDVvw9vydrw978A78njeiXfmXXhXnsATeTfenSfxHrwn78V78z48mffl/Xh/nsIH8IE8lQ/ig/kQ/hezJiBS"
+      darktable:mask_nb="200"
+      darktable:mask_src="0000000000000000"/>
+    </rdf:Seq>
+   </darktable:masks_history>
+   <darktable:history>
+    <rdf:Seq>
+     <rdf:li
+      darktable:num="0"
+      darktable:operation="mask_manager"
+      darktable:enabled="0"
+      darktable:modversion="2"
+      darktable:params="00000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="1"
+      darktable:operation="gamma"
+      darktable:enabled="1"
+      darktable:modversion="1"
+      darktable:params="0000000000000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="2"
+      darktable:operation="temperature"
+      darktable:enabled="1"
+      darktable:modversion="4"
+      darktable:params="0080f83f0000803f0080ab3f0000000004000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="3"
+      darktable:operation="rawprepare"
+      darktable:enabled="1"
+      darktable:modversion="2"
+      darktable:params="000000000000000000000000000000005802580258025802a03c000000000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="4"
+      darktable:operation="colorin"
+      darktable:enabled="1"
+      darktable:modversion="7"
+      darktable:params="gz48eJzjZhgFowABWAbaAaNgwAEAOQAAEA=="
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="5"
+      darktable:operation="colorout"
+      darktable:enabled="1"
+      darktable:modversion="5"
+      darktable:params="gz35eJxjZBgFo4CBAQAEEAAC"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="6"
+      darktable:operation="highlights"
+      darktable:enabled="1"
+      darktable:modversion="4"
+      darktable:params="050000000000803f00000000000000000000803f000000001e00000006000000cdcccc3e000000400000000000000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYGBgYARiCQYYOOHEgAZY0QWgejBBgz0Ej1Q+dcF/IADRAGwSHQY="/>
+     <rdf:li
+      darktable:num="7"
+      darktable:operation="agx"
+      darktable:enabled="0"
+      darktable:modversion="7"
+      darktable:params="gz02eJxjYACBBnsEBgGFgwwMFxzOnjlje0pN2v5NoIWdsbGxAwMUpKUdswfhs2d44GIgvUxQFtvNaXZczIK2+zJb7Bz3rNlT9VbUTl2lcS/M/KUPpoDl/fa0geXZlljbQuQZGAB0ByTd"
+      darktable:multi_name="_builtin_scene-referred default"
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
+     <rdf:li
+      darktable:num="8"
+      darktable:operation="channelmixerrgb"
+      darktable:enabled="0"
+      darktable:modversion="3"
+      darktable:params="gz04eJxjYGiwZ8AAxIqRD9iAmAmIWYCYEYjX2uy3K5bebzdrZpMryC5GqDwAosgIeA=="
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
+     <rdf:li
+      darktable:num="9"
+      darktable:operation="exposure"
+      darktable:enabled="0"
+      darktable:modversion="7"
+      darktable:params="00000000000080b93333333f00004842000080c00100000001000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
+     <rdf:li
+      darktable:num="10"
+      darktable:operation="demosaic"
+      darktable:enabled="1"
+      darktable:modversion="6"
+      darktable:params="0000000000000000000000000500000001000000cdcc4c3eb81e853f713d8a3e00000000080000000000000001000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="11"
+      darktable:operation="sharpen"
+      darktable:enabled="1"
+      darktable:modversion="1"
+      darktable:params="000000400000003f0000003f"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz10eJxjYGBgYAJiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAG2yHQc="/>
+     <rdf:li
+      darktable:num="12"
+      darktable:operation="flip"
+      darktable:enabled="1"
+      darktable:modversion="2"
+      darktable:params="01000000"
+      darktable:multi_name="_builtin_flip vertically"
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="13"
+      darktable:operation="lens"
+      darktable:enabled="1"
+      darktable:modversion="10"
+      darktable:params="gz04eJxjZGBgYGeAgQZ7CC5wYmCY4Lj7kYMdI1DULzM7P0/BxdzUgGFAAMR+RzfdYAXfzOSifAWgQHZ+kYKZQW6uQpq+kZ6Fu4KrC61dAQsbbBgiDwqrTkcH+w/Lj9kCmfYwnQBwDR2r"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="14"
+      darktable:operation="colorbalancergb"
+      darktable:enabled="1"
+      darktable:modversion="5"
+      darktable:params="gz05eJxjYCAVNNij0gwMEeLbbYnVPfGtjR0yzQjEAAXDBtM="
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"/>
+     <rdf:li
+      darktable:num="15"
+      darktable:operation="negadoctor"
+      darktable:enabled="1"
+      darktable:modversion="2"
+      darktable:params="01000000beb74d3f0955ab3e98962f3e00000000aa6cbb3f5d879f3fffff7f3f0000803f0000803fb653613f95bd413f0000803faaf10240cdcc4cbd30086c3eccccdc40ffff3f3f6cc9813f"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="16"
+      darktable:operation="crop"
+      darktable:enabled="1"
+      darktable:modversion="3"
+      darktable:params="0ad7a33c728a0e3d2b87763f8cdb783f0000000000000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+    </rdf:Seq>
+   </darktable:history>
+   <dc:creator>
+    <rdf:Seq>
+     <rdf:li>ILYA PALOPEZHENTSEV</rdf:li>
+    </rdf:Seq>
+   </dc:creator>
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>changed</rdf:li>
+     <rdf:li>darktable</rdf:li>
+     <rdf:li>exported</rdf:li>
+     <rdf:li>format</rdf:li>
+     <rdf:li>nef</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <lr:hierarchicalSubject>
+    <rdf:Bag>
+     <rdf:li>darktable|changed</rdf:li>
+     <rdf:li>darktable|exported</rdf:li>
+     <rdf:li>darktable|format|nef</rdf:li>
+    </rdf:Bag>
+   </lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
