@@ -300,6 +300,59 @@ def test_lens_blob():
         check("real blob v_steepness~0.5", approx(vst, 0.5, 1e-3), str(vst))
 
 
+def test_histogram_distance():
+    """Histogram-match loss (spec 04): EMD between two rendered sRGB outputs,
+    decomposed into a luma (brightness) and a color (chroma cast) term."""
+    print("histogram distance:")
+    rng = np.random.default_rng(11)
+    base = rng.integers(60, 180, size=(200, 200, 3), dtype=np.uint8)
+
+    # identity -> every term collapses to 0
+    d = nm.histogram_distance(base, base)
+    check("identity total ~0", approx(d["total"], 0.0, 1e-12), str(d["total"]))
+    check("identity luma ~0", approx(d["luma"], 0.0, 1e-12), str(d["luma"]))
+    check("identity color ~0", approx(d["color"], 0.0, 1e-12), str(d["color"]))
+    check("identity luma_signed ~0", approx(d["luma_signed"], 0.0, 1e-12))
+    check("identity top equal", d["top_a"] == d["top_b"])
+
+    # uniform brightness lift -> luma EMD ~ delta/256, signed +, color ~0
+    delta = 20
+    brighter = np.clip(base.astype(np.int16) + delta, 0, 255).astype(np.uint8)
+    d = nm.histogram_distance(base, brighter)
+    check("brightness EMD ~ delta/256", approx(d["luma"], delta / 256.0, 0.01),
+          str(d["luma"]))
+    check("brightness signed + (~delta/255)",
+          approx(d["luma_signed"], delta / 255.0, 0.01), str(d["luma_signed"]))
+    check("uniform shift leaves color ~0", d["color"] < 5e-3, str(d["color"]))
+
+    # pure chroma shift (R up, B down, zero overall) -> color>0, luma_signed tiny
+    chroma = base.astype(np.int16)
+    chroma[..., 0] = np.clip(chroma[..., 0] + delta, 0, 255)
+    chroma[..., 2] = np.clip(chroma[..., 2] - delta, 0, 255)
+    chroma = chroma.astype(np.uint8)
+    d = nm.histogram_distance(base, chroma)
+    check("chroma cast -> color > 0.03", d["color"] > 0.03, str(d["color"]))
+    check("chroma cast -> luma_signed small", abs(d["luma_signed"]) < 0.03,
+          str(d["luma_signed"]))
+
+    # monotonicity: a bigger brightness shift is a bigger luma EMD
+    lumas = [nm.histogram_distance(
+        base, np.clip(base.astype(np.int16) + dl, 0, 255).astype(np.uint8)
+    )["luma"] for dl in (10, 25, 50)]
+    check("luma EMD monotone in shift", lumas[0] < lumas[1] < lumas[2],
+          str(lumas))
+
+    # clip mass flags blown highlights
+    white = np.full((50, 50, 3), 255, dtype=np.uint8)
+    d = nm.histogram_distance(white, base)
+    check("clip mass top_a ~1", d["top_a"] > 0.99, str(d["top_a"]))
+    check("clip mass top_b ~0", d["top_b"] < 0.01, str(d["top_b"]))
+
+    # accepts flattened (N,3) input identically
+    d = nm.histogram_distance(base.reshape(-1, 3), base.reshape(-1, 3))
+    check("(N,3) identity ~0", approx(d["total"], 0.0, 1e-12), str(d["total"]))
+
+
 def main():
     test_encode_decode()
     test_exposure_factor()
@@ -309,6 +362,7 @@ def main():
     test_vignette()
     test_wheel_mapping()
     test_lens_blob()
+    test_histogram_distance()
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} check(s): {FAILURES}")

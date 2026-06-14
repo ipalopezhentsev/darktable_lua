@@ -210,6 +210,103 @@ def render_negadoctor_srgb8(lin_rgb, params):
 
 
 # ---------------------------------------------------------------------------
+# Histogram distance (OFFLINE tuning loss: match a rendered output to a target)
+#
+# The user's ground truth is the inverted PICTURE, not the params that made it
+# (exposure<->wb are interdependent, so the params are not a unique encoding).
+# The picture is characterized by its histogram, so the loss for choosing the
+# algorithm's fixed constants is the distance between the histogram of the
+# algorithm's render and that of the user's hand-tuned (GT) render. See
+# specs/04_tune_algo_params_via_histograms.md. Pure math; no I/O.
+# ---------------------------------------------------------------------------
+
+# Rec.601 luma weights — "brightness" of an sRGB-encoded display pixel.
+_LUMA_W = np.array([0.299, 0.587, 0.114], dtype=np.float64)
+
+
+def _as_rgb_rows(img):
+    """(N,3) or (H,W,3) uint8/float -> (N,3) float64 rows (first 3 channels)."""
+    a = np.asarray(img)
+    return a.reshape(-1, a.shape[-1])[:, :3].astype(np.float64)
+
+
+def _norm_hist(values, bins):
+    """Histogram of 8-bit-scale values over [0,256) normalized to sum 1."""
+    h, _ = np.histogram(values, bins=bins, range=(0.0, 256.0))
+    total = h.sum()
+    if total <= 0:
+        return np.full(bins, 1.0 / bins)
+    return h.astype(np.float64) / total
+
+
+def cumhist_l1(h_a, h_b):
+    """1D Wasserstein-1 (EMD) between two normalized histograms of equal length,
+    expressed as a fraction of the value range: L1 of the cumulative
+    distributions divided by the bin count. Reads as 'how far, in [0,1] tone
+    units, the mass must move to turn distribution A into B'. Robust to bin
+    jitter and needs no per-pixel registration (A and B may have different
+    sample counts)."""
+    ca = np.cumsum(np.asarray(h_a, dtype=np.float64))
+    cb = np.cumsum(np.asarray(h_b, dtype=np.float64))
+    return float(np.abs(ca - cb).sum() / len(ca))
+
+
+def rgb_histograms(srgb_u8, bins=64):
+    """Per-channel normalized histograms (list of 3) of an 8-bit sRGB image plus
+    the bright-clip mass (fraction of pixels whose max channel sits in the
+    display's top ~1%). Accepts (N,3) or (H,W,3)."""
+    rows = _as_rgb_rows(srgb_u8)
+    hists = [_norm_hist(rows[:, c], bins) for c in range(3)]
+    top = float(np.mean(rows.max(axis=1) >= 254.0)) if rows.size else 0.0
+    return hists, top
+
+
+def histogram_distance(srgb_a, srgb_b, bins=64):
+    """Decomposed EMD between two rendered 8-bit sRGB outputs (A = the
+    algorithm's render, B = the ground-truth render). All terms are in [0,1]
+    tone units; smaller is closer.
+
+      total        mean per-channel EMD — the headline loss.
+      per_channel  [dR, dG, dB] per-channel EMD.
+      luma         EMD of the Rec.601 luma histogram — brightness + contrast +
+                   clip distribution (user goals 1 "bright midtones" + 2 "no
+                   clipping").
+      color        mean |dmean_channel - dmean_overall| — chroma-cast divergence
+                   BEYOND the common brightness shift, i.e. shadow/highlight
+                   color balance (user goal 3). Pure color: a uniform exposure
+                   change leaves it ~0.
+      luma_signed  mean(luma B) - mean(luma A) in [0,1]; +ve => B brighter, so
+                   the algorithm (A) renders too DARK vs the target.
+      top_a, top_b bright-clip mass of A and B (goal 2; A should not exceed B).
+    """
+    ha, top_a = rgb_histograms(srgb_a, bins)
+    hb, top_b = rgb_histograms(srgb_b, bins)
+    per_channel = [cumhist_l1(ha[c], hb[c]) for c in range(3)]
+
+    ra = _as_rgb_rows(srgb_a)
+    rb = _as_rgb_rows(srgb_b)
+    la, lb = ra @ _LUMA_W, rb @ _LUMA_W
+    luma = cumhist_l1(_norm_hist(la, bins), _norm_hist(lb, bins))
+    luma_signed = (float(lb.mean() - la.mean()) / 255.0
+                   if la.size and lb.size else 0.0)
+
+    # per-channel signed mean shift (B - A), and the common (overall) shift;
+    # the residual after removing the common shift is the pure chroma cast.
+    d_chan = (rb.mean(axis=0) - ra.mean(axis=0)) / 255.0
+    color = float(np.mean(np.abs(d_chan - d_chan.mean())))
+
+    return {
+        "total": float(np.mean(per_channel)),
+        "per_channel": per_channel,
+        "luma": luma,
+        "color": color,
+        "luma_signed": luma_signed,
+        "top_a": top_a,
+        "top_b": top_b,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Auto-tuner formulas (verbatim from the picker callbacks)
 # ---------------------------------------------------------------------------
 

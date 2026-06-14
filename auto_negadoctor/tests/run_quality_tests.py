@@ -658,6 +658,146 @@ def check_ai_variant(frames, fixtures, roll):
     return violations
 
 
+# Histogram-match gate (spec 04): the user's hard ground truth is the inverted
+# PICTURE, not the (non-unique) params that made it, so the loss for the
+# analytical print/wb tuning is the EMD between the algorithm's render and the GT
+# render over the content crop. Like check_ground_truth this would be RED if used
+# as a strict per-frame match (per-frame gamma/exposure is irreducible darkroom
+# taste), so it is an informational dashboard + a REGRESSION guard against the
+# committed histogram_baseline.json. TRUE clipping is gated separately by
+# check_no_clipping (0.999); the near-white masses printed here are a coarser
+# proxy and are informational only.
+HIST_BINS = 64
+HIST_REGRESS_EPS = 0.01   # median total EMD may grow this much over baseline
+
+
+def gt_params_for_frame(fr, gt):
+    """Full negadoctor params that render the user's GT picture for this frame:
+    the production params with ONLY the annotated fields overridden. Annotations
+    are PARTIAL (some frames carry wb only), so a wb-only frame's GT picture is
+    the production tone with the user's wb — never production replaced by
+    defaults. Dmin/D_max/offset/soft_clip stay = production (not annotated). Pure
+    copy; does not mutate fr['params']."""
+    p = dict(fr["params"])
+    if gt.get("wb_low"):
+        p["wb_low"] = [float(v) for v in gt["wb_low"]]
+    if gt.get("wb_high"):
+        p["wb_high"] = [float(v) for v in gt["wb_high"]]
+    for k in ("black", "exposure", "gamma"):
+        if gt.get(k) is not None:
+            p[k] = float(gt[k])
+    return p
+
+
+def _render_crop_rows(lin, border, params):
+    """Render params over the subsampled content crop -> (N,3) uint8 sRGB rows,
+    using the same stride the print tuner / no-clip gate use. None if empty."""
+    l, t, r, b = border
+    h, w = lin.shape[:2]
+    s = max(1, int(round(w * an.PRINT_TUNE_SUBSAMPLE_FRAC)))
+    region = lin[t:h - b:s, l:w - r:s].reshape(-1, 3)
+    if region.size == 0:
+        return None
+    return nm.render_negadoctor_srgb8(region, params)
+
+
+def _histogram_match_medians(frames, fixtures):
+    """Median histogram-distance terms (production render vs GT render) over a
+    roll's GT-annotated frames. Returns (medians, n) or (None, 0)."""
+    gt_by_stem = _load_ground_truth(fixtures)
+    by_stem = {fr["stem"]: fr for fr in frames}
+    tot, lum, col, ca, cb = [], [], [], [], []
+    for stem, gt in sorted(gt_by_stem.items()):
+        fr = by_stem.get(stem)
+        if not fr or fr.get("error") or "params" not in fr or not fr.get("border"):
+            continue
+        try:
+            enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
+        except Exception:
+            continue
+        gt_u8 = _render_crop_rows(lin, fr["border"], gt_params_for_frame(fr, gt))
+        prod_u8 = _render_crop_rows(lin, fr["border"], fr["params"])
+        if gt_u8 is None or prod_u8 is None:
+            continue
+        d = nm.histogram_distance(prod_u8, gt_u8, bins=HIST_BINS)
+        tot.append(d["total"]); lum.append(d["luma"]); col.append(d["color"])
+        ca.append(d["top_a"]); cb.append(d["top_b"])
+    if not tot:
+        return None, 0
+
+    def med(v):
+        return sorted(v)[len(v) // 2]
+
+    return ({"total": med(tot), "luma": med(lum), "color": med(col),
+             "clip_algo": med(ca), "clip_gt": med(cb)}, len(tot))
+
+
+def _histogram_violations(med, baseline):
+    """Pure decision: FAIL only if the median total EMD regressed past the
+    committed baseline by more than HIST_REGRESS_EPS. (Clipping is gated by
+    check_no_clipping; near-white mass here is informational.)"""
+    v = []
+    if med["total"] > baseline["total"] + HIST_REGRESS_EPS:
+        v.append(f"histogram total EMD regressed {baseline['total']:.4f} -> "
+                 f"{med['total']:.4f} (> +{HIST_REGRESS_EPS})")
+    return v
+
+
+def _load_histogram_baseline(roll):
+    path = roll["dir"] / "histogram_baseline.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def check_histogram_match(frames, fixtures, roll):
+    """Spec-04 gate: the algorithm's rendered output must stay close (in
+    histogram EMD) to the user's GT render — the param-invariant ground truth.
+    Informational dashboard + REGRESSION guard vs the committed
+    histogram_baseline.json. Inert until that baseline exists (write it with
+    calibrate_histogram_match.py --write-baseline after a review). Returns
+    violations."""
+    med, n = _histogram_match_medians(frames, fixtures)
+    if not med:
+        print("  (no wb/print ground-truth annotations)")
+        return []
+    print(f"  checked {n} frame(s); median EMD to GT render: total "
+          f"{med['total']:.4f}  luma {med['luma']:.4f}  color {med['color']:.4f}")
+    print(f"  near-white mass (informational): algo {med['clip_algo']:.2%} "
+          f"vs gt {med['clip_gt']:.2%}")
+    baseline = _load_histogram_baseline(roll)
+    if not baseline:
+        print(f"  no histogram_baseline.json yet for {roll['id']} — write it via")
+        print("  calibrate_histogram_match.py --write-baseline after a review")
+        return []
+    if (baseline.get("bins") != HIST_BINS or abs(
+            baseline.get("subsample_frac", -1) - an.PRINT_TUNE_SUBSAMPLE_FRAC)
+            > 1e-9):
+        print("  baseline metric params differ (bins/subsample) — regenerate; "
+              "skipping regression check")
+        return []
+    vios = _histogram_violations(med, baseline)
+    print(f"  baseline total {baseline['total']:.4f} -> now {med['total']:.4f} "
+          f"({'REGRESSED' if vios else 'ok'})")
+    return vios
+
+
+def selftest_histogram_match():
+    """Test for the test: clean medians pass; a total-EMD regression is flagged."""
+    base = {"total": 0.060}
+    clean = {"total": 0.060, "luma": 0.05, "color": 0.02,
+             "clip_algo": 0.01, "clip_gt": 0.005}
+    assert not _histogram_violations(clean, base), \
+        "histogram self-test: clean medians flagged"
+    worse = dict(clean, total=0.060 + HIST_REGRESS_EPS + 0.005)
+    assert _histogram_violations(worse, base), \
+        "histogram self-test: regression not flagged"
+    print("Histogram-match checker self-test: OK")
+
+
 def check_no_clipping(frames):
     """HARD gate the param ground-truth gate does NOT cover: render each frame's
     PRODUCTION params and flag any whose hard-clip fraction (pixels with any
@@ -755,6 +895,13 @@ def run_roll(roll_info):
         print("  no frame exceeds the hard-clip limit")
 
     print()
+    print("--- Histogram match (spec 04: render must match the GT render; "
+          "regression guard vs baseline) ---")
+    hist_match = check_histogram_match(frames, fixtures, roll_info)
+    for v in hist_match:
+        print(f"  VIOLATION: {v}")
+
+    print()
     print("--- Baseline diff ---")
     baseline = load_baseline(roll_info["id"])
     diff_frames = 0
@@ -785,7 +932,8 @@ def run_roll(roll_info):
 
     print()
     fail = (bool(violations) or bool(errors) or bool(containment)
-            or bool(ground_truth) or bool(clipping) or bool(ai_variant))
+            or bool(ground_truth) or bool(clipping) or bool(ai_variant)
+            or bool(hist_match))
     warn = False
     if compared:
         frac = diff_frames / compared
@@ -802,6 +950,7 @@ def run_roll(roll_info):
 def main():
     selftest_invariants()
     selftest_ground_truth()
+    selftest_histogram_match()
 
     rolls = discover_rolls()
     if not rolls:

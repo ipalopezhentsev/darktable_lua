@@ -150,9 +150,19 @@
      No more roll-prior blend (the patch wb_high already lands near the GT
      median; for wb_low the old prior over-suppressed G/B). wb's INTENSITY
      (spread) is a tonal lever handled jointly downstream (see print tune).
-     gamma = PRINT_GAMMA (6.1 = GT median; per-frame GT gamma 4.55–7.8 is
-     aesthetic intent — fog→soft/low, forest→punch/high — NOT image-derivable,
-     needs the `categorize_frame()` scene hook). P_LOW=2.0: the user's crop
+     gamma = PRINT_GAMMA (**5.0 since spec 04**, was 6.1). 6.1 was the GT *param*
+     median, but spec 04 tunes the RENDERED PICTURE not the params: rendering the
+     GT annotations and minimizing the histogram (luma-EMD) distance to the
+     algorithm's render over BOTH rolls puts the joint minimum at 5.0 (the steep
+     6.1 curve, under the near-clip highlight pin, crushed midtones DARKER than
+     the GT picture — median signed luma +0.084 too dark on roll 2510-11-1). The
+     param-gate gamma delta gets WORSE by design (we optimize the picture, the
+     param proxy is non-unique — the user reaches the same brighter picture via
+     low exposure + strongly POSITIVE black + high gamma). Per-frame GT gamma
+     4.55–7.8 is irreducible aesthetic intent — fog→soft/low, forest→punch/high —
+     NOT image-derivable, needs the `categorize_frame()` scene hook. Re-derive
+     PRINT_GAMMA with `tests/calibrate_histogram_match.py` if the rolls/export
+     change. P_LOW=2.0: the user's crop
      annotation proved the densest 0.5-2% were edge junk, so the dense-side
      anchor uses a junk-robust percentile.
    - per frame: black + exposure via `tune_print_params()`, the user's process
@@ -379,7 +389,10 @@ behavior (and self-test non-trivial checkers).
   neutralized), hex encode/decode incl. a real manual XMP blob, and the
   color-wheel ↔ wb mapping (`test_wheel_mapping`: neutral→center,
   wb→wheel→wb round-trip, max(wb_low)=1 / min(wb_high)=1 + range clamp over
-  the whole disk).
+  the whole disk), and the **histogram-distance loss** (`test_histogram_distance`,
+  spec 04: identity→0, a uniform brightness lift→luma EMD ≈ Δ/256 with the color
+  term ~0, a pure chroma cast→color term >0 with luma_signed tiny, EMD monotone
+  in shift, clip-mass detection).
 - `tests/test_calibration.py` — runs the pipeline on `tests/images/` (the
   ORIGINAL sRGB JPEG exports) and compares against the user's manual
   inversions in `tests/fixtures/manual_xmps/` (same roll). Gates Dmin ONLY;
@@ -428,7 +441,15 @@ behavior (and self-test non-trivial checkers).
   roll's committed `scene_labels.json` and FAILs only if it REGRESSES any
   param's aggregate median vs analytical or clips beyond `CLIP_MAX_FRAC` — a
   net-improvement guard that is currently GREEN; prints the analytical→AI
-  dashboard) + baseline diff vs
+  dashboard) + **histogram-match gate** (`check_histogram_match`, spec 04,
+  self-tested: renders the production params and the GT-params (annotation
+  `corrected` over production Dmin/D_max/offset/soft_clip) over the content crop
+  and reports the median per-channel EMD decomposed into luma/color; informational
+  dashboard + a REGRESSION guard vs the committed per-roll
+  `histogram_baseline.json` — FAILs only if median total EMD grows beyond
+  `HIST_REGRESS_EPS`. Inert until the baseline exists. This is the param-INVARIANT
+  picture-match signal that drove the spec-04 PRINT_GAMMA retune; the strict
+  per-frame match stays the red-by-design `check_ground_truth`) + baseline diff vs
   `tests/baseline_session/<roll_id>/` (per-roll; params, film-base location,
   shadows/highlights patch positions AND sizes).
 - `tests/generate_baseline.py` — regenerate baseline ONLY after the user
@@ -458,6 +479,17 @@ behavior (and self-test non-trivial checkers).
   per-category medians to set `scene_tuner` constants, and reports AI-vs-
   analytical GT-delta. Runs the FIRST roll under `fixtures/rolls/` and caches in
   that roll's `scene_cache.json`.
+- `tests/calibrate_histogram_match.py` — OFFLINE spec-04 instrument (NOT a gate;
+  needs local TIFFs, no Ollama). Per GT frame over EVERY roll: renders production
+  vs GT params over the content crop and prints the histogram EMD (total/luma/
+  signed-luma/color + near-white mass), aggregate medians, a brightness-vs-color
+  gap verdict, and a `PRINT_HI_CEIL` sweep. `--write-baseline` writes each roll's
+  committed `histogram_baseline.json` (the `check_histogram_match` reference;
+  total/luma/color medians + bins + subsample_frac + print_gamma). Use it to
+  re-derive `PRINT_GAMMA` (the gamma sweep was run as a scratch over all 3 rolls;
+  5.0 is the joint luma/total-EMD minimum). Shared render/GT-reconstruction
+  helpers (`gt_params_for_frame`, `_render_crop_rows`) live in
+  `run_quality_tests.py` so the instrument and the gate use ONE metric.
 - `tests/test_resolution_invariance.py` — guardrail against reintroducing
   absolute-pixel constants: runs the detectors on a synthetic frame at W and an
   exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).
@@ -485,9 +517,25 @@ behavior (and self-test non-trivial checkers).
       guard; print auto-tune for normal brightness / max speculars.
 - [ ] Baseline still not generated — needs a user-approved debug-UI review
       first (`generate_baseline.py`, writes per-roll `baseline_session/<roll_id>/`).
-- [~] Converge to the 2026-06-13 wb/print ground truth — IN PROGRESS. Rebuilt
+- [~] Converge to the wb/print ground truth — IN PROGRESS.
+      **Spec 04 (`specs/04_tune_algo_params_via_histograms.md`, 2026-06-14)
+      reframed the loss: the ground truth is the rendered PICTURE (its
+      HISTOGRAM), not the (non-unique, exposure↔wb↔black↔gamma-interdependent)
+      params.** New offline instrument `tests/calibrate_histogram_match.py` +
+      `nega_model.histogram_distance` (per-channel EMD, decomposed into a luma /
+      brightness term and a color / chroma-cast term) measure, per GT frame, the
+      EMD between the algorithm's render and the GT-params render over the content
+      crop. KEY FINDING: the histogram says the algorithm rendered too DARK (NOT
+      too bright as the earlier param-based AI calibration concluded — that was
+      the proxy trap); the highlight-ceiling lever (`PRINT_HI_CEIL`) was already
+      optimal at 0.99 and the anchor percentile (`PRINT_HI_PCT`) is flat, so the
+      lever is GAMMA. Lowering `PRINT_GAMMA` 6.1→5.0 (joint luma-EMD minimum over
+      both rolls) cut median total EMD roll 2510-11-1 0.1005→0.0771, roll
+      2512-2601-1 0.0659→0.0589, clip-safe (<0.16%), AI gate still green. The
+      residual is irreducible per-frame taste. Guarded by `check_histogram_match`
+      (regression guard vs committed `histogram_baseline.json`). Rebuilt
       wb (region-cast + gentle neutralization) + print tune (clip-boundary
-      brightness push) + gamma 6.1. NOTE: the param gate (`check_ground_truth`)
+      brightness push). NOTE: the param gate (`check_ground_truth`)
       is a PROXY that can diverge from render quality — the clip-boundary tuner
       raised the param-gate count (~166→178) while HALVING the rendered-midtone
       error vs GT (0.088→0.050) and fixing the user's "snow/sky too dark"
@@ -517,11 +565,12 @@ behavior (and self-test non-trivial checkers).
 - [ ] Per-frame wb vs roll-wide wb: the user's manual practice is one synced
       wb per roll + per-frame black/soft_clip. Roll-median fallback exists;
       consider a full roll-consensus mode after more debug-UI feedback.
-- [x] gamma: PRINT_GAMMA now 6.1 (= 2026-06-13 GT median; supersedes the
-      earlier 5.25/6.5 single-frame signals). Per-frame GT gamma 4.55–7.8 is
-      aesthetic intent, not derivable — see the convergence TODO above.
-      soft_clip stays at 0.75. (The old WB_PRIOR_WEIGHT taste-prior blend was
-      removed in the 2026-06-13 wb rebuild; wb is now region-cast based.)
+- [x] gamma: PRINT_GAMMA = **5.0 (spec 04, histogram-matched over all annotated
+      rolls)**, was 6.1 (the GT *param* median). The picture, not the param, is
+      ground truth — see the convergence TODO and the spec-04 line above.
+      Per-frame GT gamma 4.55–7.8 is aesthetic intent, not derivable. soft_clip
+      stays at 0.75. (The old WB_PRIOR_WEIGHT taste-prior blend was removed in the
+      2026-06-13 wb rebuild; wb is now region-cast based.)
 - [x] LLM scene categorization hook (`categorize_frame()`) — IMPLEMENTED
       (spec 03, `scene_tuner.py`, moondream via Ollama). Wired as an opt-in
       ALTERNATE variant (`--ai-tune` / AI_Debug / AI_InPlace actions, debug-UI

@@ -298,12 +298,20 @@ PRINT_TUNE_SUBSAMPLE_FRAC = 0.003  # render every Nth pixel during tuning; strid
                                    # = frac of width (keeps sample count ~constant)
 
 # --- print curve & wb taste (from user annotation feedback) -------------------
-# Paper grade: user's corrections across sessions: 4.0 -> 5.25 -> 7.1 ->
-# 6.15 (the last given on a run whose D_max was junk-skewed); manual rolls
-# use 6.9. 6.5 sits in the middle of the signals. darktable's default 4.0
-# prints far too flat. The print auto-tune adapts black/exposure around
-# whatever gamma is set here.
-PRINT_GAMMA = 6.1
+# Paper grade (print gamma). Tuned to match the GT PICTURE, not the GT params:
+# spec 04 (specs/04_tune_algo_params_via_histograms.md) renders the user's
+# hand-tuned annotations and minimizes the histogram (luma-EMD) distance between
+# the algorithm's render and that GT render over BOTH annotated rolls. The print
+# auto-tune pins highlights near clip via exposure, so the steep 6.1 curve (= GT
+# *param* median) crushed the midtones DARKER than the GT picture (median signed
+# luma +0.084 too dark on roll 2510-11-1). The exposure/wb<->picture mapping is
+# many-to-one, so matching the GT picture needs a flatter curve than the GT
+# gamma number: 5.0 is the joint luma-EMD minimum across both rolls (0.0782 ->
+# 0.0573, clip-safe at <0.3%). The param-gate gamma delta gets WORSE by design
+# (we optimize the render, not the param proxy). Re-derive with
+# tests/calibrate_histogram_match.py if the rolls/export change. The print
+# auto-tune adapts black/exposure around whatever gamma is set here.
+PRINT_GAMMA = 5.0
 # --- per-frame wb: estimate the cast HUE, apply a gentler-than-full correction
 # The user's wheel picks are a per-frame neutralization of the scene's color
 # cast, but consistently MILDER than a full gray-world neutralization (e.g. the
