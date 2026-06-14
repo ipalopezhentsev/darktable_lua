@@ -47,7 +47,7 @@ def build_session():
     exif = an.parse_exif_params(str(exif_file)) if exif_file.exists() else {}
     frames, roll = an.process_roll(paths, exif)
     an.write_results(frames, roll, session)
-    an.write_debug_sessions(frames, roll, session, wall_time_s=1.0, save_vis=False)
+    an.write_debug_sessions(frames, roll, session, wall_time_s=1.0)
     return session
 
 
@@ -310,8 +310,8 @@ def main():
 
         # M cycles: normal -> tinted analysis areas -> rejected hidden
         def mask_views():
-            mask_path = img.get("analysis_mask_path")
-            assert mask_path and Path(mask_path).exists(), "no analysis mask png"
+            # mask is computed live from the detected crop border (no baked PNG)
+            assert app._analysis_mask(img) is not None, "no live analysis mask"
             base = app._display_base_pil
             assert base is not None
             app._cycle_mask_view()           # tint

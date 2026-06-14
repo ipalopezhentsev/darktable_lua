@@ -5,7 +5,7 @@
 Darktable Lua plugins organized in three subdirectories:
 - **`auto_crop/`** — automatic cropping of DSLR-scanned film frames. Detects film holder edges and applies crop parameters to remove them.
 - **`auto_retouch/`** — automatic dust detection on DSLR-scanned film frames. Detects dust particles and applies healing brushes via darktable's retouch module. See `auto_retouch/dust_detection_spec.md` for the detection algorithm spec.
-- **`auto_negadoctor/`** — automatic color-negative inversion. Finds the roll-wide film base (exposure-compensated across frames via EXIF), derives full negadoctor module parameters per frame from a single linear-Rec2020 TIFF export (Python re-implements negadoctor's forward model and picker formulas), writes them into the XMPs; plus a remove-negadoctor action for clean re-runs. See `auto_negadoctor/specs/01_auto_negadoctor_spec.md` and `auto_negadoctor/CLAUDE.md`.
+- **`auto_negadoctor/`** — automatic color-negative inversion. Finds the roll-wide film base (exposure-compensated across frames via EXIF), derives full negadoctor module parameters per frame from a single linear-Rec2020 TIFF export (Python re-implements negadoctor's forward model and picker formulas), writes them into the XMPs; plus a remove-negadoctor action for clean re-runs. An opt-in vision-LLM layer (`scene_tuner.py`, moondream via Ollama; spec 03) can nudge the final params per scene as an alternate variant. See `auto_negadoctor/specs/01_auto_negadoctor_spec.md` and `auto_negadoctor/CLAUDE.md`.
 
 ## Architecture
 

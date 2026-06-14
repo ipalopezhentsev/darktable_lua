@@ -591,16 +591,31 @@ class DebugUIBase:
     # Image loading
     # ------------------------------------------------------------------
 
+    def _load_display_pil(self, img_dict) -> Image.Image:
+        """Full-resolution PIL image for the main canvas.
+
+        Default: open the on-disk ``image_path``. Subclasses that render
+        their display live (no baked file) override this."""
+        return Image.open(img_dict["image_path"])
+
+    def _load_thumb_pil(self, img_dict) -> Image.Image:
+        """PIL image for the sidebar thumbnail (resized by the caller).
+
+        Runs on a BACKGROUND thread, so an override must not touch state the
+        main thread mutates. Default: open the on-disk ``image_path``."""
+        return Image.open(img_dict["image_path"])
+
     def _load_image_by_idx(self, idx):
         self.current_idx = idx
         img_dict = self.images[idx]
-        image_path = img_dict["image_path"]
 
-        if not os.path.exists(image_path):
-            messagebox.showerror("Error", f"Image not found:\n{image_path}")
+        try:
+            self.pil_image = self._load_display_pil(img_dict)
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Cannot load image for {img_dict.get('stem', '?')}:\n{e}")
             return
-
-        self.pil_image = Image.open(image_path)
 
         # Fit-to-window zoom
         cw = self.canvas.winfo_width()
@@ -914,7 +929,7 @@ class DebugUIBase:
         """Background: open + resize each image, push PIL Image to queue."""
         for i, img_dict in enumerate(self.images):
             try:
-                pil_img = Image.open(img_dict["image_path"])
+                pil_img = self._load_thumb_pil(img_dict)
                 pil_img.thumbnail((210, 140), Image.LANCZOS)
             except Exception:
                 pil_img = None

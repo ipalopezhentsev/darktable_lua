@@ -560,7 +560,7 @@ end
 -- film-base color is out of sRGB gamut) and restored afterwards.
 -- Returns: nega_results, filename_to_image, export_dir (or nil on failure /
 --   detached debug launch)
-local function export_and_detect(images, debug_ui_mode)
+local function export_and_detect(images, debug_ui_mode, ai_tune)
   if not preflight_check(images) then
     return nil, nil, nil
   end
@@ -672,9 +672,10 @@ local function export_and_detect(images, debug_ui_mode)
   end
 
   local log_file = export_dir .. "/processing.log"
-  local debug_flag = debug_ui_mode and " --debug-ui" or " --no-vis"
-  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s',
-                                 python_script, debug_flag, file_args)
+  local debug_flag = debug_ui_mode and " --debug-ui" or ""
+  local ai_flag = ai_tune and " --ai-tune" or ""
+  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s',
+                                 python_script, debug_flag, ai_flag, file_args)
 
   -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
   if debug_ui_mode then
@@ -749,8 +750,9 @@ end
 -- Entry points
 -- ===================================================================
 
--- Mode 1: debug UI (analyze + annotate, no apply)
-local function export_and_invert_debug()
+-- Mode 1: debug UI (analyze + annotate, no apply). ai_tune adds the vision-LLM
+-- alternate variant to the session (switchable in the debug UI with key A).
+local function export_and_invert_debug(ai_tune)
   dlog.log_level(dlog.info)
   local images = dt.gui.selection()
 
@@ -759,12 +761,14 @@ local function export_and_invert_debug()
     return
   end
 
-  export_and_detect(images, true)
+  export_and_detect(images, true, ai_tune)
   -- Detached launch: analysis runs in background and opens debug_ui.py when done
 end
 
--- Modes 2/3: export, analyze, and write negadoctor params into the XMPs
-local function export_invert_and_apply(keep_temp)
+-- Modes 2/3: export, analyze, and write negadoctor params into the XMPs.
+-- ai_tune writes the vision-LLM nudged params (spec 03) instead of the
+-- analytical ones; the analytical pipeline still runs first, unchanged.
+local function export_invert_and_apply(keep_temp, ai_tune)
   dlog.log_level(dlog.info)
   math.randomseed(os.time() + os.clock() * 1000)
 
@@ -775,7 +779,7 @@ local function export_invert_and_apply(keep_temp)
     return
   end
 
-  local nega_results, filename_to_image, export_dir, vignette = export_and_detect(images, false)
+  local nega_results, filename_to_image, export_dir, vignette = export_and_detect(images, false, ai_tune)
   if not nega_results then
     return
   end
@@ -868,11 +872,15 @@ local function destroy()
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Debug")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_InPlace")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_InPlace_KeepTemp")
+    dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_Debug")
+    dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_InPlace")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Remove")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoNegadoctor_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_InPlace", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_InPlace_KeepTemp", "shortcut")
+    pcall(dt.destroy_event, "AutoNegadoctor_AI_Debug", "shortcut")
+    pcall(dt.destroy_event, "AutoNegadoctor_AI_InPlace", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_Remove", "shortcut")
 end
 
@@ -919,6 +927,38 @@ dt.register_event(
     "shortcut",
     function(event, shortcut) export_invert_and_apply(true) end,
     "AutoNegadoctor_InPlace_KeepTemp"
+)
+
+-- Spec 03: AI debug — same as Debug, plus the vision-LLM (gemma3/Ollama)
+-- alternate variant in the session; switch Analytical<->AI in the UI with key A.
+dt.gui.libs.image.register_action(
+    "AutoNegadoctor_AI_Debug",
+    _("Auto negadoctor AI debug (vision-LLM variant, open debug UI)"),
+    function() export_and_invert_debug(true) end,
+    _("Like the debug action, but also computes the vision-LLM per-scene variant for A/B comparison (slower)")
+)
+
+dt.register_event(
+    "AutoNegadoctor_AI_Debug",
+    "shortcut",
+    function(event, shortcut) export_and_invert_debug(true) end,
+    "AutoNegadoctor_AI_Debug"
+)
+
+-- Spec 03: AI in-place — writes the vision-LLM nudged params into the XMPs.
+-- The full analytical pipeline still runs first; AI only nudges the result.
+dt.gui.libs.image.register_action(
+    "AutoNegadoctor_AI_InPlace",
+    _("Auto negadoctor AI in-place (vision-LLM variant)"),
+    function() export_invert_and_apply(false, true) end,
+    _("Export, analyze, then apply the vision-LLM per-scene tuned params (gemma3/Ollama) to the XMPs")
+)
+
+dt.register_event(
+    "AutoNegadoctor_AI_InPlace",
+    "shortcut",
+    function(event, shortcut) export_invert_and_apply(false, true) end,
+    "AutoNegadoctor_AI_InPlace"
 )
 
 -- Mode 4: remove negadoctor from history (clean slate for re-runs)

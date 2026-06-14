@@ -19,12 +19,54 @@ print_linear/exposure = 0.1 and the densest to print_linear = 0.96.
 """
 
 import math
+import os
 import struct
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 # darktable negadoctor THRESHOLD (2^-32)
 THR = 2.3283064365386963e-10
+
+# The forward model and the sRGB OETF are per-PIXEL (every row independent) and
+# spend their time in GIL-releasing numpy ufuncs (log10/power/exp), so splitting
+# a large frame across threads gives a near-linear speedup with BIT-IDENTICAL
+# output. Small arrays (e.g. thumbnails, single patches) run inline — the thread
+# pool overhead would outweigh the work.
+_PARALLEL_MAX_WORKERS = min(8, os.cpu_count() or 1)
+_PARALLEL_MIN_ELEMS = 400_000
+_POOL_PREFIX = "nega-render"
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    """Lazily-created persistent worker pool (avoids per-call thread spawn)."""
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadPoolExecutor(max_workers=_PARALLEL_MAX_WORKERS,
+                                           thread_name_prefix=_POOL_PREFIX)
+    return _pool
+
+
+def _parallel_rows(fn, arr):
+    """Apply a row-independent array fn to `arr` over axis-0 chunks in parallel.
+
+    Result is identical to ``fn(arr)`` (same dtype/values); only the work is
+    split across threads when the array is large enough to be worth it. Calls
+    made from WITHIN a pool worker run inline, so nested uses (e.g. the fused
+    display path calling render + sRGB) never re-dispatch or deadlock."""
+    n = arr.shape[0]
+    if (_PARALLEL_MAX_WORKERS <= 1 or n < 2 or arr.size < _PARALLEL_MIN_ELEMS
+            or threading.current_thread().name.startswith(_POOL_PREFIX)):
+        return fn(arr)
+    workers = min(_PARALLEL_MAX_WORKERS, n)
+    chunks = np.array_split(arr, workers, axis=0)
+    parts = list(_get_pool().map(fn, chunks))
+    return np.concatenate(parts, axis=0)
 
 # Introspection ranges (clamps when emitting params)
 DMIN_RANGE = (1e-5, 1.5)
@@ -70,7 +112,12 @@ def srgb_to_linear(img):
 
 def linear_to_srgb(x):
     x = np.clip(np.asarray(x, dtype=np.float64), 0.0, 1.0)
-    return np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1.0 / 2.4) - 0.055)
+
+    def core(a):
+        return np.where(a <= 0.0031308, a * 12.92,
+                        1.055 * a ** (1.0 / 2.4) - 0.055)
+
+    return _parallel_rows(core, x) if x.ndim >= 2 else core(x)
 
 
 def linearize_export(img_u8_rgb):
@@ -127,17 +174,39 @@ def render_negadoctor(lin_rgb, params):
     wb_high_c = wb_high / d_max
     offset_c = wb_high * offset * wb_low
     black_c = -exposure * (1.0 + black)
-
-    log_density = np.log10(pix / dmin)          # = -log10(Dmin/pix)
-    corrected = wb_high_c * log_density + offset_c
-    print_linear = np.maximum(-(exposure * np.power(10.0, corrected) + black_c), 0.0)
-    print_gamma = np.power(print_linear, gamma)
-
-    # highlights roll-off above soft_clip
     soft_comp = 1.0 - soft_clip
-    over = print_gamma > soft_clip
-    rolled = soft_clip + (1.0 - np.exp(-(print_gamma - soft_clip) / soft_comp)) * soft_comp
-    return np.where(over, rolled, np.minimum(print_gamma, 1.0))
+
+    def core(p):
+        log_density = np.log10(p / dmin)          # = -log10(Dmin/pix)
+        corrected = wb_high_c * log_density + offset_c
+        print_linear = np.maximum(
+            -(exposure * np.power(10.0, corrected) + black_c), 0.0)
+        print_gamma = np.power(print_linear, gamma)
+        # highlights roll-off above soft_clip
+        over = print_gamma > soft_clip
+        rolled = soft_clip + (1.0 - np.exp(
+            -(print_gamma - soft_clip) / soft_comp)) * soft_comp
+        return np.where(over, rolled, np.minimum(print_gamma, 1.0))
+
+    # large frames are split across threads (bit-identical, just faster)
+    return _parallel_rows(core, pix) if pix.ndim >= 2 else core(pix)
+
+
+def render_negadoctor_srgb8(lin_rgb, params):
+    """Full display path: linear negative -> 8-bit sRGB image (H,W,3 uint8).
+
+    Exactly equivalent to
+        (linear_to_srgb(render_negadoctor(lin)) * 255 + 0.5).astype(uint8)
+    but FUSES the render + sRGB encode + quantize into ONE parallel pass (a
+    single split/concat over a persistent pool), which is the cheapest way to
+    feed the live debug-UI preview."""
+    arr = np.asarray(lin_rgb)
+
+    def core(chunk):
+        srgb = linear_to_srgb(render_negadoctor(chunk, params))
+        return (srgb * 255.0 + 0.5).astype(np.uint8)
+
+    return _parallel_rows(core, arr) if arr.ndim >= 2 else core(arr)
 
 
 # ---------------------------------------------------------------------------

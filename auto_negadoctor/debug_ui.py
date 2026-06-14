@@ -13,8 +13,9 @@ Built on the shared viewer base in common/debug_ui_base.py.
 Usage:
     python debug_ui.py <session_dir>
 
-Reads:  {session_dir}/{stem}_debug_nega.json   (per-frame session data)
-        {session_dir}/{stem}_inverted.jpg      (rendered inverted preview)
+Reads:  {session_dir}/{stem}_debug_nega.json   (per-frame session data;
+        the inverted preview + analysis-crop mask are rendered LIVE from the
+        source negative named in it — no baked image files)
 Writes: {session_dir}/{stem}_annotations.json  (auto-saved per image)
         {session_dir}/debug_report.txt          (on window close)
 
@@ -175,12 +176,17 @@ class ColorWheel:
     re-places the marker/pin from the remembered wb values."""
 
     MIN_SIZE = 90
+    # Ctrl-drag multiplies cursor movement by this, so the same hand motion
+    # makes a much smaller wb change (fine manual precision near neutral).
+    FINE_FACTOR = 0.18
+    _CTRL_MASK = 0x0004              # tk event.state bit for the Ctrl key
 
     def __init__(self, parent, kind, on_change, size=150, bg="#484848"):
         self.kind = kind                  # "low" or "high"
         self.on_change = on_change
         self._marker_wb = [1.0, 1.0, 1.0]
         self._auto_wb = None
+        self._last_xy = None              # cursor pos at the previous drag event
         self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0,
                                 cursor="crosshair")
         self.canvas.bind("<ButtonPress-1>", self._on_press)
@@ -265,11 +271,27 @@ class ColorWheel:
         self._marker_wb = wb              # remember so resize keeps the spot
         self.on_change(wb)
 
+    def _is_fine(self, event):
+        return bool(event.state & self._CTRL_MASK)
+
     def _on_press(self, event):
-        self._emit(event.x, event.y)
+        self._last_xy = (event.x, event.y)
+        # A plain click jumps the marker to the cursor; a Ctrl-click instead
+        # starts nudging from the marker's current spot (no jump), so fine
+        # tweaks don't lose the existing value the moment the button goes down.
+        if not self._is_fine(event):
+            self._emit(event.x, event.y)
 
     def _on_drag(self, event):
-        self._emit(event.x, event.y)
+        # Incremental: move the marker by the cursor delta since the last
+        # event, scaled down while Ctrl is held. Working from the (clamped)
+        # marker position rather than the absolute cursor keeps a plain drag
+        # 1:1 with the cursor and lets the fine factor toggle mid-drag.
+        lx, ly = self._last_xy if self._last_xy is not None else (event.x, event.y)
+        gain = self.FINE_FACTOR if self._is_fine(event) else 1.0
+        mx, my = self._marker_pos
+        self._last_xy = (event.x, event.y)
+        self._emit(mx + (event.x - lx) * gain, my + (event.y - ly) * gain)
 
 
 class NegadoctorDebugUI(DebugUIBase):
@@ -440,6 +462,52 @@ class NegadoctorDebugUI(DebugUIBase):
         self._neg_cache = lin
         return lin
 
+    def _invert_pil(self, lin, params):
+        """sRGB PIL inversion of a linear negative for the given params
+        (fused render + sRGB + quantize in one parallel pass)."""
+        return Image.fromarray(nm.render_negadoctor_srgb8(lin, params))
+
+    def _variant_params(self, img_dict):
+        """The active base-variant params (AI when selected, else analytical)."""
+        if self.variant == "ai" and img_dict.get("params_ai"):
+            return img_dict["params_ai"]
+        return img_dict.get("params")
+
+    def _load_display_pil(self, img_dict):
+        """Live analytical/AI inversion from the source negative — there is no
+        baked {stem}_inverted.jpg to fall back to."""
+        lin = self._neg_lin(img_dict)
+        params = self._variant_params(img_dict)
+        if lin is None or not params:
+            raise FileNotFoundError(
+                f"source negative unavailable for {img_dict.get('stem', '?')}")
+        return self._invert_pil(lin, params)
+
+    # render the negative downscaled to ~this many px on the long edge for
+    # thumbnails: render_negadoctor is ~0.5s at full 2000px but trivial once
+    # downscaled (the render, NOT the file read, is the thumbnail bottleneck),
+    # and the result is shrunk to ~210px by the caller anyway.
+    _THUMB_RENDER_MAX = 320
+
+    def _load_thumb_pil(self, img_dict):
+        """Background-thread thumbnail render. Loads the negative INDEPENDENTLY
+        (does not touch the single-slot _neg_lin cache the main thread owns)
+        and renders at thumbnail scale so it stays cheap."""
+        import auto_negadoctor
+        import cv2
+        path = img_dict.get("negative_path")
+        params = self._variant_params(img_dict)
+        if not path or not Path(path).exists() or not params:
+            raise FileNotFoundError("no source negative")
+        lin = auto_negadoctor.load_frame(path, img_dict.get("vignette"))[1]
+        h, w = lin.shape[:2]
+        longest = max(h, w)
+        if longest > self._THUMB_RENDER_MAX:
+            s = self._THUMB_RENDER_MAX / longest
+            lin = cv2.resize(lin, (max(1, round(w * s)), max(1, round(h * s))),
+                             interpolation=cv2.INTER_AREA)
+        return self._invert_pil(lin, params)
+
     def _neg_rgb_at(self, img_dict, rect):
         lin = self._neg_lin(img_dict)
         if lin is None or rect is None:
@@ -594,21 +662,21 @@ class NegadoctorDebugUI(DebugUIBase):
         # compare mode: show the algorithm's default render even when the
         # user has corrections (X toggles back and forth)
         params = None if self.compare_default else self._corrected_params(img_dict)
+        corrected = params is not None
         if params is None:
-            if self._live_rendered:
-                self._live_rendered = False
-                try:
-                    self._set_display_image(Image.open(img_dict["image_path"]))
-                except Exception:
-                    return
+            # No corrections: render the active variant's params live so the
+            # preview is ALWAYS a fresh algorithmic inversion (AI variant uses
+            # params_ai, otherwise the analytical params).
+            params = self._variant_params(img_dict)
+        lin = self._neg_lin(img_dict) if params else None
+        if lin is None or not params:
+            # nothing to render honestly (no source negative / no params) —
+            # leave the current display untouched, no baked-file fallback.
             return
-        lin = self._neg_lin(img_dict)
-        if lin is None:
-            return
-        out = nm.render_negadoctor(lin, params)
-        arr = (nm.linear_to_srgb(out) * 255.0 + 0.5).astype(np.uint8)
-        self._live_rendered = True
-        self._set_display_image(Image.fromarray(arr))
+        # the badge ("RE-RENDERED FROM CORRECTIONS") is only meaningful when the
+        # render came from user corrections, not the plain analytical/AI preview.
+        self._live_rendered = corrected
+        self._set_display_image(self._invert_pil(lin, params))
 
     # ------------------------------------------------------------------
     # Selection state
@@ -619,6 +687,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self.selected_patch = None
         self.view_negative = False
         self.compare_default = False
+        self.variant = "analytical"  # "analytical" | "ai"; PERSISTS across frames
         self.mask_view = 0           # 0=normal, 1=tint areas, 2=hide rejected
         self.show_histogram = True
         self._hist_data = None
@@ -650,6 +719,10 @@ class NegadoctorDebugUI(DebugUIBase):
             self._update_compare_btn()
 
     def update_counts(self):
+        # apply the persistent AI/analytical variant to this frame's params
+        # before anything reads them (wheels, info, items, live render)
+        self._apply_variant_to_current()
+        self._update_variant_btn()
         self._update_count_label()
         self._update_bad_btn()
         # capture the freshly loaded image as the undecorated display base
@@ -714,7 +787,8 @@ class NegadoctorDebugUI(DebugUIBase):
             "Shadows/highlights color\n"
             "wheels are in the right\n"
             "panel (set wb directly,\n"
-            "start at the auto value)."
+            "start at the auto value;\n"
+            "Ctrl-drag = fine tune)."
         ))
 
     def build_item_panel_footer(self, parent):
@@ -728,6 +802,8 @@ class NegadoctorDebugUI(DebugUIBase):
                  fg="#c0c0c0", font=("", 9, "bold")).pack(anchor="w")
         tk.Label(wrap, text="● gold pin = auto wb (divergence ref)",
                  bg="#484848", fg="#ffd700", font=("", 8)).pack(anchor="w")
+        tk.Label(wrap, text="drag = set · Ctrl-drag = fine tune",
+                 bg="#484848", fg="#9a9a9a", font=("", 8)).pack(anchor="w")
         self.wheels = {}
         self.wheel_readouts = {}
         for name in WB_NAMES:
@@ -773,6 +849,12 @@ class NegadoctorDebugUI(DebugUIBase):
                                      command=self._toggle_compare, **btn_cfg)
         self.compare_btn.pack(fill=tk.X, pady=1)
 
+        # spec 03: switch the render base between the analytical algorithm and
+        # the vision-LLM AI variant (only frames with params_ai have one)
+        self.variant_btn = tk.Button(btn_frame, text="Variant: Analytical  (A)",
+                                     command=self._toggle_variant, **btn_cfg)
+        self.variant_btn.pack(fill=tk.X, pady=1)
+
         self.mask_btn = tk.Button(btn_frame, text=MASK_VIEW_LABELS[0],
                                   command=self._cycle_mask_view, **btn_cfg)
         self.mask_btn.pack(fill=tk.X, pady=1)
@@ -801,6 +883,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<G>", lambda e: self._toggle_bad_inversion())
         self.bind_key("<x>", lambda e: self._toggle_compare())
         self.bind_key("<X>", lambda e: self._toggle_compare())
+        self.bind_key("<a>", lambda e: self._toggle_variant())
+        self.bind_key("<A>", lambda e: self._toggle_variant())
         self.bind_key("<m>", lambda e: self._cycle_mask_view())
         self.bind_key("<M>", lambda e: self._cycle_mask_view())
         self.bind_key("<t>", lambda e: self._toggle_histogram())
@@ -820,7 +904,20 @@ class NegadoctorDebugUI(DebugUIBase):
             lines.append(f"global base: {fb['global_winner_stem']}")
         if p:
             lines.append(f"Dmax={p['D_max']:.2f} blk={p['black']:.3f} "
-                         f"exp={p['exposure']:.3f}")
+                         f"exp={p['exposure']:.3f} g={p.get('gamma', 0):.2f}")
+        # spec 03: vision-LLM scene reading + AI-variant divergence
+        sc = img_dict.get("scene")
+        if sc:
+            lines.append(f"scene (LLM): {sc.get('scene')}/{sc.get('mood')}/"
+                         f"{sc.get('warmth')}/{sc.get('contrast')}")
+            if sc.get("rationale"):
+                lines.append(f"  “{sc['rationale']}”")
+        if img_dict.get("params_ai"):
+            mark = "→ AI variant ACTIVE (A)" if self.variant == "ai" else \
+                   "AI variant available (A)"
+            lines.append(mark)
+        elif self.variant == "ai":
+            lines.append("(no AI variant for this frame)")
         v = img_dict.get("vignette")
         if v:
             lines.append(f"vignette: s={v['strength']:.2f} r={v['radius']:.2f} "
@@ -889,7 +986,10 @@ class NegadoctorDebugUI(DebugUIBase):
                 self._set_display_image(Image.open(neg_path))
         else:
             self._live_rendered = False
-            self._set_display_image(Image.open(img_dict["image_path"]))
+            try:
+                self._set_display_image(self._load_display_pil(img_dict))
+            except Exception:
+                pass
             self._schedule_live_render(delay_ms=10)
         self._update_view_btn()
 
@@ -990,14 +1090,22 @@ class NegadoctorDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def _analysis_mask(self, img_dict):
-        """Per-pixel analysis mask (uint8 codes) for the frame, or None."""
+        """Per-pixel analysis mask (uint8 codes) for the frame, or None.
+
+        Computed LIVE from the detected content-crop border via the SAME
+        auto_negadoctor.build_analysis_mask the pipeline uses, so the crop
+        view always reflects the current algorithm — there is no baked
+        {stem}_analysis_mask.png."""
         if self._amask_cache_stem == img_dict["stem"]:
             return self._amask_cache
-        path = img_dict.get("analysis_mask_path")
         mask = None
-        if path and Path(path).exists():
+        border = img_dict.get("border")
+        w, h = img_dict.get("width"), img_dict.get("height")
+        if border is not None and w and h:
             try:
-                mask = np.asarray(Image.open(path))
+                import auto_negadoctor
+                mask = auto_negadoctor.build_analysis_mask(
+                    (int(h), int(w)), border)
             except Exception:
                 mask = None
         self._amask_cache_stem = img_dict["stem"]
@@ -1138,6 +1246,59 @@ class NegadoctorDebugUI(DebugUIBase):
                  else "Show Default  (X)")
         self.compare_btn.config(text=label,
                                 fg="#ffff88" if self.compare_default else "white")
+
+    # ------------------------------------------------------------------
+    # AI variant switch (spec 03)
+    # ------------------------------------------------------------------
+
+    def _frame_has_ai(self, img_dict=None):
+        img_dict = img_dict or self.images[self.current_idx]
+        return bool(img_dict.get("params_ai"))
+
+    def _apply_variant_to_current(self):
+        """Swap the active frame's render base ('params') to the chosen variant.
+        Everything (render, info, items, wheels, histogram) reads img_dict
+        ['params'], so this single swap makes the whole UI reflect the variant.
+        params_analytical / params_ai are preserved so the swap is reversible."""
+        img_dict = self.images[self.current_idx]
+        # ensure the analytical baseline is always available to restore from
+        img_dict.setdefault("params_analytical", img_dict.get("params"))
+        if self.variant == "ai" and img_dict.get("params_ai"):
+            base = img_dict["params_ai"]
+            base_hex = img_dict.get("params_ai_hex")
+        else:
+            base = img_dict.get("params_analytical")
+            base_hex = img_dict.get("params_hex")
+        if base is not None:
+            img_dict["params"] = base
+            if base_hex is not None:
+                img_dict["params_hex"] = base_hex
+
+    def _toggle_variant(self):
+        """A: flip the render base between the analytical algorithm and the
+        vision-LLM AI variant. No-op on frames without an AI variant."""
+        if not self._frame_has_ai():
+            self._set_info_text("No AI variant for this frame (run with "
+                                "--ai-tune / the AI action to compute one).")
+            return
+        self.variant = "ai" if self.variant == "analytical" else "analytical"
+        self._apply_variant_to_current()
+        self._update_variant_btn()
+        self._sync_wheels()
+        self._populate_items_list()
+        self._update_info_from_selection()
+        self._redraw_markers()
+        self._schedule_live_render(delay_ms=10)
+
+    def _update_variant_btn(self):
+        if not hasattr(self, "variant_btn"):
+            return
+        has_ai = self._frame_has_ai()
+        is_ai = self.variant == "ai" and has_ai
+        label = f"Variant: {'AI (LLM)' if is_ai else 'Analytical'}  (A)"
+        self.variant_btn.config(
+            text=label,
+            fg="#9fff9f" if is_ai else ("white" if has_ai else "#888888"))
 
     def _toggle_histogram(self):
         self.show_histogram = not self.show_histogram

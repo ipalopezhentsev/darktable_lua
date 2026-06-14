@@ -42,7 +42,7 @@ def main():
 
     # Write full sessions to a temp dir, then keep only the JSONs
     with tempfile.TemporaryDirectory(prefix="nega_baseline_") as tmp:
-        an.write_debug_sessions(frames, roll, tmp, save_vis=False)
+        an.write_debug_sessions(frames, roll, tmp)
         BASELINE_DIR.mkdir(exist_ok=True)
         for old in BASELINE_DIR.glob("*_debug_nega.json"):
             old.unlink()

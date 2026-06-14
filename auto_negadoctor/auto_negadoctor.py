@@ -6,7 +6,13 @@ negatives (negadoctor absent / disabled in the history). The export width is
 set Lua-side and analysis is resolution-independent (size-dependent constants
 are fractions of the frame dimension):
 
-    python auto_negadoctor.py [--debug-ui] [--no-vis] img1.tif img2.tif ...
+    python auto_negadoctor.py [--debug-ui] [--ai-tune] img1.tif ...
+
+--ai-tune (spec 03): after the full analytical pipeline, add an ALTERNATE
+per-scene variant nudged by a local vision LLM (gemma3 via Ollama; see
+scene_tuner.py) — applied params become the AI variant, and the debug session
+carries both for A/B switching. Off by default; the analytical path is
+unchanged.
 
 Input formats:
   - 16-bit TIFF in linear Rec2020 (what the Lua side exports; REQUIRED for
@@ -29,8 +35,9 @@ Pipeline (single pass, no darktable round-trip):
      using the patches' NEGATIVE-space colors, then black + exposure
   4. frames without usable neutral patches fall back to roll-median wb
   5. emit negadoctor_results.txt (params as ready 152-char hex blob) and,
-     for --debug-ui, per-frame {stem}_debug_nega.json sessions + inverted
-     previews, then launch debug_ui.py
+     for --debug-ui, per-frame {stem}_debug_nega.json sessions (the UI renders
+     the inverted preview + mask live from these — no baked images), then
+     launch debug_ui.py
 
 Results file format:
   OK|stem|params=<hex>
@@ -43,7 +50,9 @@ import os
 import statistics
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -58,6 +67,85 @@ except Exception:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nega_model as nm
+
+# --- batch parallelism -------------------------------------------------------
+# The per-frame analytical stages (film-base search, crop, percentiles, wb,
+# print tune) are independent and CPU/IO-bound, so they run frame-parallel.
+# Worker threads are NAMED with nega_model's pool prefix, which makes the
+# per-pixel render parallelism (render_negadoctor / linear_to_srgb) run INLINE
+# inside them — coarse frame-level parallelism instead of nested oversubscription.
+# Override the analytical width with NEGA_PROC_WORKERS. The AI/vision-LLM stage
+# is GPU-bound (Ollama) and shares one model + one JSON cache, so it stays at a
+# low default (NEGA_AI_WORKERS, default 1 = serial) to avoid thrashing the GPU.
+_PROC_WORKERS_ENV = int(os.environ.get("NEGA_PROC_WORKERS", "0"))
+_AI_WORKERS = max(1, int(os.environ.get("NEGA_AI_WORKERS", "1")))
+# Cache each frame's decoded (enc_f, lin) on its dict so the analytical stages
+# (A/B1/B2 + AI) share ONE TIFF decode instead of re-reading it per stage.
+# process_roll strips it before the dicts are serialized. Disable with
+# NEGA_FRAME_CACHE=0 to trade the speedup for a much smaller peak RSS (the cache
+# holds every frame's float buffers resident from stage A until the run ends).
+_FRAME_CACHE = os.environ.get("NEGA_FRAME_CACHE", "1") != "0"
+
+
+def _proc_workers(n):
+    if _PROC_WORKERS_ENV > 0:
+        return max(1, min(_PROC_WORKERS_ENV, n))
+    # The per-frame stages are MEMORY-BANDWIDTH bound (each streams several
+    # full-frame float64 buffers), so throughput plateaus around 8 threads and
+    # MORE workers just thrash the memory bus — measured knee on a 20-core box:
+    # 8w≈20s, 16w≈24s (worse), 20w≈19s. Cap at the knee; override with
+    # NEGA_PROC_WORKERS if your machine has more memory bandwidth.
+    return max(1, min((os.cpu_count() or 1), 8, n))
+
+
+def _get_loaded(fr):
+    """(enc_f, lin) for a frame — loaded once and reused across stages (all of
+    which call load_frame with the same vignette), unless NEGA_FRAME_CACHE=0."""
+    cached = fr.get("_loaded")
+    if cached is not None:
+        return cached
+    loaded = load_frame(fr["path"], fr.get("vignette"))
+    if _FRAME_CACHE:
+        fr["_loaded"] = loaded
+    return loaded
+
+
+class _Progress:
+    """Thread-safe running progress: each tick advances the shared counter and
+    reports the new total (out-of-order ticks are fine for the Lua bar)."""
+
+    def __init__(self, cb, total):
+        self._cb, self._total = cb, total
+        self._done, self._lock = 0, threading.Lock()
+
+    def tick(self, n=1):
+        if not self._cb:
+            return
+        with self._lock:
+            self._done += n
+            d = self._done
+        self._cb(d, self._total)
+
+
+def _map_frames(fn, items, workers, on_done=None):
+    """Apply fn to each item, order-preserving. Runs in a named thread pool
+    when workers > 1 (so nested pixel-render runs inline); else inline. fn must
+    be self-contained — it may mutate its OWN item but not shared state."""
+    results = [None] * len(items)
+    if workers <= 1 or len(items) <= 1:
+        for i, it in enumerate(items):
+            results[i] = fn(it)
+            if on_done:
+                on_done()
+        return results
+    with ThreadPoolExecutor(max_workers=workers,
+                            thread_name_prefix=nm._POOL_PREFIX) as ex:
+        futures = [ex.submit(fn, it) for it in items]
+        for i, fut in enumerate(futures):
+            results[i] = fut.result()
+            if on_done:
+                on_done()
+    return results
 
 # --- resolution independence -------------------------------------------------
 # Every size-dependent constant below is a RATIO of the frame dimension (a
@@ -743,10 +831,15 @@ def find_neutral_patch(preview, lin, enc_f, border, win, band_pct, kind,
     }
 
 
-def categorize_frame(lin, preview):
-    """Future hook: scene categorization (e.g. a local LLM judging day/night,
-    foliage-only frames, etc.) to steer wb fallback choices. v1: None."""
-    return None
+def categorize_frame(preview_srgb, cache_path=None, cache_key=None):
+    """Scene categorization hook (spec 03): a local vision LLM (gemma3 via
+    Ollama) judges the already-inverted preview to steer the per-scene param
+    nudge. Delegates to scene_tuner; returns the label dict or None on any
+    failure (the caller then keeps the analytical params). Only invoked on the
+    opt-in --ai-tune path."""
+    import scene_tuner
+    return scene_tuner.categorize_scene(preview_srgb, cache_path=cache_path,
+                                        cache_key=cache_key)
 
 
 # ---------------------------------------------------------------------------
@@ -821,7 +914,7 @@ def render_preview_srgb(lin, params):
     return (nm.linear_to_srgb(out) * 255.0 + 0.5).astype(np.uint8)
 
 
-def tune_print_params(lin, params, border, dmin):
+def tune_print_params(lin, params, border, dmin, hi_ceil=None):
     """Push brightness to the clip boundary (the user's process): exposure pins
     the high percentile (PRINT_HI_PCT) to the near-clip ceiling PRINT_HI_CEIL;
     when exposure SATURATES at its range end and the highlight is still off the
@@ -836,8 +929,13 @@ def tune_print_params(lin, params, border, dmin):
     masks). darktable's auto formulas anchor the curve endpoints in PRE-gamma
     space, which leaves full-range scans flat and dark; this closes the loop on
     the actual rendered output instead. Works on a subsampled frame.
+
+    hi_ceil overrides PRINT_HI_CEIL (the pin target); the AI scene-tuner
+    (scene_tuner.apply_scene_tuning) lowers it on dark/moody scenes so they
+    stay dark. The hard-clip guard is unconditional regardless of hi_ceil.
     Returns (tuned params, tuning info dict).
     """
+    ceil = PRINT_HI_CEIL if hi_ceil is None else hi_ceil
     l, t, r, b = border
     h, w = lin.shape[:2]
     s = max(1, int(round(w * PRINT_TUNE_SUBSAMPLE_FRAC)))
@@ -856,7 +954,7 @@ def tune_print_params(lin, params, border, dmin):
         hi = float(np.percentile(out.mean(axis=1), PRINT_HI_PCT))
         if hi > 1e-6:
             p["exposure"] = nm.clamp(
-                p["exposure"] * (PRINT_HI_CEIL / hi) ** (1.0 / gamma), ec)
+                p["exposure"] * (ceil / hi) ** (1.0 / gamma), ec)
         # when exposure is SATURATED (maxed and still below ceiling, or bottomed
         # and above it), black takes over to drive the highlight to the ceiling
         out = nm.render_negadoctor(content, p)
@@ -864,8 +962,8 @@ def tune_print_params(lin, params, border, dmin):
         info["hi"] = hi
         sat_hi = p["exposure"] >= ec[1] - 1e-6
         sat_lo = p["exposure"] <= ec[0] + 1e-6
-        if (sat_hi and hi < PRINT_HI_CEIL) or (sat_lo and hi > PRINT_HI_CEIL):
-            delta_pre = (PRINT_HI_CEIL ** (1.0 / gamma)
+        if (sat_hi and hi < ceil) or (sat_lo and hi > ceil):
+            delta_pre = (ceil ** (1.0 / gamma)
                          - max(hi, 1e-6) ** (1.0 / gamma))
             p["black"] = nm.clamp(p["black"] + delta_pre / max(p["exposure"], 1e-6),
                                   nm.BLACK_RANGE)
@@ -880,6 +978,67 @@ def tune_print_params(lin, params, border, dmin):
     return p, info
 
 
+def _downscale_for_llm(lin, max_side=512):
+    """Shrink a linear frame so its longest side is <= max_side (area-averaged),
+    for the LLM preview only. No-op if already small."""
+    h, w = lin.shape[:2]
+    scale = max_side / max(h, w)
+    if scale >= 1.0:
+        return lin
+    return cv2.resize(lin, (max(1, int(w * scale)), max(1, int(h * scale))),
+                      interpolation=cv2.INTER_AREA)
+
+
+def run_scene_tuning(frames, session_dir=None):
+    """Opt-in (--ai-tune) ALTERNATE variant: a local vision LLM reads each
+    frame's already-rendered inverted preview and nudges the analytical params
+    per scene (scene_tuner.apply_scene_tuning). Stores fr["scene"],
+    fr["params_ai"], fr["params_ai_hex"] WITHOUT touching the analytical
+    fr["params"]. Degrades silently to the analytical params per frame whenever
+    the LLM is unavailable. The cropping/vignette/film-base stages already ran."""
+    import scene_tuner
+    cache_path = (os.path.join(str(session_dir), "scene_cache.json")
+                  if session_dir else None)
+    print(f"AI scene tuning: vision LLM ({scene_tuner.OLLAMA_MODEL}) per frame "
+          f"(workers={_AI_WORKERS})...", flush=True)
+
+    # GPU-bound (one Ollama model) and the response cache is a whole-file
+    # read-modify-write, so this stays serial by default (NEGA_AI_WORKERS=1) —
+    # raising it past 1 only queues on the GPU and risks racing the cache.
+    def tune_one(fr):
+        if fr.get("error") or "params" not in fr:
+            return fr
+        try:
+            enc_f, lin = _get_loaded(fr)
+            # The LLM only needs a ~512px image (scene_tuner downscales to that
+            # anyway), so render the preview from a DOWNSCALED frame — rendering
+            # the full 2000px frame for the LLM is wasted CPU per frame.
+            llm_lin = _downscale_for_llm(lin)
+            preview = render_preview_srgb(llm_lin, fr["params"])
+            scene = categorize_frame(preview, cache_path=cache_path,
+                                     cache_key=fr["stem"])
+            fr["scene"] = scene
+            params_ai, info = scene_tuner.apply_scene_tuning(
+                fr["params"], scene, lin, fr["border"])
+            fr["params_ai"] = params_ai
+            fr["scene_tuning"] = info
+            fr["params_ai_hex"] = nm.encode_negadoctor_params(params_ai)
+            tag = (f"{scene['scene']}/{scene['mood']}/{scene['warmth']}/"
+                   f"{scene['contrast']}" if scene else "no-scene (analytical)")
+            print(f"  {fr['stem']}: {tag}", flush=True)
+        except Exception as e:
+            fr["scene"] = None
+            fr["scene_tuning"] = {"tuned": False, "error": str(e)}
+            # fall back to the analytical params for this frame
+            fr["params_ai"] = dict(fr["params"])
+            fr["params_ai_hex"] = fr["params_hex"]
+            print(f"  {fr['stem']}: AI tuning failed ({e}); using analytical",
+                  flush=True)
+        return fr
+
+    _map_frames(tune_one, frames, _AI_WORKERS)
+
+
 # ---------------------------------------------------------------------------
 # Roll processing
 # ---------------------------------------------------------------------------
@@ -889,19 +1048,15 @@ def estimate_vignette(image_paths, exif_by_stem):
 
     Returns (params dict {strength, radius, steepness} or None,
              info dict {residual, corner_falloff, bins, frames})."""
-    acc = None
-    shape = None
-    used = 0
-    for path in image_paths:
+    # Per-frame downsampled valid-luma map (the heavy load + border + luma work)
+    # is independent, so compute it frame-parallel; the np.maximum envelope fold
+    # is serial but cheap and stays in input order (first frame sets the shape).
+    def _vig_frame(path):
         try:
             enc_f, lin = load_frame(path)
         except Exception:
-            continue
+            return None
         h, w = lin.shape[:2]
-        if shape is None:
-            shape = (h, w)
-        elif (h, w) != shape:
-            continue
         stem = Path(path).stem
         exif = exif_by_stem.get(stem) or read_exif_fallback(path)
         factor, _missing = nm.exposure_factor(
@@ -914,12 +1069,26 @@ def estimate_vignette(image_paths, exif_by_stem):
         y0, y1 = t + vig_inset, h - b - vig_inset
         x0, x1 = l + vig_inset, w - r - vig_inset
         if y1 <= y0 or x1 <= x0:
-            continue
+            return None
         valid[y0:y1, x0:x1] = True
         if enc_f.max() > 0:   # 8/16-bit inputs: exclude clipped pixels
             valid &= ~(enc_f >= CLIP_SRGB_THR).any(axis=2)
         lum = np.where(valid, luma, -np.inf)
-        ds = lum[::vig_ds, ::vig_ds]
+        return (h, w), lum[::vig_ds, ::vig_ds]
+
+    paths = list(image_paths)
+    per_frame = _map_frames(_vig_frame, paths, _proc_workers(len(paths)))
+    acc = None
+    shape = None
+    used = 0
+    for item in per_frame:
+        if item is None:
+            continue
+        (h, w), ds = item
+        if shape is None:
+            shape = (h, w)
+        elif (h, w) != shape:
+            continue
         acc = ds if acc is None else np.maximum(acc, ds)
         used += 1
     if acc is None or used < 2:
@@ -1000,13 +1169,19 @@ def fit_vignette_profile(r_centers, envs, used=None):
 
 
 _VIG_FIELD_CACHE = {}
+_VIG_FIELD_LOCK = threading.Lock()
 
 
 def _vignette_field_cached(h, w, vig):
     key = (h, w, vig["strength"], vig["radius"], vig["steepness"])
-    if key not in _VIG_FIELD_CACHE:
-        _VIG_FIELD_CACHE[key] = nm.vignette_field(h, w, vig).astype(np.float32)
-    return _VIG_FIELD_CACHE[key]
+    # locked so the frame-parallel stages compute the (identical) field once
+    # instead of every worker racing to build the same big array
+    with _VIG_FIELD_LOCK:
+        field = _VIG_FIELD_CACHE.get(key)
+        if field is None:
+            field = nm.vignette_field(h, w, vig).astype(np.float32)
+            _VIG_FIELD_CACHE[key] = field
+    return field
 
 
 def load_frame(path, vignette=None):
@@ -1056,14 +1231,18 @@ def load_frame(path, vignette=None):
     return finish(enc_f, lin)
 
 
-def process_roll(image_paths, exif_by_stem, progress=None):
-    """Run the full analysis. Returns list of per-frame result dicts."""
-    n = len(image_paths)
-    frames = []
+def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
+                 session_dir=None):
+    """Run the full analysis. Returns list of per-frame result dicts.
 
-    def report(done):
-        if progress:
-            progress(done, 3 * n)
+    ai_tune: after the analytical params are computed, add a vision-LLM
+    per-scene nudge as an ALTERNATE variant (params_ai / params_ai_hex on each
+    frame; analytical params untouched). session_dir holds the LLM response
+    cache. See run_scene_tuning()."""
+    n = len(image_paths)
+    paths = list(image_paths)
+    workers = _proc_workers(n)
+    prog = _Progress(progress, 3 * n)
 
     # ---- Stage 0: roll-wide vignette estimation (uncorrected frames) ----
     vig, vig_info = estimate_vignette(image_paths, exif_by_stem)
@@ -1075,16 +1254,16 @@ def process_roll(image_paths, exif_by_stem, progress=None):
               f"manual vignette values")
     else:
         print(f"Vignette: none applied ({vig_info.get('reason', '?')})")
-    report(n)
+    prog.tick(n)
 
-    # ---- Stage A: per-frame film-base candidates + percentiles ----
-    for i, path in enumerate(image_paths):
+    # ---- Stage A: per-frame film-base candidates (frame-parallel) ----
+    def stage_a(path):
         stem = Path(path).stem
         fr = {"stem": stem, "path": str(path), "error": None, "base": None,
               "vignette": vig}
         t0 = time.perf_counter()
         try:
-            enc_f, lin = load_frame(path, vig)
+            enc_f, lin = _get_loaded(fr)
             h, w = lin.shape[:2]
             fr["width"], fr["height"] = int(w), int(h)
             # float TIFFs disable clip detection (enc_f all zeros); a 16-bit
@@ -1112,8 +1291,9 @@ def process_roll(image_paths, exif_by_stem, progress=None):
         except Exception as e:
             fr["error"] = str(e)
         fr["time_a"] = time.perf_counter() - t0
-        frames.append(fr)
-        report(n + i + 1)
+        return fr
+
+    frames = _map_frames(stage_a, paths, workers, on_done=prog.tick)
 
     # ---- Global film base ----
     good = [f for f in frames if not f["error"]]
@@ -1127,19 +1307,20 @@ def process_roll(image_paths, exif_by_stem, progress=None):
     if winner_stem is None:
         for fr in good:
             fr["error"] = "no film-base candidate found on any frame of the roll"
+        for fr in frames:
+            fr.pop("_loaded", None)
         return frames, None
     winner_rect = next(f["base"]["rect"] for f in good if f["stem"] == winner_stem)
     print(f"Global film base: {winner_stem} rect={winner_rect} "
           f"rgb={['%.4f' % v for v in winner_rgb]} factor={winner_factor:.5g}")
 
-    # ---- Stage B1: per-frame patches + wb ----
-    for i, fr in enumerate(frames):
+    # ---- Stage B1: per-frame patches + wb (frame-parallel) ----
+    def stage_b1(fr):
         if fr["error"]:
-            report(2 * n + i + 1)
-            continue
+            return fr
         t0 = time.perf_counter()
         try:
-            enc_f, lin = load_frame(fr["path"], vig)
+            enc_f, lin = _get_loaded(fr)
             dmin = dmin_for_frame(winner_rgb, winner_factor, fr["exposure_factor"])
             # the content crop replaces the stage-A dark-border trim as THE
             # analysis area for everything from here on. Crop detection runs
@@ -1217,7 +1398,9 @@ def process_roll(image_paths, exif_by_stem, progress=None):
         except Exception as e:
             fr["error"] = str(e)
         fr["time_b"] = time.perf_counter() - t0
-        report(2 * n + i + 1)
+        return fr
+
+    frames = _map_frames(stage_b1, frames, workers, on_done=prog.tick)
 
     # ---- Roll-median fallback for frames without usable patches ----
     lows = [fr["wb_low"] for fr in frames if not fr["error"] and fr.get("wb_low")]
@@ -1227,9 +1410,11 @@ def process_roll(image_paths, exif_by_stem, progress=None):
     median_high = ([statistics.median(v[c] for v in highs) for c in range(3)]
                    if highs else None)   # None -> per-frame bootstrap fallback
 
-    for fr in frames:
+    # per-frame wb fallback + print tune (the print tune renders the frame
+    # several times — heavy and independent, so it runs frame-parallel)
+    def stage_b2(fr):
         if fr["error"]:
-            continue
+            return fr
         fr["fallback_wb_low"] = fr.get("wb_low") is None
         fr["fallback_wb_high"] = fr.get("wb_high") is None
         if fr["fallback_wb_low"]:
@@ -1246,12 +1431,23 @@ def process_roll(image_paths, exif_by_stem, progress=None):
                                    fr["wb_low"], fr["wb_high"],
                                    fr["picked_min"], fr["picked_max"])
         try:
-            enc_f, lin = load_frame(fr["path"], fr.get("vignette"))
+            _enc_f, lin = _get_loaded(fr)
             fr["params"], fr["print_tuning"] = tune_print_params(
                 lin, fr["params"], fr["border"], fr["dmin"])
         except Exception as e:
             fr["print_tuning"] = {"tuned": False, "error": str(e)}
         fr["params_hex"] = nm.encode_negadoctor_params(fr["params"])
+        return fr
+
+    frames = _map_frames(stage_b2, frames, workers)
+
+    # ---- Stage C (opt-in): vision-LLM per-scene nudge (alternate variant) ----
+    if ai_tune:
+        run_scene_tuning(frames, session_dir)
+
+    # release the per-frame decode cache (large float buffers, not serializable)
+    for fr in frames:
+        fr.pop("_loaded", None)
 
     roll = {
         "winner_stem": winner_stem,
@@ -1274,7 +1470,10 @@ def fmt3(v):
     return ",".join(f"{x:.6f}" for x in v)
 
 
-def write_results(frames, roll, output_dir):
+def write_results(frames, roll, output_dir, ai_tune=False):
+    """Write negadoctor_results.txt. When ai_tune, the applied `params=` blob is
+    the AI variant (params_ai_hex) — that's what the AI Lua action writes into
+    the XMPs — and a DETAIL_AI line records the scene + analytical comparison."""
     path = os.path.join(str(output_dir), RESULTS_FILENAME)
     with open(path, "w", encoding="utf-8") as f:
         if roll and roll.get("vignette"):
@@ -1290,7 +1489,10 @@ def write_results(frames, roll, output_dir):
                 f.write(f"ERR|{fr['stem']}|{fr['error']}\n")
                 continue
             p = fr["params"]
-            f.write(f"OK|{fr['stem']}|params={fr['params_hex']}\n")
+            # AI mode applies the LLM-nudged variant; analytical otherwise
+            applied_hex = (fr.get("params_ai_hex") if ai_tune
+                           else None) or fr["params_hex"]
+            f.write(f"OK|{fr['stem']}|params={applied_hex}\n")
             fb = int(fr["fallback_wb_low"]) + 2 * int(fr["fallback_wb_high"])
             base_rect = fr["base"]["rect"] if fr["base"] else [-1, -1, 0, 0]
             f.write(
@@ -1303,11 +1505,22 @@ def write_results(frames, roll, output_dir):
                 f"|base_rect={','.join(str(v) for v in base_rect)}"
                 f"|fallback_wb={fb}\n"
             )
+            if ai_tune and fr.get("params_ai"):
+                pa = fr["params_ai"]
+                sc = fr.get("scene") or {}
+                tag = (f"{sc.get('scene')}/{sc.get('mood')}/{sc.get('warmth')}/"
+                       f"{sc.get('contrast')}" if sc else "none")
+                f.write(
+                    f"DETAIL_AI|{fr['stem']}|scene={tag}"
+                    f"|wb_low={fmt3(pa['wb_low'])}|wb_high={fmt3(pa['wb_high'])}"
+                    f"|black={pa['black']:.4f}|exposure={pa['exposure']:.4f}"
+                    f"|gamma={pa['gamma']:.4f}\n"
+                )
     print(f"\nResults written to: {path}")
     return path
 
 
-# Analysis-mask category codes ({stem}_analysis_mask.png, 8-bit):
+# Analysis-mask category codes (built live by the debug UI, 8-bit):
 MASK_USED = 0      # inside the content crop: used for ALL analysis
 MASK_BORDER = 2    # outside the content crop: disregarded entirely
 # (codes 1/3 were per-pixel holder/base masks in earlier versions; the
@@ -1327,9 +1540,13 @@ def build_analysis_mask(shape_hw, border):
     return mask
 
 
-def write_debug_sessions(frames, roll, output_dir, wall_time_s=None, save_vis=True):
-    """Write {stem}_debug_nega.json + {stem}_inverted.jpg + analysis mask
-    (+overlay) per frame."""
+def write_debug_sessions(frames, roll, output_dir, wall_time_s=None):
+    """Write {stem}_debug_nega.json per frame.
+
+    NO baked preview/mask images are emitted. The debug UI renders the
+    inversion and the analysis-crop mask LIVE from the source negative
+    (`negative_path`) plus these params/border, so what it shows is always
+    the honest output of the current algorithm, never a stale cached file."""
     constants = {k: v for k, v in globals().items()
                  if k.isupper() and isinstance(v, (int, float, tuple))}
     constants = {k: (list(v) if isinstance(v, tuple) else v)
@@ -1339,49 +1556,10 @@ def write_debug_sessions(frames, roll, output_dir, wall_time_s=None, save_vis=Tr
     for fr in frames:
         if fr["error"]:
             continue
-        enc_f, lin = load_frame(fr["path"], fr.get("vignette"))
-        preview = render_preview_srgb(lin, fr["params"])
-        inv_path = out_dir / f"{fr['stem']}_inverted.jpg"
-        cv2.imwrite(str(inv_path), cv2.cvtColor(preview, cv2.COLOR_RGB2BGR),
-                    [cv2.IMWRITE_JPEG_QUALITY, 92])
-
-        # analysis-area mask (audit the content-crop detection in the UI)
-        amask = build_analysis_mask(lin.shape[:2], fr["border"])
-        amask_path = out_dir / f"{fr['stem']}_analysis_mask.png"
-        cv2.imwrite(str(amask_path), amask)
-
-        if save_vis:
-            vis = cv2.cvtColor(preview, cv2.COLOR_RGB2BGR).copy()
-            # tint the rejected outside-crop area red (BGR)
-            sel = amask == MASK_BORDER
-            if sel.any():
-                vis[sel] = (vis[sel] * 0.55
-                            + np.array((60, 60, 255), dtype=np.float32) * 0.45
-                            ).astype(np.uint8)
-            def draw(rect, color, label):
-                if not rect or rect[0] < 0:
-                    return
-                x, y, w, h = rect
-                cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
-                cv2.putText(vis, label, (x, max(y - 4, 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
-            if fr["base"]:
-                draw(fr["base"]["rect"], (0, 165, 255), "base")
-            if roll and fr["stem"] == roll["winner_stem"]:
-                draw(roll["winner_rect"], (0, 215, 255), "GLOBAL")
-            if fr.get("shadow_patch"):
-                draw(fr["shadow_patch"]["rect"], (255, 255, 0), "shadows")
-            if fr.get("highlight_patch"):
-                draw(fr["highlight_patch"]["rect"], (255, 255, 255), "highlights")
-            cv2.imwrite(str(out_dir / f"{fr['stem']}_nega_overlay.jpg"), vis,
-                        [cv2.IMWRITE_JPEG_QUALITY, 85])
-
         is_winner = bool(roll and fr["stem"] == roll["winner_stem"])
         data = {
             "stem": fr["stem"],
-            "image_path": str(inv_path),
             "negative_path": fr["path"],
-            "analysis_mask_path": str(amask_path),
             "width": fr["width"],
             "height": fr["height"],
             "exif": fr["exif"],
@@ -1411,6 +1589,13 @@ def write_debug_sessions(frames, roll, output_dir, wall_time_s=None, save_vis=Tr
             "vignette_info": (roll or {}).get("vignette_info"),
             "params": fr["params"],
             "params_hex": fr["params_hex"],
+            # spec 03: alternate vision-LLM variant (present only with --ai-tune).
+            # The UI switches its render base between these (key A).
+            "params_analytical": fr["params"],
+            "params_ai": fr.get("params_ai"),
+            "params_ai_hex": fr.get("params_ai_hex"),
+            "scene": fr.get("scene"),
+            "scene_tuning": fr.get("scene_tuning"),
             "constants": constants,
             "processing_time_s": round(fr.get("time_a", 0) + fr.get("time_b", 0), 2),
         }
@@ -1447,11 +1632,12 @@ def load_debug_nega_dir(directory):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: auto_negadoctor.py [--debug-ui] [--no-vis] <image> [image2 ...]")
+        print("Usage: auto_negadoctor.py [--debug-ui] [--ai-tune] "
+              "<image> [image2 ...]")
         sys.exit(1)
 
     debug_ui = "--debug-ui" in sys.argv
-    save_vis = "--no-vis" not in sys.argv
+    ai_tune = "--ai-tune" in sys.argv
     image_paths = [a for a in sys.argv[1:] if not a.startswith("--")]
     for p in image_paths:
         if not os.path.exists(p):
@@ -1469,7 +1655,8 @@ def main():
         print(f"PROGRESS|{done}|{total}", flush=True)
 
     wall_t0 = time.perf_counter()
-    frames, roll = process_roll(image_paths, exif_by_stem, progress)
+    frames, roll = process_roll(image_paths, exif_by_stem, progress,
+                                ai_tune=ai_tune, session_dir=output_dir)
     wall_time = time.perf_counter() - wall_t0
 
     ok = sum(1 for f in frames if not f["error"])
@@ -1481,11 +1668,10 @@ def main():
         if fr["error"]:
             print(f"  ERR {fr['stem']}: {fr['error']}")
 
-    write_results(frames, roll, output_dir)
+    write_results(frames, roll, output_dir, ai_tune=ai_tune)
 
     if debug_ui and ok:
-        write_debug_sessions(frames, roll, output_dir,
-                             wall_time_s=wall_time, save_vis=save_vis)
+        write_debug_sessions(frames, roll, output_dir, wall_time_s=wall_time)
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
         print(f"Launching debug UI: {debug_ui_script}", flush=True)
         subprocess.Popen([sys.executable, str(debug_ui_script), str(output_dir)])

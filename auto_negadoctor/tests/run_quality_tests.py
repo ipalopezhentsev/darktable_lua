@@ -559,6 +559,111 @@ def selftest_ground_truth():
     print("Ground-truth checker self-test: OK")
 
 
+SCENE_LABELS_PATH = TESTS_DIR / "fixtures" / "scene_labels.json"
+# AI-variant gate (spec 03): scene_tuner nudges the analytical params toward the
+# user's per-scene aesthetic. The strict per-frame GT match (check_ground_truth)
+# stays RED by design (irreducible taste); this gate instead requires the AI
+# variant to be no WORSE than analytical on any param's aggregate median delta
+# (a regression guard for the scene_tuner calibration) and to stay clip-safe.
+AI_GT_REGRESS_EPS = 0.01   # per-param median delta the AI variant may grow by
+
+
+def _load_scene_labels():
+    """Committed LLM scene labels for the loaded roll (fixtures/scene_labels.json)
+    so the AI-variant gate runs offline without Ollama. Returns {stem: label} or
+    {} when missing / captured on a different roll."""
+    if not SCENE_LABELS_PATH.is_file():
+        return {}
+    data = json.loads(SCENE_LABELS_PATH.read_text())
+    loaded = _read_roll_id(IMAGES_TIF_DIR / "roll.txt")
+    if data.get("roll") and loaded and data["roll"] != loaded:
+        return {}
+    return data.get("labels", {})
+
+
+def check_ai_variant(frames):
+    """HARD gate for the spec-03 AI variant: build it with scene_tuner from the
+    committed scene labels and compare its ground-truth deltas to analytical.
+    FAILs only if the AI variant REGRESSES a param's aggregate median delta
+    (beyond AI_GT_REGRESS_EPS) or clips beyond CLIP_MAX_FRAC — i.e. it guards
+    that the scene tuning is a net improvement, while the strict per-frame match
+    remains the (red-by-design) check_ground_truth gate. Returns violations."""
+    import numpy as np
+    labels = _load_scene_labels()
+    gt_by_stem = _load_ground_truth()
+    if not labels or not gt_by_stem:
+        print("  (no committed scene labels / ground truth - AI gate skipped)")
+        return []
+    try:
+        import scene_tuner as st
+    except Exception as e:
+        print(f"  (scene_tuner unavailable: {e})")
+        return []
+    by_stem = {fr["stem"]: fr for fr in frames}
+    fields = [("wb_low", TOL_GT_WB), ("wb_high", TOL_GT_WB),
+              ("black", TOL_GT_BLACK), ("exposure", TOL_GT_EXPOSURE),
+              ("gamma", TOL_GT_GAMMA)]
+    agg = {f: {"ana": [], "ai": []} for f, _ in fields}
+    vio_ana = vio_ai = checked = 0
+    worst_clip = 0.0
+    for stem, gt in sorted(gt_by_stem.items()):
+        fr = by_stem.get(stem)
+        if fr is None or fr.get("error") or "params" not in fr or not fr.get("border"):
+            continue
+        scene = st._validate(labels[stem]) if labels.get(stem) else None
+        try:
+            enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
+        except Exception:
+            continue
+        ai, _ = st.apply_scene_tuning(fr["params"], scene, lin, fr["border"])
+        checked += 1
+        vio_ana += len(_ground_truth_violations(stem, fr["params"], gt)[0])
+        vio_ai += len(_ground_truth_violations(stem, ai, gt)[0])
+        l, t, r, b = fr["border"]
+        h, w = lin.shape[:2]
+        s = max(1, int(round(w * an.PRINT_TUNE_SUBSAMPLE_FRAC)))
+        region = lin[t:h - b:s, l:w - r:s].reshape(-1, 3)
+        if region.size:
+            out = nm.render_negadoctor(region, ai)
+            worst_clip = max(worst_clip,
+                             float(np.mean((out >= CLIP_OUT_THR).any(axis=1))))
+        for f, _tol in fields:
+            tgt = gt.get(f)
+            if tgt is None:
+                continue
+            if isinstance(tgt, list):
+                agg[f]["ana"] += [abs(fr["params"][f][c] - tgt[c]) for c in range(3)]
+                agg[f]["ai"] += [abs(ai[f][c] - tgt[c]) for c in range(3)]
+            else:
+                agg[f]["ana"].append(abs(fr["params"][f] - tgt))
+                agg[f]["ai"].append(abs(ai[f] - tgt))
+
+    def med(v):
+        return sorted(v)[len(v) // 2] if v else float("nan")
+
+    violations = []
+    print(f"  checked {checked} frame(s); strict GT violations: analytical "
+          f"{vio_ana} -> AI {vio_ai}")
+    print(f"  AI variant worst hard-clip {worst_clip:.2%} "
+          f"(limit {CLIP_MAX_FRAC:.0%})")
+    print("  aggregate abs delta vs GT (analytical -> AI; AI must not regress):")
+    for f, tol in fields:
+        a, i = agg[f]["ana"], agg[f]["ai"]
+        if not a:
+            continue
+        ma, mi = med(a), med(i)
+        tag = ("better" if mi < ma - 1e-9
+               else "worse" if mi > ma + 1e-9 else "same")
+        print(f"    {f:9s} {ma:.4f} -> {mi:.4f}  ({tag}, tol {tol}, n={len(a)})")
+        if mi > ma + AI_GT_REGRESS_EPS:
+            violations.append(
+                f"AI variant regressed {f}: median {ma:.4f} -> {mi:.4f}")
+    if worst_clip > CLIP_MAX_FRAC:
+        violations.append(
+            f"AI variant hard-clip {worst_clip:.2%} > {CLIP_MAX_FRAC:.0%}")
+    return violations
+
+
 def check_no_clipping(frames):
     """HARD gate the param ground-truth gate does NOT cover: render each frame's
     PRODUCTION params and flag any whose hard-clip fraction (pixels with any
@@ -650,6 +755,15 @@ def main():
         print(f"  VIOLATION: {v}")
 
     print()
+    print("--- AI variant (HARD gate: scene_tuner must improve, not regress, "
+          "vs analytical) ---")
+    ai_variant = check_ai_variant(frames)
+    for v in ai_variant:
+        print(f"  VIOLATION: {v}")
+    if not ai_variant:
+        print("  AI variant improves/holds every param and is clip-safe")
+
+    print()
     print("--- No clipping (HARD gate: production render must not blow out "
           "highlights) ---")
     clipping = check_no_clipping(frames)
@@ -688,7 +802,7 @@ def main():
 
     print()
     fail = (bool(violations) or bool(errors) or bool(containment)
-            or bool(ground_truth) or bool(clipping))
+            or bool(ground_truth) or bool(clipping) or bool(ai_variant))
     warn = False
     if compared:
         frac = diff_frames / compared

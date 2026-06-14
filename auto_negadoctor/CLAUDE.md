@@ -22,7 +22,33 @@
 3. Lua writes `exif_params.txt` (`stem|exposure=…|aperture=…|iso=…` per
    frame, locale-safe floats) for cross-frame exposure compensation.
 4. Lua calls `auto_negadoctor.py` via `conda run -n autocrop`. Python does
-   the WHOLE analysis in one pass — no darktable round-trip:
+   the WHOLE analysis in one pass — no darktable round-trip. **The per-frame
+   analytical stages run FRAME-PARALLEL** (`_map_frames`): vignette
+   accumulation, stage A (film-base search), stage B1 (crop/percentiles/wb),
+   and stage B2 (print tune) each fan out over `_proc_workers(n)` threads
+   (default `min(cpu, 8)`, override `NEGA_PROC_WORKERS`); the serial reductions
+   between them (global film base, roll-median wb) are cheap. **The per-frame
+   work is MEMORY-BANDWIDTH bound** (each frame streams several full-frame
+   float64 buffers — the prior-wb render, crop scan, patch searches), so
+   throughput plateaus ~8 threads and more workers just thrash the memory bus
+   (measured 20-core knee: 8w≈20s, 16w≈24s WORSE, 20w≈19s; CPU sits ~40% because
+   cores stall on RAM, not for lack of work). float32 was rejected: only ~1.2x
+   and it changed 20/37 frames' params. Real further speedup needs FEWER
+   full-frame passes, not more cores. Worker threads are
+   NAMED with `nega_model._POOL_PREFIX`, so the per-pixel render parallelism
+   (`render_negadoctor`/`linear_to_srgb`, which checks that prefix) runs INLINE
+   inside them — coarse frame-level parallelism, no nested thread oversubscription.
+   Output is bit-identical to serial (verified: params_hex match; ~3.7x on a
+   37-frame roll). Each frame's decoded `(enc_f, lin)` is cached on its dict by
+   `_get_loaded` so stages A/B1/B2 (+AI) share ONE TIFF decode instead of
+   re-reading it per stage; `process_roll` strips `_loaded` before the dicts are
+   serialized. The buffers stay resident from stage A to run end (~tens of MB ×
+   frames), so `NEGA_FRAME_CACHE=0` disables it for a smaller peak RSS on
+   big/high-res rolls. `_vignette_field_cached` is lock-guarded so workers don't
+   all rebuild the same field. The opt-in **AI/vision-LLM stage stays serial**
+   (`NEGA_AI_WORKERS`, default 1): it's GPU-bound (one Ollama model) and its
+   `scene_cache.json` is a whole-file read-modify-write, so concurrency would
+   only queue on the GPU and race the cache.
    - roll-wide **vignette estimation** (stage 0): lens + backlight/holder
      vignetting darkens corners of the negative (inverted: corners too
      bright, levels skewed). Nothing ON film is lighter than unexposed
@@ -191,14 +217,98 @@ self-consistent: lightest area prints at 0.1 pre-gamma, densest at 0.96).
   full pipeline, params written to XMPs, temp removed on success.
 - **AutoNegadoctor_InPlace_KeepTemp** (`export_invert_and_apply(true)`) —
   mode 3: same, temp folder kept for analysis.
+- **AutoNegadoctor_AI_Debug** (`export_and_invert_debug(true)`) — like Debug,
+  but also computes the spec-03 vision-LLM ALTERNATE variant (`--ai-tune`); the
+  debug UI switches Analytical↔AI with key **A**.
+- **AutoNegadoctor_AI_InPlace** (`export_invert_and_apply(false, true)`) — like
+  InPlace, but the params written to the XMPs are the vision-LLM nudged variant.
+  The full analytical pipeline still runs first, unchanged.
 - **AutoNegadoctor_Remove** (`remove_negadoctor_selected`) — strip all
   negadoctor entries from the selected frames' history (renumbers entries,
   fixes history_end) for a clean re-run after algorithm changes.
 
+### AI scene tuning (spec 03 — `scene_tuner.py`)
+
+An OPT-IN additive layer (`--ai-tune` flag / the two AI actions above) that
+nudges the FINAL analytical params toward the user's per-scene aesthetic — the
+"irreducible taste" residual (fog→soft gamma, forest→punch, museum→warm/dark)
+that pixel math can't reach. **It never touches cropping / vignette / film-base
+detection**; the analytical pipeline runs first and unchanged, and with AI off
+the output is byte-for-byte identical.
+
+- `categorize_scene()` POSTs the already-inverted preview (downscaled to ≤512px
+  JPEG, base64) to **Ollama** (`/api/generate`, default model `moondream`,
+  `format`=JSON schema) via stdlib urllib — NO new dependency. Returns
+  `{scene, mood, warmth, contrast, rationale}` over a fixed small label
+  vocabulary, or `None` on ANY failure (caller keeps analytical). Model/host/
+  context via `NEGA_OLLAMA_MODEL` / `NEGA_OLLAMA_HOST` / `NEGA_OLLAMA_NUM_CTX`.
+  Responses cached per model+stem+image-hash in `scene_cache.json` (cache key
+  includes the model, so switching models re-queries). **Speed (benchmarked on a
+  6GB RTX 3060 laptop)**: the bottleneck is the vision-encoder PREFILL per
+  distinct image, NOT generation. `gemma3:4b` prefills the SigLIP tower on CPU
+  (~14s/frame, ~30 tok/s); `moondream` does ~2.4s/frame (~6x) with comparably
+  varied labels, so it's the default. `llava-phi3` is also ~2.4s but its labels
+  were repetitive in benchmarking. `num_ctx=4096` (vs the 128k default) keeps the
+  model 100% GPU. NO `confidence` field — small models emit a stock value (not
+  real calibration), so it was dropped. The LLM preview is rendered from a
+  downscaled frame (`_downscale_for_llm`), not the full 2000px (image is fixed at
+  256 vision tokens regardless of input size, so smaller input doesn't help).
+- `apply_scene_tuning()` maps the labels via interpretable, hand-auditable
+  constants (NOT a learned model), **calibrated against the 2026-06-13 GT roll
+  (2026-06-14)**. The big GT gap turned out to be SYSTEMATIC, not per-scene
+  taste: analytical exposure ~0.25 too high and black ~0.16 too negative on
+  nearly every frame (the clip-boundary tuner vs the user's lower, lifted-black
+  print). So the AI variant **re-targets the print tune from inside scene_tuner**
+  (analytical path untouched): `AI_HI_CEIL` 0.72 (vs analytical `PRINT_HI_CEIL`
+  0.99) halves the exposure delta, `AI_BLACK_LIFT` +0.10 halves the black delta,
+  both clip-safe. On top, the LLM labels add only the residual: `SCENE_GAMMA`
+  (gamma keyed on the **scene** label — night/indoor higher grade, daylight/snow
+  lower; the `contrast` label was degenerate, 36/37 `soft`) and `MOOD_CEIL_BIAS`
+  (lowers the ceiling further on dark/moody). `CONTRAST_GAMMA` and `WARMTH_SHIFT`
+  are **kept but zeroed** — those labels carried no usable per-frame signal on
+  this roll (warmth even ran counter-intuitive to the GT wb cast), so any nonzero
+  value regressed the gate; re-enable on a roll where they discriminate. The
+  hard-clip guard inside `tune_print_params` (takes `hi_ceil`) plus a re-run
+  `_clip_guard` after the black lift keep **the AI variant clip-safe** (worst
+  ~0.23%) — gated by `tests/test_scene_tuner.py` and `check_ai_variant`.
+- `categorize_frame()` is the wired-up hook (was the `None` stub). The
+  `--ai-tune` pass (`run_scene_tuning`) stores `params_ai`/`params_ai_hex`/
+  `scene` alongside the untouched analytical `params`; `write_results` applies
+  the AI blob in the `OK|` line + a `DETAIL_AI|` line; the debug session JSON
+  carries both variants for the key-A A/B switch.
+- Calibrate the label→offset constants with
+  `tests/calibrate_scene_tuning.py` (offline, not a gate; needs Ollama): groups
+  the GT params by the LLM's labels, prints per-category medians (gamma by
+  **scene** now), and reports AI-vs-analytical GT-delta. The committed gate uses
+  `tests/fixtures/scene_labels.json` (the LLM's labels from the user's
+  `--ai-tune` run, stem-keyed, roll-scoped) so `check_ai_variant` reproduces
+  offline WITHOUT Ollama — re-capture it from a fresh run's `scene_cache.json`
+  when the prompt/model/vocabulary changes.
+- **Deferred (Phase 2, after 2 more annotated rolls) — learned taste-residual**:
+  the 2026-06-14 label-enrichment experiment (spec 03) established that the
+  remaining per-frame gamma/exposure error is IRREDUCIBLE darkroom taste, not a
+  labeling gap — even gemma3:12b, which labels the scene ACCURATELY (weather/
+  season/scene; moondream:1b hallucinates the same enriched prompt and is the
+  bottleneck), cannot predict the spread WITHIN ordinary scenes, and the LLM's
+  numeric self-ratings are stock values. So Phase 2 is a small regularized
+  model (ridge / GBT, sklearn) predicting the per-frame RESIDUAL
+  `GT − analytical` from gemma3:12b CATEGORICAL labels + analytical image
+  metrics, with leave-one-ROLL-out validation, deployed as a fast function (a
+  third "learned" variant). Full plan + milestones in spec 03; this roll's
+  gemma3:12b features are saved as
+  `tests/fixtures/scene_labels_gemma3_12b_enriched.json`. RL/from-scratch nets
+  stay infeasible at ~110 frames.
+
 ### Debug UI
 
 `NegadoctorDebugUI` (subclass of `common/debug_ui_base.py`) shows each frame
-ALREADY INVERTED ({stem}_inverted.jpg rendered by Python). Markers: local
+ALREADY INVERTED, rendered **live** from the source negative + the session's
+analytical/AI params (`_invert_pil`/`_load_display_pil`; the base class calls
+the `_load_display_pil`/`_load_thumb_pil` hooks instead of opening a file).
+There are **no baked preview/mask/overlay images** — `write_debug_sessions`
+emits only `{stem}_debug_nega.json`, and the UI renders the inversion and the
+analysis-crop mask on the fly, so what you see is always the honest output of
+the current algorithm. Markers: local
 film base (orange), GLOBAL winner (gold, double box; other frames carry a
 badge naming the winner), shadows patch (cyan), highlights patch (white),
 corrections (dashed green). **Crop correction (key 8)**: drag a rubber-band
@@ -211,9 +321,9 @@ INSIDE the crop (full production chain), the hide-rejected view and
 histogram use it as authoritative, and the report/quality suite show
 user-crop vs auto border rect as the crop-tuning signal. **M cycles the
 analysis-crop view**: normal → red tint on the rejected outside-crop area
-(from `{stem}_analysis_mask.png`) → frame with the rejected area blanked
-out — for auditing the content-crop detection; the same tint goes onto
-`{stem}_nega_overlay.jpg`. The mask view PERSISTS across image navigation
+(mask computed live from the detected `border` via
+`auto_negadoctor.build_analysis_mask`) → frame with the rejected area blanked
+out — for auditing the content-crop detection. The mask view PERSISTS across image navigation
 (roll review workflow), and while it is active any rubber-band drag defines
 the crop even without selecting "crop" first (an earlier session lost the
 user's crop because the drag was silently ignored in this mode). A small **RGB histogram** of
@@ -310,8 +420,13 @@ behavior (and self-test non-trivial checkers).
   self-tested: production wb_low/wb_high/black/exposure/gamma must match the
   wheel/print annotations within strict tolerances `TOL_GT_*`; per-stem
   field-level last-writer-wins across sessions; prints a per-param aggregate
-  median/max-delta dashboard — currently FAILS by design until the algorithm is
-  tuned to the 2026-06-13 ground truth) + baseline diff vs
+  median/max-delta dashboard — FAILS by design: the strict per-frame gate is
+  irreducible taste, NOT a tuning bug, so this stays RED) + **AI-variant HARD
+  gate** (`check_ai_variant`: builds the spec-03 scene_tuner variant from the
+  committed `fixtures/scene_labels.json` and FAILs only if it REGRESSES any
+  param's aggregate median vs analytical or clips beyond `CLIP_MAX_FRAC` — a
+  net-improvement guard that is currently GREEN; prints the analytical→AI
+  dashboard) + baseline diff vs
   `tests/baseline_session/` (params, film-base location, shadows/highlights
   patch positions AND sizes).
 - `tests/generate_baseline.py` — regenerate baseline ONLY after the user
@@ -330,6 +445,16 @@ behavior (and self-test non-trivial checkers).
   leading bins are the flat centre plateau, not a corner leak. Roll 2511-12-1
   now fits 0.25/0.125/0.825 (~29% falloff). Plus a synthetic corner-leak case
   proving the OUTER tail is still cut.
+- `tests/test_scene_tuner.py` — pure-math + MOCKED-LLM (no network) gate for
+  the spec-03 AI layer: `apply_scene_tuning` keeps gamma in the GT range,
+  re-normalizes wb, mood ordering (moody ≤ bright midtone), and **the AI
+  variant never clips more than `PRINT_CLIP_BUDGET`** across all mood×contrast;
+  plus `categorize_scene` returns None when Ollama is unreachable and honours a
+  pre-populated cache without a network call.
+- `tests/calibrate_scene_tuning.py` — OFFLINE calibration helper (NOT a gate;
+  needs local TIFFs + Ollama): groups the GT params by the LLM's labels, prints
+  per-category medians to set `scene_tuner` constants, and reports AI-vs-
+  analytical GT-delta. Caches in `tests/fixtures/scene_cache.json`.
 - `tests/test_resolution_invariance.py` — guardrail against reintroducing
   absolute-pixel constants: runs the detectors on a synthetic frame at W and an
   exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).
@@ -392,8 +517,21 @@ behavior (and self-test non-trivial checkers).
       aesthetic intent, not derivable — see the convergence TODO above.
       soft_clip stays at 0.75. (The old WB_PRIOR_WEIGHT taste-prior blend was
       removed in the 2026-06-13 wb rebuild; wb is now region-cast based.)
-- [ ] LLM scene categorization hook (`categorize_frame()`) for wb fallback
-      on gray-less frames (all-green foliage etc.).
+- [x] LLM scene categorization hook (`categorize_frame()`) — IMPLEMENTED
+      (spec 03, `scene_tuner.py`, moondream via Ollama). Wired as an opt-in
+      ALTERNATE variant (`--ai-tune` / AI_Debug / AI_InPlace actions, debug-UI
+      key A), nudging gamma/wb-warmth/brightness per scene. Analytical path
+      unchanged.
+- [x] Calibrate the scene_tuner label→offset table against the 2026-06-13 GT
+      roll (2026-06-14, spec 03 "Calibration pass"). Finding: the LLM labels are
+      degenerate (36/37 `soft`, 25/37 `forest`), so the big GT gap is the
+      SYSTEMATIC exposure/black bias, not per-scene taste → AI variant re-targets
+      the print tune (`AI_HI_CEIL` 0.72, `AI_BLACK_LIFT` +0.10) halving both
+      deltas, clip-safe; gamma moved to `SCENE_GAMMA` (scene-keyed); degenerate
+      `CONTRAST_GAMMA`/`WARMTH_SHIFT` zeroed. Guarded by `check_ai_variant`
+      (net-improvement gate, green) using `fixtures/scene_labels.json`. The
+      strict per-frame `check_ground_truth` stays RED by design. FOLLOW-UP for
+      better per-frame match: a stronger vision model / enriched prompt+vocab.
 - [ ] Live darktable re-verify after the bpp=32 switch: Debug mode, then
       InPlace KeepTemp, check darkroom result, Remove, re-run; confirm
       history doesn't grow on re-apply.
