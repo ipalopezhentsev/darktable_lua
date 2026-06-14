@@ -1,0 +1,34 @@
+{
+  "stem": "DSC_0020",
+  "patch_corrections": {},
+  "print_overrides": {},
+  "wb_overrides": {
+    "highlights": {
+      "applied": [
+        1.877485183016216,
+        1.3144885297523703,
+        1.0
+      ],
+      "corrected": [
+        1.5069234804478022,
+        1.1918964451036935,
+        1.0
+      ]
+    },
+    "shadows": {
+      "applied": [
+        0.7926380071894048,
+        0.7442503351283185,
+        1.0
+      ],
+      "corrected": [
+        0.8383560771899733,
+        1.0,
+        0.900029792008719
+      ]
+    }
+  },
+  "patch_notes": {},
+  "bad_inversion": false,
+  "bad_inversion_note": ""
+}
