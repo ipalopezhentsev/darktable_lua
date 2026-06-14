@@ -2,9 +2,10 @@
 
 NOT a CI gate (needs local TIFFs + a running Ollama; the LLM is slow). It:
 
-  1. runs the analytical pipeline on tests/images_tif (the GT roll),
+  1. runs the analytical pipeline on the first annotated roll under
+     tests/fixtures/rolls/ (the GT roll),
   2. categorizes each frame with the vision LLM (gemma3 via Ollama), caching
-     responses in tests/fixtures/scene_cache.json so re-runs are instant and
+     responses in that roll's scene_cache.json so re-runs are instant and
      reproducible (commit that file as a fixture),
   3. groups the user's GROUND-TRUTH params (run_quality_tests._load_ground_truth)
      by the LLM's labels and prints per-category medians — the numbers to set
@@ -29,30 +30,32 @@ import nega_model as nm
 import scene_tuner as st
 import run_quality_tests as rqt
 
-CACHE_PATH = TESTS_DIR / "fixtures" / "scene_cache.json"
-
-
 def _median(vals):
     return statistics.median(vals) if vals else None
 
 
 def main():
-    images, exif = rqt.list_test_images()
-    if not images or not str(images[0]).lower().endswith((".tif", ".tiff")):
-        print("SKIP: needs the local linear-Rec2020 TIFF roll in "
-              "tests/images_tif (see images_tif/README.md).")
+    rolls = rqt.discover_rolls()
+    if not rolls:
+        print("SKIP: needs a local linear-Rec2020 TIFF roll under "
+              "tests/fixtures/rolls/ (see fixtures/rolls/README.md).")
         return 0
+    roll_info = rolls[0]
+    images, exif, fixtures = (roll_info["images"], roll_info["exif"],
+                              roll_info["fixtures"])
+    cache_path = roll_info["dir"] / "scene_cache.json"
 
-    print(f"Analytical pipeline over {len(images)} frame(s)...")
+    print(f"Roll {roll_info['id']}: analytical pipeline over "
+          f"{len(images)} frame(s)...")
     frames, roll = an.process_roll(images, exif)
     by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
 
-    print(f"Categorizing with {st.OLLAMA_MODEL} (cache: {CACHE_PATH.name})...")
+    print(f"Categorizing with {st.OLLAMA_MODEL} (cache: {cache_path.name})...")
     scenes = {}
     for stem, fr in by_stem.items():
         enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
         preview = an.render_preview_srgb(lin, fr["params"])
-        sc = st.categorize_scene(preview, cache_path=str(CACHE_PATH),
+        sc = st.categorize_scene(preview, cache_path=str(cache_path),
                                  cache_key=stem)
         scenes[stem] = sc
         fr["_lin"] = lin
@@ -62,7 +65,7 @@ def main():
         else:
             print(f"  {stem}: (no scene)")
 
-    gt_by_stem = rqt._load_ground_truth()
+    gt_by_stem = rqt._load_ground_truth(fixtures)
 
     # --- GT params grouped by LLM label -> table calibration numbers ---
     # gamma is keyed on SCENE (the contrast label was degenerate on the GT roll
@@ -135,9 +138,10 @@ def main():
     print("    NOT per-scene; sweep them (see the calib note in scene_tuner) to")
     print("    minimize the exposure/black deltas while staying clip-safe.")
     print("  Then re-run to confirm the AI deltas improve. The committed gate")
-    print("  (run_quality_tests.check_ai_variant) uses fixtures/scene_labels.json")
-    print("  so it reproduces offline; re-capture that from a fresh --ai-tune run")
-    print("  (scene_cache.json) when the prompt/model/vocabulary changes.")
+    print("  (run_quality_tests.check_ai_variant) uses the roll's own")
+    print("  scene_labels.json so it reproduces offline; re-capture that from a")
+    print("  fresh --ai-tune run (scene_cache.json) when the prompt/model/")
+    print("  vocabulary changes.")
     return 0
 
 

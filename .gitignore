@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 
 # Heavy analysis exports (32-bit float TIFFs, ~1.2GB at 2000px). NOT committed -
-# regenerate locally from darktable; see auto_negadoctor/tests/images_tif/README.md
-auto_negadoctor/tests/images_tif/*.tif
+# regenerate locally from darktable; see auto_negadoctor/tests/fixtures/rolls/README.md.
+# Each annotated roll keeps its TIFFs alongside its committed annotations.
+auto_negadoctor/tests/fixtures/rolls/**/*.tif

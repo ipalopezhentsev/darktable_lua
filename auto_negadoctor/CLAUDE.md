@@ -119,13 +119,15 @@
      current detector: 0 violations, over-trim medians 0/+12/+1/+1 px per
      edge, worst +37px). The film-base SEARCH is separate and may
      legitimately sample the rejected ring (base lives in gaps/rebate).
-     **Annotation fixtures are now ROLL-SCOPED** (stems collide across rolls —
-     every roll has a DSC_0013): each session folder and each images_tif carry
-     a `roll.txt`, and run_quality_tests' `_roll_fixtures()` only checks
-     sessions whose roll matches the loaded one (legacy data with no roll.txt
-     is always included). Reference roll = `2512-2601-1`; second roll =
-     `2510-11-1` (crop-correction fixtures, dormant until that roll's TIFFs are
-     in images_tif).
+     **Annotation fixtures are ROLL-SCOPED BY DIRECTORY** (stems collide across
+     rolls — every roll has a DSC_0013): each roll lives in its own
+     `tests/fixtures/rolls/<roll_id>/` folder holding its images
+     (gitignored TIFFs + `exif_params.txt`), its `scene_labels.json`, and its
+     annotation sessions, so `run_quality_tests.discover_rolls()` hands each
+     roll only its own fixtures (no `roll.txt` anymore — the roll id is the
+     folder name). Reference roll = `2512-2601-1`; second roll = `2510-11-1`
+     (crop-correction fixtures, dormant until that roll's TIFFs are repopulated
+     into its folder).
    - per frame: picker percentiles over everything inside the crop (P_LOW=2.0
      keeps the dense anchor robust to junk slivers), D_max from them, offset
      FIXED at -0.05 (darktable default; auto-offset degenerates on
@@ -280,8 +282,8 @@ the output is byte-for-byte identical.
   `tests/calibrate_scene_tuning.py` (offline, not a gate; needs Ollama): groups
   the GT params by the LLM's labels, prints per-category medians (gamma by
   **scene** now), and reports AI-vs-analytical GT-delta. The committed gate uses
-  `tests/fixtures/scene_labels.json` (the LLM's labels from the user's
-  `--ai-tune` run, stem-keyed, roll-scoped) so `check_ai_variant` reproduces
+  each roll's own `fixtures/rolls/<roll_id>/scene_labels.json` (the LLM's labels
+  from the user's `--ai-tune` run, stem-keyed) so `check_ai_variant` reproduces
   offline WITHOUT Ollama — re-capture it from a fresh run's `scene_cache.json`
   when the prompt/model/vocabulary changes.
 - **Deferred (Phase 2, after 2 more annotated rolls) — learned taste-residual**:
@@ -296,7 +298,8 @@ the output is byte-for-byte identical.
   metrics, with leave-one-ROLL-out validation, deployed as a fast function (a
   third "learned" variant). Full plan + milestones in spec 03; this roll's
   gemma3:12b features are saved as
-  `tests/fixtures/scene_labels_gemma3_12b_enriched.json`. RL/from-scratch nets
+  `fixtures/rolls/2512-2601-1/scene_labels_gemma3_12b_enriched.json`.
+  RL/from-scratch nets
   stay infeasible at ~110 frames.
 
 ### Debug UI
@@ -387,32 +390,31 @@ behavior (and self-test non-trivial checkers).
   etc.) as the manual sessions — the newer TIFF fixtures were exported from
   FRESH imports with different WB defaults, so manual-XMP comparison is only
   valid on the JPEGs. Don't "upgrade" this test to the TIFFs.
-- `tests/images_tif/` — linear-Rec2020 float TIFF exports: the
-  detection/regression fixture set. **NOT committed** (`*.tif` is
-  `.gitignore`d; ~1.2GB at 2000px, float doesn't compress) — kept locally and
-  regenerated from a darktable export (see `images_tif/README.md`); only
-  `exif_params.txt` is tracked. Detection is resolution-independent (size
-  constants are fractions of the frame), so any export width works; the local
-  set is currently the 2026-06-13 2000px roll.
-- `tests/fixtures/annotations/<session>/` — committed debug-UI annotation
-  files from the user's review sessions, organized in dated subfolders so
-  multiple sessions per stem coexist (2026-06-11_taste: patch/print
+- `tests/fixtures/rolls/<roll_id>/` — ONE folder per annotated roll, holding
+  EVERYTHING for that roll together (see `fixtures/rolls/README.md`): its
+  linear-Rec2020 float TIFF exports (**NOT committed** — `*.tif` is
+  `.gitignore`d, ~1.2GB/roll at 2000px, regenerated from the source raws), its
+  tracked `exif_params.txt` and `scene_labels.json`, and its annotation
+  session subfolders. The roll id is the folder name — **no `roll.txt`**.
+  Detection is resolution-independent (size constants are fractions of the
+  frame), so any export width works. Annotation sessions are dated subfolders
+  so multiple sessions per stem coexist (2026-06-11_taste: patch/print
   corrections; 2026-06-12_crop_roll: 15 hand-drawn content crops, third
   annotation round — the HARD-TRUTH set for crop containment;
   2026-06-13_wb_print_roll: the full 37-frame roll tuned with the shadows/
   highlights color wheels + print sliders — wheel-picked `wb_overrides`
   (wb_low/wb_high, normalized) and `print_overrides` (black/exposure/gamma),
   the HARD-TRUTH set for the wb/print ground-truth gate; `run_quality_tests`
-  also reports user-chosen vs applied wb as the tuning target). Crop/patch
-  rects are stored as **NORMALIZED fractions** of the frame (resolution-
-  independent); debug_ui.py normalizes on save / denormalizes on load (px
-  internally), and run_quality_tests denormalizes via `_rect_to_px`. The
-  containment check allows a 1px slack (`CROP_CONTAINMENT_ROUND_TOL`) for
-  cross-resolution denorm rounding — real over-includes are many px.
-  run_quality_tests reports detector status, user-rect wb vs applied wb and
-  user crop vs detected crop on those frames.
-- `tests/run_quality_tests.py` — prefers `images_tif/` (SKIPs with a
-  repopulate-from-darktable message when no local TIFFs); invariants (param
+  also reports user-chosen vs applied wb as the tuning target) or a flat set of
+  `*_annotations.json` (roll `2510-11-1`). Crop/patch rects are stored as
+  **NORMALIZED fractions** of the frame (resolution-independent); debug_ui.py
+  normalizes on save / denormalizes on load (px internally), and
+  run_quality_tests denormalizes via `_rect_to_px`. The containment check
+  allows a 1px slack (`CROP_CONTAINMENT_ROUND_TOL`) for cross-resolution denorm
+  rounding — real over-includes are many px.
+- `tests/run_quality_tests.py` — `discover_rolls()` ITERATES over every
+  `fixtures/rolls/<roll_id>/` that has local TIFFs (SKIPs with a
+  repopulate-from-darktable message when none); per roll: invariants (param
   ranges, wb normalization max(wb_low)=1 / min(wb_high)=1, Dmin orange
   ordering, exposure-ordering consistency Dmin_i/Dmin_j ≈ factor_i/factor_j,
   patches in bounds/outside border, hex round-trip; checker has a self-test)
@@ -423,12 +425,12 @@ behavior (and self-test non-trivial checkers).
   median/max-delta dashboard — FAILS by design: the strict per-frame gate is
   irreducible taste, NOT a tuning bug, so this stays RED) + **AI-variant HARD
   gate** (`check_ai_variant`: builds the spec-03 scene_tuner variant from the
-  committed `fixtures/scene_labels.json` and FAILs only if it REGRESSES any
+  roll's committed `scene_labels.json` and FAILs only if it REGRESSES any
   param's aggregate median vs analytical or clips beyond `CLIP_MAX_FRAC` — a
   net-improvement guard that is currently GREEN; prints the analytical→AI
   dashboard) + baseline diff vs
-  `tests/baseline_session/` (params, film-base location, shadows/highlights
-  patch positions AND sizes).
+  `tests/baseline_session/<roll_id>/` (per-roll; params, film-base location,
+  shadows/highlights patch positions AND sizes).
 - `tests/generate_baseline.py` — regenerate baseline ONLY after the user
   approves a debug-UI review.
 - `tests/smoke_debug_ui.py` — builds a 3-frame session in %TEMP% and drives
@@ -454,7 +456,8 @@ behavior (and self-test non-trivial checkers).
 - `tests/calibrate_scene_tuning.py` — OFFLINE calibration helper (NOT a gate;
   needs local TIFFs + Ollama): groups the GT params by the LLM's labels, prints
   per-category medians to set `scene_tuner` constants, and reports AI-vs-
-  analytical GT-delta. Caches in `tests/fixtures/scene_cache.json`.
+  analytical GT-delta. Runs the FIRST roll under `fixtures/rolls/` and caches in
+  that roll's `scene_cache.json`.
 - `tests/test_resolution_invariance.py` — guardrail against reintroducing
   absolute-pixel constants: runs the detectors on a synthetic frame at W and an
   exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).
@@ -462,9 +465,11 @@ behavior (and self-test non-trivial checkers).
 
 ## Known Bugs / TODOs
 
-- [x] TIFF fixtures repo weight — RESOLVED by decommitting: `tests/images_tif/
-      *.tif` is now `.gitignore`d (was ~284MB at 1000px, ~1.2GB at 2000px) and
-      regenerated locally from a darktable export (`images_tif/README.md`).
+- [x] TIFF fixtures repo weight — RESOLVED by decommitting:
+      `fixtures/rolls/**/*.tif` is `.gitignore`d (was ~284MB at 1000px, ~1.2GB
+      at 2000px) and regenerated locally from a darktable export
+      (`fixtures/rolls/README.md`). (Per-roll layout since 2026-06-14, replacing
+      the single `images_tif/` slot.)
 - [x] Resolution independence (2026-06-13): export width is a free knob (Lua
       `EXPORT_MAX_WIDTH`, set to 2000); every size-dependent detection constant
       is a fraction of the frame dimension (`*_FRAC`, applied as
@@ -479,7 +484,7 @@ behavior (and self-test non-trivial checkers).
       gray-world chroma + luma-floored uniformity + per-channel density
       guard; print auto-tune for normal brightness / max speculars.
 - [ ] Baseline still not generated — needs a user-approved debug-UI review
-      first (`generate_baseline.py`, runs on images_tif now).
+      first (`generate_baseline.py`, writes per-roll `baseline_session/<roll_id>/`).
 - [~] Converge to the 2026-06-13 wb/print ground truth — IN PROGRESS. Rebuilt
       wb (region-cast + gentle neutralization) + print tune (clip-boundary
       brightness push) + gamma 6.1. NOTE: the param gate (`check_ground_truth`)
@@ -529,7 +534,7 @@ behavior (and self-test non-trivial checkers).
       the print tune (`AI_HI_CEIL` 0.72, `AI_BLACK_LIFT` +0.10) halving both
       deltas, clip-safe; gamma moved to `SCENE_GAMMA` (scene-keyed); degenerate
       `CONTRAST_GAMMA`/`WARMTH_SHIFT` zeroed. Guarded by `check_ai_variant`
-      (net-improvement gate, green) using `fixtures/scene_labels.json`. The
+      (net-improvement gate, green) using the roll's `scene_labels.json`. The
       strict per-frame `check_ground_truth` stays RED by design. FOLLOW-UP for
       better per-frame match: a stronger vision model / enriched prompt+vocab.
 - [ ] Live darktable re-verify after the bpp=32 switch: Debug mode, then

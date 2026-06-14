@@ -1,7 +1,8 @@
 """Smoke driver for the negadoctor debug UI.
 
-Builds a throwaway session (3 frames from tests/images processed by the real
-pipeline) in %TEMP%, opens NegadoctorDebugUI on it, exercises navigation /
+Builds a throwaway session (3 frames from the first annotated roll under
+tests/fixtures/rolls/, processed by the real pipeline) in %TEMP%, opens
+NegadoctorDebugUI on it, exercises navigation /
 selection / corrections / view toggles programmatically, then closes the
 window (auto-saving annotations + debug_report.txt) and asserts the outputs.
 
@@ -24,16 +25,20 @@ import tkinter as tk
 TESTS_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 FEATURE_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(FEATURE_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 import auto_negadoctor as an
 import debug_ui as dbg
+import run_quality_tests as rqt
 
 
 def build_session():
     """Run the real pipeline on 3 test frames into a temp session dir.
-    Prefers the TIFF fixtures (real export format)."""
-    images = sorted((TESTS_DIR / "images_tif").glob("*.tif"))[:3] \
-        or sorted((TESTS_DIR / "images").glob("*.jpg"))[:3]
+    Uses the first annotated roll's TIFF exports (real export format)."""
+    rolls = rqt.discover_rolls()
+    roll = rolls[0] if rolls else None
+    images = ([Path(p) for p in roll["images"][:3]] if roll
+              else sorted((TESTS_DIR / "images").glob("*.jpg"))[:3])
     if not images:
         print("SMOKE SKIP: no test images")
         sys.exit(0)
@@ -43,8 +48,7 @@ def build_session():
         dst = session / img.name
         shutil.copy(img, dst)
         paths.append(str(dst))
-    exif_file = TESTS_DIR / "images_tif" / "exif_params.txt"
-    exif = an.parse_exif_params(str(exif_file)) if exif_file.exists() else {}
+    exif = roll["exif"] if roll else {}
     frames, roll = an.process_roll(paths, exif)
     an.write_results(frames, roll, session)
     an.write_debug_sessions(frames, roll, session, wall_time_s=1.0)

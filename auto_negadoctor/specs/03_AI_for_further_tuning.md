@@ -43,8 +43,9 @@ annotated; expose as a third selectable variant.
 ## Calibration pass against the 2026-06-13 GT roll (2026-06-14)
 
 Calibrated `scene_tuner` against the full 37-frame ground truth (the user's
-`--ai-tune` run; LLM labels frozen as `tests/fixtures/scene_labels.json` so the
-gate reproduces offline without Ollama). Key findings:
+`--ai-tune` run; LLM labels frozen as the roll's
+`fixtures/rolls/<roll_id>/scene_labels.json` so the gate reproduces offline
+without Ollama). Key findings:
 
 - **moondream's labels are degenerate on this roll**: 25/37 `forest`, 36/37
   `soft`, 32/37 `warmer`, ~31/37 `bright`. So the `contrast` and `warmth` axes
@@ -100,7 +101,8 @@ weather, free-text scene + numeric contrast/brightness/warmth) — re-querying a
 Decision (user): keep `moondream` as the live opt-in labeler (fast; the rich
 categories can't be used live anyway), and pursue the residual as a learned model
 (below). The accurate gemma3:12b labels for this roll are saved as
-`tests/fixtures/scene_labels_gemma3_12b_enriched.json` — offline FEATURES for it.
+`fixtures/rolls/2512-2601-1/scene_labels_gemma3_12b_enriched.json` — offline
+FEATURES for it.
 
 ## Phase-2 plan: learned per-frame taste-residual
 
