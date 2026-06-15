@@ -74,6 +74,22 @@ def run_roll(roll_info, write_baseline=False):
         print("  (no wb/print ground-truth annotations)")
         return
 
+    if write_baseline:
+        # Fast path: just the canonical gate medians (no per-frame dashboard /
+        # ceiling sweep, which are expensive at the high-res metric).
+        med, mn = rqt._histogram_match_medians(frames, fixtures)
+        if not med:
+            print("  (no renderable GT frames)")
+            return
+        out = dict(med, n=mn, bins=rqt.HIST_BINS,
+                   subsample_frac=rqt.HIST_SUBSAMPLE_FRAC, space="srgb_float",
+                   print_gamma=an.PRINT_GAMMA)
+        path = roll_info["dir"] / "histogram_baseline.json"
+        path.write_text(json.dumps(out, indent=2))
+        print(f"  WROTE baseline {path} (total {out['total']:.4f} "
+              f"hi999 {out['hi999']:.4f}, n={mn})")
+        return
+
     totals, lumas, colors, signed, tops_a, tops_b = [], [], [], [], [], []
     brighter_needed = 0   # frames where GT is brighter (algorithm too dark)
     sweep = {c: {"luma": [], "signed": [], "clip": []} for c in HI_CEIL_SWEEP}
@@ -143,18 +159,6 @@ def run_roll(roll_info, write_baseline=False):
               f"{_median(s['signed']):+8.4f} {_median(s['clip']):9.2%}{mark}")
     print(f"    best ceiling by luma EMD: {best:.2f} "
           f"(production PRINT_HI_CEIL = {an.PRINT_HI_CEIL})")
-
-    if write_baseline:
-        out = {
-            "total": _median(totals), "luma": _median(lumas),
-            "color": _median(colors), "clip_algo": _median(tops_a),
-            "clip_gt": _median(tops_b), "n": n, "bins": HIST_BINS,
-            "subsample_frac": an.PRINT_TUNE_SUBSAMPLE_FRAC,
-            "print_gamma": an.PRINT_GAMMA,
-        }
-        path = roll_info["dir"] / "histogram_baseline.json"
-        path.write_text(json.dumps(out, indent=2))
-        print(f"  WROTE baseline {path} (total {out['total']:.4f})")
 
 
 def main():

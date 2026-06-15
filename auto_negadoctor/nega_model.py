@@ -223,6 +223,22 @@ def render_negadoctor_srgb8(lin_rgb, params):
 # Rec.601 luma weights — "brightness" of an sRGB-encoded display pixel.
 _LUMA_W = np.array([0.299, 0.587, 0.114], dtype=np.float64)
 
+# Default bin count for the high-resolution FLOAT comparison ("14-bit", 2^14).
+# The render is compared as FLOAT (before the 8-bit display quantization), so
+# resolution is bounded by float precision + sample count, not by 256 levels —
+# this is what lets the metric see fine highlight structure (user request).
+HIST_BINS_14 = 1 << 14   # 16384
+
+
+def _hist_scale(img):
+    """(range_upper, value_max) for a histogram of `img`: integer images live on
+    [0,256)/255 (8-bit), float images on [0,1]/1.0. Lets the same EMD code
+    compare 8-bit OR full-precision float renders."""
+    a = np.asarray(img)
+    if np.issubdtype(a.dtype, np.integer):
+        return 256.0, 255.0
+    return 1.0, 1.0
+
 
 def _as_rgb_rows(img):
     """(N,3) or (H,W,3) uint8/float -> (N,3) float64 rows (first 3 channels)."""
@@ -230,9 +246,9 @@ def _as_rgb_rows(img):
     return a.reshape(-1, a.shape[-1])[:, :3].astype(np.float64)
 
 
-def _norm_hist(values, bins):
-    """Histogram of 8-bit-scale values over [0,256) normalized to sum 1."""
-    h, _ = np.histogram(values, bins=bins, range=(0.0, 256.0))
+def _norm_hist(values, bins, hi):
+    """Histogram of `values` over [0,hi) normalized to sum 1."""
+    h, _ = np.histogram(values, bins=bins, range=(0.0, hi))
     total = h.sum()
     if total <= 0:
         return np.full(bins, 1.0 / bins)
@@ -251,49 +267,73 @@ def cumhist_l1(h_a, h_b):
     return float(np.abs(ca - cb).sum() / len(ca))
 
 
-def rgb_histograms(srgb_u8, bins=64):
-    """Per-channel normalized histograms (list of 3) of an 8-bit sRGB image plus
-    the bright-clip mass (fraction of pixels whose max channel sits in the
-    display's top ~1%). Accepts (N,3) or (H,W,3)."""
-    rows = _as_rgb_rows(srgb_u8)
-    hists = [_norm_hist(rows[:, c], bins) for c in range(3)]
-    top = float(np.mean(rows.max(axis=1) >= 254.0)) if rows.size else 0.0
+def rgb_histograms(img, bins=64):
+    """Per-channel normalized histograms (list of 3) of an sRGB image (uint8 OR
+    float [0,1]) plus the bright-clip mass (fraction of pixels whose max channel
+    sits in the display's top ~0.4%). Accepts (N,3) or (H,W,3)."""
+    hi, vmax = _hist_scale(img)
+    rows = _as_rgb_rows(img)
+    hists = [_norm_hist(rows[:, c], bins, hi) for c in range(3)]
+    top = float(np.mean(rows.max(axis=1) >= 0.99608 * vmax)) if rows.size else 0.0
     return hists, top
 
 
-def histogram_distance(srgb_a, srgb_b, bins=64):
-    """Decomposed EMD between two rendered 8-bit sRGB outputs (A = the
-    algorithm's render, B = the ground-truth render). All terms are in [0,1]
-    tone units; smaller is closer.
+def histogram_distance(a, b, bins=64):
+    """Decomposed EMD between two rendered sRGB outputs (A = the algorithm's
+    render, B = the ground-truth render). Both must be the SAME representation:
+    uint8 (8-bit, range 256) or float [0,1] (full precision — pass this with a
+    large `bins`, e.g. HIST_BINS_14, for high-resolution highlight-sensitive
+    comparison). All terms are in [0,1] tone units; smaller is closer.
 
       total        mean per-channel EMD — the headline loss.
       per_channel  [dR, dG, dB] per-channel EMD.
       luma         EMD of the Rec.601 luma histogram — brightness + contrast +
-                   clip distribution (user goals 1 "bright midtones" + 2 "no
-                   clipping").
+                   clip distribution (goals 1 "bright midtones" + 2 "no clip").
       color        mean |dmean_channel - dmean_overall| — chroma-cast divergence
                    BEYOND the common brightness shift, i.e. shadow/highlight
-                   color balance (user goal 3). Pure color: a uniform exposure
-                   change leaves it ~0.
+                   color balance (goal 3). A uniform exposure change leaves it ~0.
       luma_signed  mean(luma B) - mean(luma A) in [0,1]; +ve => B brighter, so
                    the algorithm (A) renders too DARK vs the target.
-      top_a, top_b bright-clip mass of A and B (goal 2; A should not exceed B).
+      hi99/hi999/hi9999  signed luma percentile deltas (B - A) at P99 / P99.9 /
+                   P99.99 in [0,1] — the TOP-HIGHLIGHT placement/rolloff gap
+                   (user: "top highlights matter"). +ve => A's highlights too dim;
+                   -ve => A over-pushes the top toward white.
+      hi_color     chroma-cast divergence among the brightest ~1% of pixels —
+                   highlight color neutrality (goal 3, top end).
+      top_a, top_b near-white mass of A and B.
     """
-    ha, top_a = rgb_histograms(srgb_a, bins)
-    hb, top_b = rgb_histograms(srgb_b, bins)
+    hi, vmax = _hist_scale(a)
+    ha, top_a = rgb_histograms(a, bins)
+    hb, top_b = rgb_histograms(b, bins)
     per_channel = [cumhist_l1(ha[c], hb[c]) for c in range(3)]
 
-    ra = _as_rgb_rows(srgb_a)
-    rb = _as_rgb_rows(srgb_b)
+    ra = _as_rgb_rows(a)
+    rb = _as_rgb_rows(b)
     la, lb = ra @ _LUMA_W, rb @ _LUMA_W
-    luma = cumhist_l1(_norm_hist(la, bins), _norm_hist(lb, bins))
-    luma_signed = (float(lb.mean() - la.mean()) / 255.0
+    luma = cumhist_l1(_norm_hist(la, bins, hi), _norm_hist(lb, bins, hi))
+    luma_signed = (float(lb.mean() - la.mean()) / vmax
                    if la.size and lb.size else 0.0)
 
     # per-channel signed mean shift (B - A), and the common (overall) shift;
     # the residual after removing the common shift is the pure chroma cast.
-    d_chan = (rb.mean(axis=0) - ra.mean(axis=0)) / 255.0
+    d_chan = (rb.mean(axis=0) - ra.mean(axis=0)) / vmax
     color = float(np.mean(np.abs(d_chan - d_chan.mean())))
+
+    # top-highlight diagnostics: high luma percentiles + brightest-pixels color
+    def _pct(x, q):
+        return float(np.percentile(x, q)) / vmax if x.size else 0.0
+    hi99 = _pct(lb, 99.0) - _pct(la, 99.0)
+    hi999 = _pct(lb, 99.9) - _pct(la, 99.9)
+    hi9999 = _pct(lb, 99.99) - _pct(la, 99.99)
+
+    def _bright_chroma(rows, lum):
+        if rows.shape[0] < 100:
+            return np.zeros(3)
+        thr = np.percentile(lum, 99.0)
+        sel = rows[lum >= thr]
+        return sel.mean(axis=0) / vmax if sel.size else np.zeros(3)
+    hb_ = _bright_chroma(rb, lb) - _bright_chroma(ra, la)
+    hi_color = float(np.mean(np.abs(hb_ - hb_.mean())))
 
     return {
         "total": float(np.mean(per_channel)),
@@ -301,6 +341,8 @@ def histogram_distance(srgb_a, srgb_b, bins=64):
         "luma": luma,
         "color": color,
         "luma_signed": luma_signed,
+        "hi99": hi99, "hi999": hi999, "hi9999": hi9999,
+        "hi_color": hi_color,
         "top_a": top_a,
         "top_b": top_b,
     }

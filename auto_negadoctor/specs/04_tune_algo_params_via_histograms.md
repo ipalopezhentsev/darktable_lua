@@ -35,15 +35,25 @@ These are ground truths. You need to tune algorithm/hardcoded params so that the
 ## Implementation (2026-06-14)
 
 Ground-truth rolls used (all auto-discovered by `run_quality_tests.discover_rolls`):
-`2510-11-1`, `2511-12-1` (added during this work — 36 wb / 26 print GT frames),
-and `2512-2601-1/2026-06-13_wb_print_roll`.
+`2506-1`, `2510-11-1`, `2511-12-1`, and `2512-2601-1/2026-06-13_wb_print_roll`
+(2511-12-1 and 2506-1 were added during this work; 148 wb/print GT frames total).
 
-**Histogram = the loss.** `nega_model.histogram_distance(srgb_a, srgb_b)` computes
-the per-channel 1D Wasserstein/EMD between two rendered sRGB outputs over the
-content crop, decomposed into a **luma** term (brightness/clip — goals 1+2) and a
+**Histogram = the loss.** `nega_model.histogram_distance(a, b)` computes the
+per-channel 1D Wasserstein/EMD between two rendered sRGB outputs over the content
+crop, decomposed into a **luma** term (brightness/clip — goals 1+2) and a
 **color** term (chroma cast beyond the common brightness shift — goal 3, natural
-shadow/highlight balance), plus a signed-luma direction and a near-white mass.
-Pure math, unit-tested in `test_forward_model.py::test_histogram_distance`.
+shadow/highlight balance), plus a signed-luma direction, **top-highlight
+percentile deltas (hi999/hi9999) + a highlight-color term**, and a near-white
+mass. Pure math, unit-tested in `test_forward_model.py::test_histogram_distance`.
+
+**RESOLUTION (2nd pass, user feedback "you lack resolution / especially top
+highlights matter").** The first pass compared the **8-bit** sRGB render at 64
+bins — capped at 256 levels, structurally BLIND to the highlight shoulder. The
+metric now compares the **FLOAT render** (before display quantization) at
+**14-bit bins (16384)** with a **denser sample** (`HIST_SUBSAMPLE_FRAC` 0.001 vs
+the tuner's 0.003), so it resolves fine highlight structure (a unit test proves
+it sees a sub-8-bit shift the 8-bit metric misses). `check_histogram_match` also
+reports + guards the top-highlight percentile gap (`hi999`).
 
 **GT render reconstruction.** `run_quality_tests.gt_params_for_frame` copies the
 production params and overrides ONLY the annotated fields (wb_low/wb_high/black/
@@ -56,17 +66,26 @@ prints, per GT frame and aggregate, the prod-vs-GT histogram EMD + a verdict and
 `PRINT_HI_CEIL` sweep. `--write-baseline` writes each roll's committed
 `histogram_baseline.json`.
 
-**Finding (vindicates the spec's thesis).** The histogram showed the algorithm
-rendered too DARK — the OPPOSITE of the earlier param-based AI calibration, which
-compared param *numbers* and pushed exposure DOWN (the proxy trap this spec warns
-about). The brightness lever was NOT the highlight ceiling (`PRINT_HI_CEIL`
-already optimal at 0.99; `PRINT_HI_PCT` flat) but **gamma**: the steep
+**Finding 1 — gamma (1st pass, vindicates the spec's thesis).** The histogram
+showed the algorithm rendered too DARK — the OPPOSITE of the earlier param-based
+AI calibration, which compared param *numbers* and pushed exposure DOWN (the
+proxy trap this spec warns about). The lever was **gamma**: the steep
 `PRINT_GAMMA=6.1` (the GT *param* median) crushed midtones below the near-clip
-highlight pin. Lowering `PRINT_GAMMA` 6.1→**5.0** is the joint luma/total-EMD
-minimum across all three rolls (110 GT frames), clip-safe (<0.3% hard clip,
-`check_no_clipping` green), AI gate still green. The user reaches the same brighter
-picture via a different param combo (low exposure + strongly POSITIVE black + high
-gamma), so the param gate's gamma delta gets WORSE by design.
+highlight pin. `PRINT_GAMMA` 6.1→**5.0** (joint EMD minimum; 5.0–5.75 are within
+run-to-run noise, 5.0 best serves the worst-case dark roll 2510-11-1). The user
+reaches the same picture via a different param combo (low exposure + positive
+black + high gamma), so the param gate's gamma delta gets WORSE by design.
+
+**Finding 2 — highlight ceiling (2nd pass, after the resolution upgrade).** At
+8-bit the ceiling looked flat/unhelpful; the high-res highlight-aware metric
+revealed it is the DOMINANT lever for the top end. The tuner pinned P99.9 to 0.99,
+over-pushing the very top toward white where the GT sits LOWER. `PRINT_HI_CEIL`
+0.99→**0.97** cut the top-highlight gap (median |ΔP99.9|) ~33% (0.0162→0.0108)
+and total EMD ~16% (0.0599→0.0505) across all 4 rolls, centred overall brightness
+(signed luma −0.029→−0.002), clip-safe (<0.3%). `soft_clip` is NOT a lever — it
+cancels between the algorithm and GT renders (which share it, GT never annotates
+it). Both findings are clip-safe (`check_no_clipping` green) and leave the AI gate
+green. Re-derive with `calibrate_histogram_match.py` as rolls accrue.
 
 **Guard.** `run_quality_tests.check_histogram_match` is informational + a
 regression guard vs `histogram_baseline.json` (FAILs only on a median-total-EMD

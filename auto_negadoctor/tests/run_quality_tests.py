@@ -667,8 +667,15 @@ def check_ai_variant(frames, fixtures, roll):
 # committed histogram_baseline.json. TRUE clipping is gated separately by
 # check_no_clipping (0.999); the near-white masses printed here are a coarser
 # proxy and are informational only.
-HIST_BINS = 64
-HIST_REGRESS_EPS = 0.01   # median total EMD may grow this much over baseline
+# The comparison runs on the FLOAT render (before 8-bit display quantization) at
+# 14-bit bin resolution with a DENSER sample than the tuner, so the metric is
+# faithful to fine structure incl. the highlight shoulder (8-bit/64-bin capped us
+# at 256 levels and could not see highlights — user feedback). check_histogram_match
+# also reports the top-highlight percentile deltas (hi999/hi9999).
+HIST_BINS = nm.HIST_BINS_14          # 16384 (= "14-bit"), float comparison
+HIST_SUBSAMPLE_FRAC = 0.001          # metric stride frac (denser than the tuner)
+HIST_REGRESS_EPS = 0.01              # median total EMD may grow this much over baseline
+HIST_HL_REGRESS_EPS = 0.01           # median |hi999| highlight delta may grow this much
 
 
 def gt_params_for_frame(fr, gt):
@@ -689,16 +696,18 @@ def gt_params_for_frame(fr, gt):
     return p
 
 
-def _render_crop_rows(lin, border, params):
-    """Render params over the subsampled content crop -> (N,3) uint8 sRGB rows,
-    using the same stride the print tuner / no-clip gate use. None if empty."""
+def _render_crop_rows(lin, border, params, frac=None):
+    """Render params over the subsampled content crop -> (N,3) FLOAT sRGB rows
+    in [0,1] (NOT 8-bit — full precision so the histogram metric resolves fine
+    highlight structure). `frac` is the stride fraction (default the metric's
+    HIST_SUBSAMPLE_FRAC, denser than the tuner). None if empty."""
     l, t, r, b = border
     h, w = lin.shape[:2]
-    s = max(1, int(round(w * an.PRINT_TUNE_SUBSAMPLE_FRAC)))
+    s = max(1, int(round(w * (HIST_SUBSAMPLE_FRAC if frac is None else frac))))
     region = lin[t:h - b:s, l:w - r:s].reshape(-1, 3)
     if region.size == 0:
         return None
-    return nm.render_negadoctor_srgb8(region, params)
+    return nm.linear_to_srgb(nm.render_negadoctor(region, params))
 
 
 def _histogram_match_medians(frames, fixtures):
@@ -706,7 +715,8 @@ def _histogram_match_medians(frames, fixtures):
     roll's GT-annotated frames. Returns (medians, n) or (None, 0)."""
     gt_by_stem = _load_ground_truth(fixtures)
     by_stem = {fr["stem"]: fr for fr in frames}
-    tot, lum, col, ca, cb = [], [], [], [], []
+    acc = {k: [] for k in ("total", "luma", "color", "hi999", "hi9999",
+                           "hi_color", "clip_algo", "clip_gt")}
     for stem, gt in sorted(gt_by_stem.items()):
         fr = by_stem.get(stem)
         if not fr or fr.get("error") or "params" not in fr or not fr.get("border"):
@@ -715,31 +725,41 @@ def _histogram_match_medians(frames, fixtures):
             enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
         except Exception:
             continue
-        gt_u8 = _render_crop_rows(lin, fr["border"], gt_params_for_frame(fr, gt))
-        prod_u8 = _render_crop_rows(lin, fr["border"], fr["params"])
-        if gt_u8 is None or prod_u8 is None:
+        gt_f = _render_crop_rows(lin, fr["border"], gt_params_for_frame(fr, gt))
+        prod_f = _render_crop_rows(lin, fr["border"], fr["params"])
+        if gt_f is None or prod_f is None:
             continue
-        d = nm.histogram_distance(prod_u8, gt_u8, bins=HIST_BINS)
-        tot.append(d["total"]); lum.append(d["luma"]); col.append(d["color"])
-        ca.append(d["top_a"]); cb.append(d["top_b"])
-    if not tot:
+        d = nm.histogram_distance(prod_f, gt_f, bins=HIST_BINS)
+        for k in ("total", "luma", "color"):
+            acc[k].append(d[k])
+        # highlight placement: |signed delta| (magnitude of the top-end gap)
+        acc["hi999"].append(abs(d["hi999"]))
+        acc["hi9999"].append(abs(d["hi9999"]))
+        acc["hi_color"].append(d["hi_color"])
+        acc["clip_algo"].append(d["top_a"]); acc["clip_gt"].append(d["top_b"])
+    if not acc["total"]:
         return None, 0
 
     def med(v):
         return sorted(v)[len(v) // 2]
 
-    return ({"total": med(tot), "luma": med(lum), "color": med(col),
-             "clip_algo": med(ca), "clip_gt": med(cb)}, len(tot))
+    return ({k: med(v) for k, v in acc.items()}, len(acc["total"]))
 
 
 def _histogram_violations(med, baseline):
-    """Pure decision: FAIL only if the median total EMD regressed past the
-    committed baseline by more than HIST_REGRESS_EPS. (Clipping is gated by
-    check_no_clipping; near-white mass here is informational.)"""
+    """Pure decision: FAIL if the median total EMD regressed past the committed
+    baseline by more than HIST_REGRESS_EPS, or the median highlight-placement
+    delta (|hi999|) regressed past baseline by HIST_HL_REGRESS_EPS. (TRUE
+    clipping is gated by check_no_clipping; near-white mass here is
+    informational.)"""
     v = []
     if med["total"] > baseline["total"] + HIST_REGRESS_EPS:
         v.append(f"histogram total EMD regressed {baseline['total']:.4f} -> "
                  f"{med['total']:.4f} (> +{HIST_REGRESS_EPS})")
+    base_hl = baseline.get("hi999")
+    if base_hl is not None and med["hi999"] > base_hl + HIST_HL_REGRESS_EPS:
+        v.append(f"highlight |hi999| regressed {base_hl:.4f} -> "
+                 f"{med['hi999']:.4f} (> +{HIST_HL_REGRESS_EPS})")
     return v
 
 
@@ -764,8 +784,11 @@ def check_histogram_match(frames, fixtures, roll):
     if not med:
         print("  (no wb/print ground-truth annotations)")
         return []
-    print(f"  checked {n} frame(s); median EMD to GT render: total "
-          f"{med['total']:.4f}  luma {med['luma']:.4f}  color {med['color']:.4f}")
+    print(f"  checked {n} frame(s) (float 14-bit, stride {HIST_SUBSAMPLE_FRAC}); "
+          f"median EMD to GT: total {med['total']:.4f}  luma {med['luma']:.4f}  "
+          f"color {med['color']:.4f}")
+    print(f"  top-highlight median |Δ| P99.9 {med['hi999']:.4f}  P99.99 "
+          f"{med['hi9999']:.4f}  hl-color {med['hi_color']:.4f}")
     print(f"  near-white mass (informational): algo {med['clip_algo']:.2%} "
           f"vs gt {med['clip_gt']:.2%}")
     baseline = _load_histogram_baseline(roll)
@@ -774,8 +797,7 @@ def check_histogram_match(frames, fixtures, roll):
         print("  calibrate_histogram_match.py --write-baseline after a review")
         return []
     if (baseline.get("bins") != HIST_BINS or abs(
-            baseline.get("subsample_frac", -1) - an.PRINT_TUNE_SUBSAMPLE_FRAC)
-            > 1e-9):
+            baseline.get("subsample_frac", -1) - HIST_SUBSAMPLE_FRAC) > 1e-9):
         print("  baseline metric params differ (bins/subsample) — regenerate; "
               "skipping regression check")
         return []
@@ -786,15 +808,19 @@ def check_histogram_match(frames, fixtures, roll):
 
 
 def selftest_histogram_match():
-    """Test for the test: clean medians pass; a total-EMD regression is flagged."""
-    base = {"total": 0.060}
-    clean = {"total": 0.060, "luma": 0.05, "color": 0.02,
+    """Test for the test: clean medians pass; a total-EMD OR a highlight (hi999)
+    regression is flagged."""
+    base = {"total": 0.060, "hi999": 0.030}
+    clean = {"total": 0.060, "luma": 0.05, "color": 0.02, "hi999": 0.030,
              "clip_algo": 0.01, "clip_gt": 0.005}
     assert not _histogram_violations(clean, base), \
         "histogram self-test: clean medians flagged"
     worse = dict(clean, total=0.060 + HIST_REGRESS_EPS + 0.005)
     assert _histogram_violations(worse, base), \
-        "histogram self-test: regression not flagged"
+        "histogram self-test: total regression not flagged"
+    hl_worse = dict(clean, hi999=0.030 + HIST_HL_REGRESS_EPS + 0.005)
+    assert _histogram_violations(hl_worse, base), \
+        "histogram self-test: highlight regression not flagged"
     print("Histogram-match checker self-test: OK")
 
 

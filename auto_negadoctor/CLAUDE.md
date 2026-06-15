@@ -8,17 +8,27 @@
    frame has an enabled negadoctor entry (the export would already be
    inverted — run `AutoNegadoctor_Remove` first), WARNS if a tone mapper
    (agx/filmicrgb/sigmoid/basecurve) is enabled or an XMP is missing.
-2. Lua exports the selected frames as **32-bit float TIFF in linear Rec2020**
-   at `EXPORT_MAX_WIDTH` (currently 2000px) to
+2. Lua exports the selected frames as **32-bit float TIFF** at
+   `EXPORT_MAX_WIDTH` (currently 2000px) to
    `%TEMP%/darktable_autonegadoctor_<timestamp>/`. The analysis is
    resolution-invariant: every size-dependent constant in `auto_negadoctor.py`
    is a fraction of the frame dimension (a `*_FRAC`, applied as
-   `int(round(w * FRAC))`) — no reference resolution. The
-   export ICC preferences (`plugins/lighttable/export/icctype` = 4 =
-   LIN_REC2020) are temporarily overridden and restored — see "Why TIFF"
-   below. Float (not 16-bit int) because the integer formats clamp the
-   pipeline at 1.0 and the film base's R channel exceeds 1.0 under the
-   current import defaults (found on the first live run).
+   `int(round(w * FRAC))`) — no reference resolution. Float (not 16-bit int)
+   because the integer formats clamp the pipeline at 1.0 and the film base's R
+   channel exceeds 1.0. **COLOR SPACE (critical — 2026-06-15):** the Lua sets
+   the export ICC pref (`plugins/lighttable/export/icctype` = 4 = LIN_REC2020),
+   but **that override can SILENTLY FAIL** — darktable then embeds an **sRGB**
+   profile (sRGB primaries, D50, gamma TRC). So the export is NOT reliably
+   linear Rec2020. negadoctor (`default_colorspace == IOP_CS_RGB`) consumes the
+   **working** profile (linear Rec2020 D65) BEFORE `colorout`, so the FIX lives
+   in `load_frame`: it reads the TIFF's **embedded ICC** and color-manages every
+   pixel into linear Rec2020 D65 = negadoctor's actual input (sRGB → EOTF decode
+   + device→XYZ(D50) matrix + `chad` un-adapt to D65 + XYZ→Rec2020). A genuine
+   linear-Rec2020 export round-trips to ~identity, so it's correct either way.
+   See "Why TIFF" below. (This was THE root cause of the long
+   debug-UI-looks-great-but-darktable-washes-out saga: the whole analysis ran on
+   sRGB-as-linear data, fabricating a tiny D_max and an over-bright exposure that
+   blew out when darktable applied the params to its true-linear working data.)
 3. Lua writes `exif_params.txt` (`stem|exposure=…|aperture=…|iso=…` per
    frame, locale-safe floats) for cross-frame exposure compensation.
 4. Lua calls `auto_negadoctor.py` via `conda run -n autocrop`. Python does
@@ -153,9 +163,12 @@
      gamma = PRINT_GAMMA (**5.0 since spec 04**, was 6.1). 6.1 was the GT *param*
      median, but spec 04 tunes the RENDERED PICTURE not the params: rendering the
      GT annotations and minimizing the histogram (luma-EMD) distance to the
-     algorithm's render over BOTH rolls puts the joint minimum at 5.0 (the steep
-     6.1 curve, under the near-clip highlight pin, crushed midtones DARKER than
-     the GT picture — median signed luma +0.084 too dark on roll 2510-11-1). The
+     algorithm's render over ALL annotated rolls puts the joint minimum near 5.0
+     (the steep 6.1 curve, under the near-clip highlight pin, crushed midtones
+     DARKER than the GT picture — median signed luma +0.084 too dark on roll
+     2510-11-1). With 4 rolls the aggregate optimum drifted to ~5.5 but
+     5.0–5.75 are within run-to-run noise on total EMD; 5.0 is kept because it
+     best serves the worst-case dark roll 2510-11-1. The
      param-gate gamma delta gets WORSE by design (we optimize the picture, the
      param proxy is non-unique — the user reaches the same brighter picture via
      low exposure + strongly POSITIVE black + high gamma). Per-frame GT gamma
@@ -169,7 +182,9 @@
      (2026-06-13): **push brightness to the CLIP BOUNDARY — "as bright as
      possible without the highlights clipping" — which auto-preserves MOOD with
      no scene labels.** Each iteration exposure pins the content P99.9 to
-     PRINT_HI_CEIL (0.98, just below clip); when exposure SATURATES at its range
+     PRINT_HI_CEIL (**0.97 since spec-04 pass 2** — the high-res histogram metric
+     showed 0.99 over-pushed the top toward white vs the GT; see the convergence
+     TODO); when exposure SATURATES at its range
      end and the highlight is still off the ceiling, BLACK takes over to keep
      brightening (a less-negative black lifts the whole curve on dense snow/sky
      once exposure can't go higher — without this, snow/sky came out far too
@@ -202,14 +217,37 @@
    re-runs after Remove, which strips negadoctor only). No iop_order_list
    edits (both are base modules).
 
-### Why TIFF / linear Rec2020 export (NOT JPEG)
+### Why TIFF + float (NOT 8-bit JPEG); and why color management is mandatory
 
 The orange film base is **out of the sRGB gamut** (manual Dmin
-(0.804, 0.335, 0.171) in Rec2020 → sRGB-linear R = 1.125). An sRGB export
-clips the R channel over the whole upper range of the frame, destroying both
-the film-base color (Dmin ~11% low) and the per-channel density ranges that
-wb estimation needs. JPEG/PNG inputs still work as an approximate fallback
-(used by the committed tests) — `load_frame()` dispatches on extension.
+(0.804, 0.335, 0.171) in Rec2020 → sRGB-linear R = 1.125). An **8-bit** sRGB
+export clips the R channel over the whole upper range of the frame, destroying
+the film-base color and the per-channel density ranges wb needs. The **float
+TIFF** keeps those values unclamped (R > 1), which is why TIFF/float is required
+regardless of profile. JPEG/PNG inputs still work as an approximate fallback
+(committed tests) — `load_frame()` dispatches on extension.
+
+**The TIFF is NOT guaranteed to be in linear Rec2020** — the `icctype` override
+can fail, leaving an sRGB-encoded float TIFF (sRGB primaries, D50, gamma TRC,
+values still > 1 because it's float). Treating that as linear Rec2020 is wrong
+on all three axes and was the root-cause bug. `load_frame` therefore **always
+color-manages the TIFF to linear Rec2020 D65 via its embedded ICC** (see Data
+Flow §2 and `lin_rec2020_from_export`). The embedded-ICC reader is dependency-free
+(`_read_icc_from_tiff` parses TIFF tag 34675). NOTE: the committed roll fixture
+TIFFs are these sRGB exports, so the analysis now decodes them — old
+baselines/GT were captured on the un-color-managed (sRGB-as-linear) data and
+must be regenerated.
+
+### D_max is FIXED at the darktable default (not derived)
+
+`DMAX_DEFAULT = 2.046` (darktable negadoctor `init()` default) — the user leaves
+D_max at the default in practice and never picks it. We previously auto-derived
+it via `apply_auto_Dmax`'s formula but fed it the P_LOW percentile over the whole
+content crop (vs darktable's picker, which takes the MIN of the small densest
+region you drag over), producing a fabricated ~0.7 that skewed everything
+downstream (all of offset/wb/black/exposure divide by D_max). Like
+`OFFSET_DEFAULT`, it's just the default now. `compute_dmax` is retained for the
+forward-model tests only.
 
 ### negadoctor params blob (modversion 2, 76 bytes LE, plain hex)
 
@@ -235,9 +273,31 @@ self-consistent: lightest area prints at 0.1 pre-gamma, densest at 0.96).
 - **AutoNegadoctor_AI_InPlace** (`export_invert_and_apply(false, true)`) — like
   InPlace, but the params written to the XMPs are the vision-LLM nudged variant.
   The full analytical pipeline still runs first, unchanged.
-- **AutoNegadoctor_Remove** (`remove_negadoctor_selected`) — strip all
-  negadoctor entries from the selected frames' history (renumbers entries,
-  fixes history_end) for a clean re-run after algorithm changes.
+- **AutoNegadoctor_Annotate_Apply** (`export_annotate_and_apply`) — the
+  annotate-and-apply flow: export + analyze (like InPlace), open the debug UI
+  **BLOCKING** (foreground, `--annotate-apply` → Python `subprocess.run`s the UI
+  and waits), and when the user CLOSES the UI, write their corrections (auto
+  where none) into the XMPs. The debug UI in `apply_mode` writes
+  `applied_results.txt` on close (`OK|stem|params=<hex>|crop=L,T,R,B|flag=ok`,
+  params = `_corrected_params` over the auto analysis, crop = the user's crop
+  annotation else the auto content border, as normalized [0,1] edge positions).
+  Lua then applies per frame: vignette (`apply_lens_in_place`), crop
+  (`apply_crop_new_item`, crop module modversion 3, same 4-float+8-zero encoding
+  as auto_crop — positions are post-orientation so orientation is preserved, the
+  flip entry is never touched) and negadoctor (`apply_negadoctor_new_item` —
+  ALWAYS a NEW history item, per the user's request, not an in-place replace).
+  Both crop and negadoctor insert via the shared `insert_history_entry`
+  (history_end-protected). The temp folder is KEPT (it holds the annotations).
+  Guarded by `tests/smoke_debug_ui.py` (sets `apply_mode`, verifies
+  `applied_results.txt` shape on close).
+- **AutoNegadoctor_Remove** (`remove_negadoctor_selected`) — strip ALL the
+  modules the apply flow writes — **negadoctor + crop + lens/vignette** — from
+  the selected frames' history (renumbers entries, fixes history_end) for a
+  clean re-run after algorithm changes. Generalized over `remove_modules_in_place
+  (image, opset)` with `REMOVE_OPS = {negadoctor, crop, lens}`; reports per-op
+  counts. NOTE: this also removes a manually-set crop or lens distortion/TCA
+  correction (no reliable signal distinguishes ours from the user's), so it's
+  destructive of those — re-apply afterwards if needed.
 
 ### AI scene tuning (spec 03 — `scene_tuner.py`)
 
@@ -444,11 +504,15 @@ behavior (and self-test non-trivial checkers).
   dashboard) + **histogram-match gate** (`check_histogram_match`, spec 04,
   self-tested: renders the production params and the GT-params (annotation
   `corrected` over production Dmin/D_max/offset/soft_clip) over the content crop
-  and reports the median per-channel EMD decomposed into luma/color; informational
+  **as FLOAT at 14-bit bins with a denser sample** (HIST_BINS=16384,
+  HIST_SUBSAMPLE_FRAC=0.001) and reports median EMD (luma/color) PLUS the
+  top-highlight percentile gap (|ΔP99.9|, |ΔP99.99|, hl-color); informational
   dashboard + a REGRESSION guard vs the committed per-roll
-  `histogram_baseline.json` — FAILs only if median total EMD grows beyond
-  `HIST_REGRESS_EPS`. Inert until the baseline exists. This is the param-INVARIANT
-  picture-match signal that drove the spec-04 PRINT_GAMMA retune; the strict
+  `histogram_baseline.json` — FAILs if median total EMD grows beyond
+  `HIST_REGRESS_EPS` OR median highlight |hi999| beyond `HIST_HL_REGRESS_EPS`.
+  Inert until the baseline exists (regenerate when bins/subsample change — the
+  baseline records both). This is the param-INVARIANT picture-match signal that
+  drove the spec-04 PRINT_GAMMA + PRINT_HI_CEIL retunes; the strict
   per-frame match stays the red-by-design `check_ground_truth`) + baseline diff vs
   `tests/baseline_session/<roll_id>/` (per-roll; params, film-base location,
   shadows/highlights patch positions AND sizes).
@@ -486,8 +550,9 @@ behavior (and self-test non-trivial checkers).
   gap verdict, and a `PRINT_HI_CEIL` sweep. `--write-baseline` writes each roll's
   committed `histogram_baseline.json` (the `check_histogram_match` reference;
   total/luma/color medians + bins + subsample_frac + print_gamma). Use it to
-  re-derive `PRINT_GAMMA` (the gamma sweep was run as a scratch over all 3 rolls;
-  5.0 is the joint luma/total-EMD minimum). Shared render/GT-reconstruction
+  re-derive `PRINT_GAMMA` (a gamma sweep over all rolls put the joint luma/total-
+  EMD minimum near 5.0; 5.0–5.75 are within run-to-run noise as rolls accrue).
+  Shared render/GT-reconstruction
   helpers (`gt_params_for_frame`, `_render_crop_rows`) live in
   `run_quality_tests.py` so the instrument and the gate use ONE metric.
 - `tests/test_resolution_invariance.py` — guardrail against reintroducing
@@ -523,17 +588,25 @@ behavior (and self-test non-trivial checkers).
       HISTOGRAM), not the (non-unique, exposure↔wb↔black↔gamma-interdependent)
       params.** New offline instrument `tests/calibrate_histogram_match.py` +
       `nega_model.histogram_distance` (per-channel EMD, decomposed into a luma /
-      brightness term and a color / chroma-cast term) measure, per GT frame, the
+      brightness term, a color / chroma-cast term, and **top-highlight percentile
+      deltas hi999/hi9999 + a highlight-color term**) measure, per GT frame, the
       EMD between the algorithm's render and the GT-params render over the content
-      crop. KEY FINDING: the histogram says the algorithm rendered too DARK (NOT
-      too bright as the earlier param-based AI calibration concluded — that was
-      the proxy trap); the highlight-ceiling lever (`PRINT_HI_CEIL`) was already
-      optimal at 0.99 and the anchor percentile (`PRINT_HI_PCT`) is flat, so the
-      lever is GAMMA. Lowering `PRINT_GAMMA` 6.1→5.0 (joint luma-EMD minimum over
-      both rolls) cut median total EMD roll 2510-11-1 0.1005→0.0771, roll
-      2512-2601-1 0.0659→0.0589, clip-safe (<0.16%), AI gate still green. The
+      crop. **The metric compares the FLOAT render at 14-bit bins (16384) with a
+      denser sample** — pass 1 used 8-bit/64-bin which was BLIND to the highlight
+      shoulder (user: "you lack resolution"). FINDING 1: the algorithm rendered
+      too DARK (NOT too bright as the earlier param-based AI calibration concluded
+      — the proxy trap); the lever is GAMMA → `PRINT_GAMMA` 6.1→5.0 (joint EMD
+      minimum; cut median total EMD roll 2510-11-1 0.1005→0.0771, 2512-2601-1
+      0.0659→0.0589). FINDING 2 (after the resolution upgrade): the **highlight
+      ceiling** is the dominant top-end lever — pass 1's 8-bit metric had it look
+      flat/optimal-at-0.99, but the tuner over-pushed P99.9 to 0.99 vs the GT's
+      lower top. `PRINT_HI_CEIL` 0.99→**0.97** cut median |ΔP99.9| ~33%
+      (0.0162→0.0108) and total EMD ~16% (0.0599→0.0505) over all 4 rolls, centred
+      brightness (signed −0.029→−0.002). Both clip-safe (<0.3%), AI gate still
+      green. `soft_clip` is NOT a lever (cancels between the two renders). The
       residual is irreducible per-frame taste. Guarded by `check_histogram_match`
-      (regression guard vs committed `histogram_baseline.json`). Rebuilt
+      (regression guard on total EMD + highlight |hi999| vs committed
+      `histogram_baseline.json`). Rebuilt
       wb (region-cast + gentle neutralization) + print tune (clip-boundary
       brightness push). NOTE: the param gate (`check_ground_truth`)
       is a PROXY that can diverge from render quality — the clip-boundary tuner

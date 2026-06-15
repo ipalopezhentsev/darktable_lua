@@ -48,6 +48,7 @@ Results file format:
 import json
 import os
 import statistics
+import struct
 import subprocess
 import sys
 import threading
@@ -255,6 +256,18 @@ P_HIGH = 99.5                    # per-channel percentile for "lightest" values
 # user's manual rolls always keep the default anyway).
 OFFSET_DEFAULT = -0.05
 
+# D_max ("dynamic range of the film"): darktable's negadoctor init() default,
+# kept FIXED — the user leaves it at the default in practice (~2.05) and never
+# picks it. We used to auto-derive it via apply_auto_Dmax's formula
+# (max_c log10(Dmin/picked_min)), but darktable's picker takes the MIN of the
+# small densest region the user drags over, whereas our `picked_min` was the
+# P_LOW percentile over the WHOLE content crop — far too bright, giving a
+# fabricated D_max ~0.7 that exists nowhere in the real workflow and, since
+# everything downstream divides by D_max, skewed offset/wb/black/exposure.
+# Like OFFSET_DEFAULT, we just use darktable's default and let the print tune
+# adapt black/exposure around it.
+DMAX_DEFAULT = 2.046
+
 # --- neutral patch search (on the rendered inverted preview) -----------------
 PATCH_WIN_FRAC = 0.04
 PATCH_STRIDE_DIV = 2
@@ -290,7 +303,17 @@ HIGHLIGHT_CLIP_FRAC_MAX = 0.02   # negative-space clipped fraction guard
 # black stayed too negative, so highlights sat at ~0.5.)
 PRINT_HI_PCT = 99.9            # control the actual top (not P99.5, which lets the
                               # top 0.5% spread into hard clip)
-PRINT_HI_CEIL = 0.99          # push the high percentile to just below clipping
+# Highlight pin. Tuned to the GT PICTURE under the HIGH-RESOLUTION histogram
+# metric (spec 04): the comparison now runs on the FLOAT render at 14-bit bins
+# (the old 8-bit/64-bin metric was BLIND to the highlight shoulder — user
+# feedback "you lack resolution"). Pinning P99.9 to 0.99 over-pushed the very top
+# toward white, exactly where the user's GT highlights sit LOWER. Dropping the
+# pin to 0.97 cut the top-highlight gap (median |ΔP99.9|) ~33% (0.0162->0.0108)
+# and total EMD ~16% (0.0599->0.0505) across all 4 rolls, centred overall
+# brightness (signed luma -0.029->-0.002), and stays clip-safe (<0.3%). (soft_clip
+# is NOT a lever here — it cancels between the algorithm and GT renders, which
+# share it.) Re-derive with tests/calibrate_histogram_match.py.
+PRINT_HI_CEIL = 0.97          # pin the high percentile just below the GT's top
 PRINT_CLIP_BUDGET = 0.003     # final guard: lower exposure until hard-clip frac
                               # (any channel >= 0.999) is at most this
 PRINT_TUNE_ITERS = 12
@@ -1192,6 +1215,121 @@ def _vignette_field_cached(h, w, vig):
     return field
 
 
+# ---------------------------------------------------------------------------
+# Export color management
+# ---------------------------------------------------------------------------
+# The Lua export's `icctype=LIN_REC2020` override can SILENTLY FAIL, leaving
+# darktable to embed an sRGB profile (sRGB primaries, D50 white, gamma TRC).
+# negadoctor (default_colorspace == IOP_CS_RGB) consumes the WORKING profile
+# (linear Rec2020 D65) BEFORE colorout, so analysing the sRGB export as-if-linear
+# is wrong on ALL THREE axes — primaries, white point AND tone (the gamma lifts
+# the shadows, which fabricated the tiny D_max and the over-bright exposure that
+# blew the inversion out in darktable). We read the TIFF's EMBEDDED ICC and
+# convert every pixel into linear Rec2020 D65 = negadoctor's actual input. A
+# genuine linear-Rec2020 export round-trips to ~identity, so this stays correct
+# once the export override is fixed too. (Verified: the reference roll's film
+# base decodes to darktable's own picker value within ~2%.)
+
+# Rec2020 (D65) <-> XYZ
+_M_REC2020_TO_XYZ = np.array([[0.6369580, 0.1446169, 0.1688810],
+                              [0.2627002, 0.6779981, 0.0593017],
+                              [0.0000000, 0.0280727, 1.0609851]], dtype=np.float64)
+_M_XYZ_TO_REC2020 = np.linalg.inv(_M_REC2020_TO_XYZ)
+
+
+def _read_icc_from_tiff(path):
+    """Embedded ICC profile bytes (TIFF tag 34675), or None — no extra deps."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    bo = "<" if data[:2] == b"II" else ">" if data[:2] == b"MM" else None
+    if bo is None:
+        return None
+    try:
+        ifd = struct.unpack(bo + "I", data[4:8])[0]
+        while ifd:
+            n = struct.unpack(bo + "H", data[ifd:ifd + 2])[0]
+            for i in range(n):
+                e = ifd + 2 + i * 12
+                tag, _typ, cnt = struct.unpack(bo + "HHI", data[e:e + 8])
+                if tag == 34675:
+                    off = (e + 8 if cnt <= 4
+                           else struct.unpack(bo + "I", data[e + 8:e + 12])[0])
+                    return data[off:off + cnt]
+            ifd = struct.unpack(bo + "I",
+                                data[ifd + 2 + n * 12:ifd + 2 + n * 12 + 4])[0]
+    except (struct.error, IndexError):
+        return None
+    return None
+
+
+def _icc_tag_table(icc):
+    n = struct.unpack(">I", icc[128:132])[0]
+    tags = {}
+    for i in range(n):
+        o = 132 + i * 12
+        sig = icc[o:o + 4].decode("ascii", "ignore")
+        a, sz = struct.unpack(">II", icc[o + 4:o + 12])
+        tags[sig] = icc[a:a + sz]
+    return tags
+
+
+def _icc_xyz(d):
+    return np.array([v / 65536.0 for v in struct.unpack(">3i", d[8:20])],
+                    dtype=np.float64)
+
+
+def _icc_mat3(d):
+    return np.array([v / 65536.0 for v in struct.unpack(">9i", d[8:44])],
+                    dtype=np.float64).reshape(3, 3)
+
+
+def _icc_trc_is_linear(d):
+    """True when a TRC tag encodes the identity (linear) response."""
+    typ = d[:4]
+    if typ == b"curv":
+        cnt = struct.unpack(">I", d[8:12])[0]
+        if cnt == 0:
+            return True
+        if cnt == 1:
+            return abs(struct.unpack(">H", d[12:14])[0] / 256.0 - 1.0) < 1e-3
+        pts = np.frombuffer(d[12:12 + 2 * cnt], dtype=">u2").astype(np.float64)
+        return float(np.abs(pts - np.linspace(0, 65535, cnt)).max()) < 64.0
+    if typ == b"para":
+        return (struct.unpack(">H", d[8:10])[0] == 0
+                and abs(struct.unpack(">i", d[12:16])[0] / 65536.0 - 1.0) < 1e-3)
+    return False
+
+
+def _srgb_eotf(x):
+    a = np.abs(x)
+    return np.sign(x) * np.where(a <= 0.04045, a / 12.92,
+                                 ((a + 0.055) / 1.055) ** 2.4)
+
+
+def lin_rec2020_from_export(rgb, icc):
+    """Encoded export RGB -> linear Rec2020 D65 via the embedded matrix ICC.
+    Non-linear TRC -> sRGB EOTF decode (the broken-export case); the
+    device->XYZ(D50) matrix and chromatic-adaptation tag (chad, D65->D50) un-adapt
+    to D65, then map into Rec2020. Best effort: returns the input unchanged (i.e.
+    treated as already-linear-Rec2020) on any parse failure."""
+    try:
+        t = _icc_tag_table(icc)
+        lin = rgb if _icc_trc_is_linear(t["rTRC"]) else _srgb_eotf(rgb)
+        m_dev = np.column_stack([_icc_xyz(t["rXYZ"]), _icc_xyz(t["gXYZ"]),
+                                 _icc_xyz(t["bXYZ"])])              # dev->XYZ(D50)
+        chad = _icc_mat3(t["chad"]) if "chad" in t else np.eye(3)   # D65->D50
+        flat = lin.reshape(-1, 3).astype(np.float64)
+        xyz_d65 = (flat @ m_dev.T) @ np.linalg.inv(chad).T
+        return (xyz_d65 @ _M_XYZ_TO_REC2020.T).reshape(rgb.shape).astype(np.float32)
+    except Exception as e:   # pragma: no cover - defensive
+        print(f"WARNING: could not color-manage export via embedded ICC ({e}); "
+              f"treating it as linear Rec2020")
+        return rgb.astype(np.float32)
+
+
 def load_frame(path, vignette=None):
     """Load an export -> (enc_f float32 RGB [0,1], lin float32 linear Rec2020).
 
@@ -1201,8 +1339,10 @@ def load_frame(path, vignette=None):
     detection on stored values) stays uncorrected.
 
     enc_f holds the stored-encoding values (for clipping detection):
-      - .tif/.tiff: 16-bit linear Rec2020 from the Lua export — already the
-        module-input approximation, no transform needed
+      - .tif/.tiff: the Lua export. We color-manage it to linear Rec2020 D65
+        (= negadoctor's IOP_CS_RGB working space) via the EMBEDDED ICC profile —
+        the icctype override can fail and leave an sRGB profile, which must be
+        decoded, not treated as linear. See lin_rec2020_from_export.
       - 8-bit sRGB JPEG/PNG: linearize + sRGB->Rec2020 matrix (fallback;
         film-base R is typically gamut-clipped there)
     """
@@ -1220,16 +1360,21 @@ def load_frame(path, vignette=None):
         if raw.ndim == 3 and raw.shape[2] >= 3:
             raw = raw[:, :, :3]
         rgb = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+        icc = _read_icc_from_tiff(path)   # cv2 strips metadata; read it raw
         if rgb.dtype in (np.float32, np.float64):
-            # 32-bit float TIFF: unclamped linear Rec2020 (the Lua export).
-            # Nothing clips, so clip detection is disabled (enc_f = zeros).
-            lin = np.maximum(rgb.astype(np.float32), 0.0)
+            # 32-bit float TIFF (the Lua export). Color-manage via the embedded
+            # profile to negadoctor's working space; nothing clips so clip
+            # detection is disabled (enc_f = zeros).
+            enc = rgb.astype(np.float32)
+            lin = (lin_rec2020_from_export(enc, icc) if icc is not None else enc)
+            lin = np.maximum(lin, 0.0)
             return finish(np.zeros_like(lin), lin)
-        # 16-bit integer TIFF clamps the pipeline at 1.0 — values near the
-        # ceiling are saturated, keep clip detection on the linear values
+        # 16-bit integer TIFF clamps the pipeline at 1.0 — keep clip detection on
+        # the stored (encoded) values; color-manage the analysis copy.
         scale = 65535.0 if rgb.dtype == np.uint16 else 255.0
-        lin = (rgb.astype(np.float32) / scale)
-        return finish(lin.copy(), lin)
+        enc = rgb.astype(np.float32) / scale
+        lin = (lin_rec2020_from_export(enc, icc) if icc is not None else enc.copy())
+        return finish(enc, np.maximum(lin, 0.0))
     bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if bgr is None:
         raise RuntimeError(f"cannot read image: {path}")
@@ -1344,7 +1489,10 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
             fr["border"] = detect_content_crop(lin_raw, dmin)
             fr["picked_min"], fr["picked_max"] = frame_percentiles(
                 lin, enc_f, fr["border"], dmin)
-            d_max = nm.compute_dmax(dmin, fr["picked_min"])
+            # D_max is FIXED at darktable's default (the user never picks it);
+            # see DMAX_DEFAULT. picked_min/picked_max are still used for the
+            # black/exposure pickers and the wb bootstrap.
+            d_max = DMAX_DEFAULT
             offset = OFFSET_DEFAULT
             fr["dmin"], fr["d_max"], fr["offset"] = dmin, d_max, offset
 
@@ -1646,6 +1794,12 @@ def main():
 
     debug_ui = "--debug-ui" in sys.argv
     ai_tune = "--ai-tune" in sys.argv
+    # Annotate-and-apply: open the debug UI and BLOCK until it closes, so the
+    # caller can read the applied_results.txt the UI writes from the user's
+    # corrections. Implies --debug-ui.
+    annotate_apply = "--annotate-apply" in sys.argv
+    if annotate_apply:
+        debug_ui = True
     image_paths = [a for a in sys.argv[1:] if not a.startswith("--")]
     for p in image_paths:
         if not os.path.exists(p):
@@ -1681,8 +1835,16 @@ def main():
     if debug_ui and ok:
         write_debug_sessions(frames, roll, output_dir, wall_time_s=wall_time)
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
-        print(f"Launching debug UI: {debug_ui_script}", flush=True)
-        subprocess.Popen([sys.executable, str(debug_ui_script), str(output_dir)])
+        ui_cmd = [sys.executable, str(debug_ui_script), str(output_dir)]
+        if annotate_apply:
+            ui_cmd.append("--apply")
+            print(f"Launching debug UI (apply mode), waiting for it to close: "
+                  f"{debug_ui_script}", flush=True)
+            subprocess.run(ui_cmd)
+            print("APPLIED_RESULTS_READY", flush=True)
+        else:
+            print(f"Launching debug UI: {debug_ui_script}", flush=True)
+            subprocess.Popen(ui_cmd)
 
     if err > 0:
         sys.exit(1)

@@ -297,6 +297,12 @@ class ColorWheel:
 class NegadoctorDebugUI(DebugUIBase):
     WINDOW_TITLE = "Auto Negadoctor Debug UI"
     HAS_ITEM_PANEL_FOOTER = True   # color wheels live below the item table
+
+    # Annotate-and-apply flow (Lua AutoNegadoctor_Annotate_Apply): when set, the
+    # UI writes applied_results.txt on close (the user's corrections applied over
+    # the auto params, auto where none) so the Lua side can write the XMPs.
+    apply_mode = False
+    APPLIED_RESULTS_FILENAME = "applied_results.txt"
     EMPTY_SESSION_MESSAGE = "No *_debug_nega.json files found in:"
     ITEM_PANEL_TITLE = "Patches:"
     CENTER_BUTTON_TEXT = "Center on patch"
@@ -582,9 +588,10 @@ class NegadoctorDebugUI(DebugUIBase):
                         lin32, np.zeros_like(lin32), crop_border, dmin)
                 except Exception:
                     pass
-        if (crop or "film_base" in corr) and picked_min:
-            d_max = nm.compute_dmax(dmin, picked_min)
-            out["D_max"] = d_max
+        # D_max stays FIXED at darktable's default (anp.DMAX_DEFAULT, carried in
+        # params); it is NOT re-derived from crop/film-base picks (the old
+        # compute_dmax recompute produced the fabricated ~0.7). picked_min/max
+        # below still drive the black/exposure pickers.
 
         def patch_rgb(patch):
             if patch in corr:
@@ -644,6 +651,72 @@ class NegadoctorDebugUI(DebugUIBase):
         return {"black": nm.BLACK_RANGE, "gamma": nm.GAMMA_RANGE,
                 "soft_clip": nm.SOFT_CLIP_RANGE,
                 "exposure": nm.EXPOSURE_RANGE}[name]
+
+    # ------------------------------------------------------------------
+    # Annotate-and-apply: emit the final per-frame decisions on close
+    # ------------------------------------------------------------------
+
+    def _crop_positions(self, img_dict):
+        """Normalized [left, top, right, bottom] crop positions in [0,1] for the
+        darktable crop module: the user's crop annotation when present, else the
+        auto-detected content border. None when neither yields a valid box.
+        The TIFF is exported post-orientation, so these displayed-frame fractions
+        map straight onto the crop module (same basis as auto_crop)."""
+        W, H = img_dict["width"], img_dict["height"]
+        if not W or not H:
+            return None
+        crop = self.annotations[img_dict["stem"]].get("crop_correction")
+        if crop:
+            x, y, w, h = (float(v) for v in crop)
+            left, top, right, bottom = x / W, y / H, (x + w) / W, (y + h) / H
+        else:
+            border = img_dict.get("border")
+            if not border:
+                return None
+            l, t, r, b = border
+            left, top, right, bottom = l / W, t / H, (W - r) / W, (H - b) / H
+        left, top = max(0.0, min(left, 1.0)), max(0.0, min(top, 1.0))
+        right, bottom = max(0.0, min(right, 1.0)), max(0.0, min(bottom, 1.0))
+        if right <= left or bottom <= top:
+            return None
+        return [left, top, right, bottom]
+
+    def _write_applied_results(self):
+        """Write applied_results.txt: one `OK|stem|params=<hex>|crop=L,T,R,B|
+        flag=ok` line per frame, params being the user's corrections applied over
+        the auto analysis (auto where the user added none). Crop is `none` when
+        there is no usable box. Read back by the Lua apply step."""
+        lines = []
+        for img in self.images:
+            stem = img["stem"]
+            params = img.get("params")
+            if not params:
+                continue
+            final = self._corrected_params(img) or params
+            try:
+                params_hex = nm.encode_negadoctor_params(final)
+            except Exception as e:   # pragma: no cover - defensive
+                print(f"  {stem}: param encode failed ({e}); skipped")
+                continue
+            crop = self._crop_positions(img)
+            crop_str = ("none" if crop is None else
+                        ",".join(f"{v:.6f}" for v in crop))
+            flag = "bad" if self.annotations[stem].get("bad_inversion") else "ok"
+            lines.append(f"OK|{stem}|params={params_hex}|crop={crop_str}|flag={flag}")
+        path = Path(self.session_dir) / self.APPLIED_RESULTS_FILENAME
+        path.write_text("\n".join(lines) + ("\n" if lines else ""),
+                        encoding="utf-8")
+        print(f"Applied results written to: {path} ({len(lines)} frame(s))")
+
+    def _on_close(self):
+        # In apply mode emit the decisions FIRST (uses the in-memory annotations
+        # for every frame), then let the base save/report/destroy run.
+        if self.apply_mode:
+            try:
+                self._write_applied_results()
+            except Exception as e:   # pragma: no cover - defensive
+                print(f"Failed to write applied results: {e}")
+        super()._on_close()
 
     def _schedule_live_render(self, delay_ms=250):
         """Debounced re-render: scroll-resizing fires many events."""
@@ -2126,7 +2199,13 @@ DebugUI = NegadoctorDebugUI
 
 
 def main():
-    NegadoctorDebugUI.run_main(usage="Usage: debug_ui.py <session_dir>")
+    # `--apply` (passed by auto_negadoctor.py --annotate-apply) makes the UI
+    # write applied_results.txt on close. run_main reads argv[1] as the session
+    # dir, so the flag elsewhere in argv is harmless once we've consumed it.
+    if "--apply" in sys.argv:
+        NegadoctorDebugUI.apply_mode = True
+        sys.argv = [a for a in sys.argv if a != "--apply"]
+    NegadoctorDebugUI.run_main(usage="Usage: debug_ui.py <session_dir> [--apply]")
 
 
 if __name__ == "__main__":

@@ -65,6 +65,9 @@ def main():
 
     root = tk.Tk()
     app = dbg.NegadoctorDebugUI(root, str(session))
+    # Exercise the annotate+apply flow: on close the UI must write
+    # applied_results.txt (verified in verify_outputs).
+    app.apply_mode = True
     failures = []
 
     def step(name, fn):
@@ -395,6 +398,29 @@ def main():
             assert "PRINT PARAM OVERRIDES" in txt
             assert "WB WHEEL OVERRIDES" in txt
         step("verify_outputs", verify_outputs)
+
+        # Annotate+apply: applied_results.txt is written on close, one OK line
+        # per frame with a 152-char param blob and a crop field (auto border
+        # where no user crop), parseable the way the Lua side reads it.
+        def verify_applied_results():
+            ap = session / dbg.NegadoctorDebugUI.APPLIED_RESULTS_FILENAME
+            assert ap.exists(), "applied_results.txt missing"
+            lines = [l for l in ap.read_text().splitlines() if l.strip()]
+            ok = [l for l in lines if l.startswith("OK|")]
+            assert len(ok) == len(app.images), \
+                f"expected {len(app.images)} OK lines, got {len(ok)}"
+            for line in ok:
+                _, stem, rest = line.split("|", 2)
+                pj, cj, fj = rest.split("|")
+                assert pj.startswith("params=") and len(pj) - 7 == 152, \
+                    f"bad params blob: {pj[:20]}"
+                cval = cj.split("=", 1)[1]
+                if cval != "none":
+                    parts = [float(v) for v in cval.split(",")]
+                    assert len(parts) == 4 and parts[2] > parts[0] \
+                        and parts[3] > parts[1], f"bad crop: {cval}"
+                assert fj in ("flag=ok", "flag=bad"), f"bad flag: {fj}"
+        step("verify_applied_results", verify_applied_results)
 
         if failures:
             print("SMOKE FAILURES:")

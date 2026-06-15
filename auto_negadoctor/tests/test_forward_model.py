@@ -352,6 +352,38 @@ def test_histogram_distance():
     d = nm.histogram_distance(base.reshape(-1, 3), base.reshape(-1, 3))
     check("(N,3) identity ~0", approx(d["total"], 0.0, 1e-12), str(d["total"]))
 
+    # FLOAT high-resolution path (the production metric): float [0,1] input,
+    # range auto-detected, EMD in the SAME [0,1] tone units as uint8.
+    fbase = rng.uniform(0.25, 0.75, size=(300, 300, 3))
+    d = nm.histogram_distance(fbase, fbase, bins=nm.HIST_BINS_14)
+    check("float identity total ~0", approx(d["total"], 0.0, 1e-12), str(d["total"]))
+    check("float identity hi999 ~0", approx(d["hi999"], 0.0, 1e-12))
+    fbright = np.clip(fbase + 0.08, 0.0, 1.0)
+    d = nm.histogram_distance(fbase, fbright, bins=nm.HIST_BINS_14)
+    check("float brightness EMD ~ delta", approx(d["luma"], 0.08, 0.005),
+          str(d["luma"]))
+    check("float brightness signed ~ +delta",
+          approx(d["luma_signed"], 0.08, 0.003), str(d["luma_signed"]))
+    check("float brightness hi999 ~ +delta", approx(d["hi999"], 0.08, 0.01),
+          str(d["hi999"]))
+    # 14-bit float resolves a shift far below the 8-bit floor (1/255≈0.0039)
+    tiny = np.clip(fbase + 0.001, 0.0, 1.0)
+    dt = nm.histogram_distance(fbase, tiny, bins=nm.HIST_BINS_14)
+    check("float resolves sub-8-bit shift", dt["luma"] > 5e-4 and dt["luma"] < 2e-3,
+          str(dt["luma"]))
+    du8 = nm.histogram_distance((fbase * 255 + 0.5).astype(np.uint8),
+                                (tiny * 255 + 0.5).astype(np.uint8), bins=256)
+    check("8-bit blind to sub-8-bit shift", du8["luma"] < dt["luma"],
+          f"u8 {du8['luma']:.5f} vs float {dt['luma']:.5f}")
+    # highlight placement term reacts to a top-only lift
+    ftop = fbase.copy()
+    lum = ftop @ nm._LUMA_W
+    m = lum >= np.percentile(lum, 99.0)
+    ftop[m] = np.clip(ftop[m] + 0.1, 0.0, 1.0)
+    d = nm.histogram_distance(fbase, ftop, bins=nm.HIST_BINS_14)
+    check("highlight lift moves hi9999 most", d["hi9999"] > d["hi99"] >= 0.0,
+          f"hi99 {d['hi99']:.4f} hi999 {d['hi999']:.4f} hi9999 {d['hi9999']:.4f}")
+
 
 def main():
     test_encode_decode()

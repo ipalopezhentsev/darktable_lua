@@ -113,6 +113,52 @@ local function parse_nega_results(results_file_path)
   return results, vignette
 end
 
+-- Parse applied_results.txt written by the debug UI on close (annotate+apply
+-- flow): one `OK|stem|params=<hex>|crop=L,T,R,B|flag=ok` line per frame, where
+-- params are the user's corrections applied over the auto analysis (auto where
+-- none) and crop is normalized [left,top,right,bottom] positions in [0,1], or
+-- `none`. Returns a results list (or nil when the file is missing/empty).
+local function parse_applied_results(results_file_path)
+  local file = io.open(results_file_path, "r")
+  if not file then
+    dlog.msg(dlog.warn, "parse_applied_results", "No applied results file: " .. results_file_path)
+    return nil
+  end
+
+  local results = {}
+  for line in file:lines() do
+    local status, rest = line:match("^(%u+)|(.+)$")
+    if status == "OK" then
+      local filename, params_hex, crop_str, flag = rest:match(
+        "^([^|]+)|params=([0-9a-fA-F]+)|crop=([^|]+)|flag=(%w+)$")
+      if filename and #params_hex == 152 then
+        local crop = nil
+        if crop_str ~= "none" then
+          local l, t, r, b = crop_str:match(
+            "^([%d%.%-]+),([%d%.%-]+),([%d%.%-]+),([%d%.%-]+)$")
+          if l then
+            crop = { left = tonumber(l), top = tonumber(t),
+                     right = tonumber(r), bottom = tonumber(b) }
+          end
+        end
+        results[#results + 1] = {
+          status = "success",
+          filename = filename,
+          params_hex = params_hex,
+          crop = crop,
+          bad_inversion = (flag == "bad"),
+        }
+      else
+        dlog.msg(dlog.warn, "parse_applied_results", "Malformed OK line: " .. line)
+      end
+    end
+  end
+
+  file:close()
+  if #results == 0 then return nil end
+  return results
+end
+
 -- ===================================================================
 -- XMP helpers
 -- ===================================================================
@@ -293,6 +339,55 @@ local function finalize_xmp(image, xmp_path, xmp_content, context)
   dlog.msg(dlog.info, context, "XMP reloaded successfully")
 end
 
+-- Pack a Lua number as a little-endian 32-bit float and hex-encode it.
+local function float_to_le_hex(value)
+  local packed = string.pack("<f", value)
+  return (packed:gsub(".", function(c) return string.format("%02x", string.byte(c)) end))
+end
+
+-- Helper: Create crop module XML entry (modversion 3). params = 4 LE floats
+-- (left, top, right, bottom edge positions in [0,1]) + 8 zero bytes (angle +
+-- pad). The crop module runs after flip in the pipe, so these positions are in
+-- the displayed/oriented frame - the same basis as the exported TIFF the crop
+-- was measured on (no orientation conversion needed, same as auto_crop).
+local function create_crop_module_xml(num, params_hex)
+  return string.format([[     <rdf:li
+      darktable:num="%d"
+      darktable:operation="crop"
+      darktable:enabled="1"
+      darktable:modversion="3"
+      darktable:params="%s"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>]],
+    num, params_hex)
+end
+
+-- Insert a brand-new history entry (never replaces an existing one) just before
+-- the history </rdf:Seq>. history_end protection (auto_retouch fix): the new num
+-- is max(scanned_max, history_end-1)+1 so disabled trailing steps aren't
+-- reactivated. make_entry_xml(num) builds the <rdf:li/>. Returns the updated
+-- content and the new num.
+local function insert_history_entry(xmp_content, make_entry_xml)
+  local scanned_max = find_max_history_num(xmp_content)
+  local current_history_end = tonumber(xmp_content:match('darktable:history_end="(%d+)"')) or 0
+  local new_history_num = math.max(scanned_max, current_history_end - 1) + 1
+  local new_history_end = new_history_num + 1
+  local module_xml = make_entry_xml(new_history_num)
+  local before_seq_end = xmp_content:find("</rdf:Seq>%s*</darktable:history>")
+  if not before_seq_end then
+    error("Could not find history sequence end tag in XMP")
+  end
+  xmp_content = xmp_content:sub(1, before_seq_end - 1) .. "\n" ..
+                module_xml .. "\n" ..
+                xmp_content:sub(before_seq_end)
+  xmp_content = xmp_content:gsub('darktable:history_end="%d+"',
+    string.format('darktable:history_end="%d"', new_history_end))
+  return xmp_content, new_history_num
+end
+
 -- Apply negadoctor params to a source image's XMP. If a negadoctor entry
 -- already exists (only a DISABLED one can get here - pre-flight aborts on
 -- enabled ones), its params are replaced in place and it is re-enabled;
@@ -366,6 +461,86 @@ local function apply_negadoctor_in_place(image, params_hex)
 
   if not success then
     dlog.msg(dlog.error, "apply_negadoctor_in_place", string.format("Failed: %s", tostring(error_msg)))
+    return false, error_msg or "Unknown error"
+  end
+
+  return true, nil
+end
+
+-- Annotate+apply flow: ALWAYS insert a NEW negadoctor history entry (per the
+-- user's request: "create new history item if negadoctor already exists"), so
+-- the annotation-tuned inversion is a fresh, active step on top - any prior
+-- (disabled) negadoctor entry is left in the history untouched.
+local function apply_negadoctor_new_item(image, params_hex)
+  dlog.msg(dlog.info, "apply_negadoctor_new_item", "Called for " .. image.filename)
+
+  local success, error_msg = pcall(function()
+    local xmp_content, xmp_path = read_xmp(image)
+    if not xmp_path then
+      error("No sidecar path for image: " .. image.filename)
+    end
+    if not xmp_content then
+      error("XMP sidecar does not exist yet for " .. image.filename ..
+            " - open the image once in darkroom so darktable creates it")
+    end
+
+    local new_num
+    xmp_content, new_num = insert_history_entry(xmp_content, function(num)
+      return create_negadoctor_module_xml(num, params_hex)
+    end)
+    dlog.msg(dlog.info, "apply_negadoctor_new_item",
+      string.format("Inserted new negadoctor entry at num=%d", new_num))
+
+    finalize_xmp(image, xmp_path, xmp_content, "apply_negadoctor_new_item")
+    dt.print(_("  Negadoctor applied (new history item) - check darkroom view"))
+  end)
+
+  if not success then
+    dlog.msg(dlog.error, "apply_negadoctor_new_item", string.format("Failed: %s", tostring(error_msg)))
+    return false, error_msg or "Unknown error"
+  end
+
+  return true, nil
+end
+
+-- Annotate+apply flow: insert a NEW crop history entry from normalized
+-- [left, top, right, bottom] positions in [0,1] (the user's crop annotation, or
+-- the auto content border). Like negadoctor, a fresh active step on top so the
+-- just-computed crop wins; orientation is preserved (the flip entry is never
+-- touched, and crop positions are in the displayed frame).
+local function apply_crop_new_item(image, crop)
+  dlog.msg(dlog.info, "apply_crop_new_item", string.format(
+    "Called for %s L=%.4f T=%.4f R=%.4f B=%.4f",
+    image.filename, crop.left, crop.top, crop.right, crop.bottom))
+
+  local success, error_msg = pcall(function()
+    local xmp_content, xmp_path = read_xmp(image)
+    if not xmp_path then
+      error("No sidecar path for image: " .. image.filename)
+    end
+    if not xmp_content then
+      error("XMP sidecar does not exist yet for " .. image.filename ..
+            " - open the image once in darkroom so darktable creates it")
+    end
+
+    local params_hex = float_to_le_hex(crop.left) ..
+                       float_to_le_hex(crop.top) ..
+                       float_to_le_hex(crop.right) ..
+                       float_to_le_hex(crop.bottom) ..
+                       "0000000000000000"
+
+    local new_num
+    xmp_content, new_num = insert_history_entry(xmp_content, function(num)
+      return create_crop_module_xml(num, params_hex)
+    end)
+    dlog.msg(dlog.info, "apply_crop_new_item",
+      string.format("Inserted new crop entry at num=%d", new_num))
+
+    finalize_xmp(image, xmp_path, xmp_content, "apply_crop_new_item")
+  end)
+
+  if not success then
+    dlog.msg(dlog.error, "apply_crop_new_item", string.format("Failed: %s", tostring(error_msg)))
     return false, error_msg or "Unknown error"
   end
 
@@ -467,13 +642,17 @@ local function apply_lens_in_place(image, params_gz)
   return outcome, nil
 end
 
--- Remove all negadoctor entries from an image's history (for clean re-runs).
+-- Remove all history entries whose operation is in `opset` (a set like
+-- { negadoctor = true, crop = true, lens = true }) from an image's history, for
+-- clean re-runs of the apply flow (which writes negadoctor + crop + lens).
 -- Renumbers the surviving entries and fixes history_end accordingly.
--- Returns "removed", "none" or false, error_msg.
-local function remove_negadoctor_in_place(image)
-  dlog.msg(dlog.info, "remove_negadoctor_in_place", "Called for " .. image.filename)
+-- Returns outcome ("removed", "none" or false), a per-operation count table,
+-- and error_msg.
+local function remove_modules_in_place(image, opset)
+  dlog.msg(dlog.info, "remove_modules_in_place", "Called for " .. image.filename)
 
   local outcome = nil
+  local counts = {}
   local success, error_msg = pcall(function()
     local xmp_content, xmp_path = read_xmp(image)
     if not xmp_path or not xmp_content then
@@ -487,8 +666,9 @@ local function remove_negadoctor_in_place(image)
     local entries = scan_history_entries(xmp_content)
     local removed, survivors = {}, {}
     for i, entry in ipairs(entries) do
-      if entry.operation == "negadoctor" then
+      if opset[entry.operation] then
         removed[#removed + 1] = entry
+        counts[entry.operation] = (counts[entry.operation] or 0) + 1
       else
         survivors[#survivors + 1] = entry
       end
@@ -535,20 +715,20 @@ local function remove_negadoctor_in_place(image)
     xmp_content = xmp_content:gsub('darktable:history_end="%d+"',
       string.format('darktable:history_end="%d"', new_end))
 
-    dlog.msg(dlog.info, "remove_negadoctor_in_place",
-      string.format("Removed %d negadoctor entr%s, history_end %d -> %d",
+    dlog.msg(dlog.info, "remove_modules_in_place",
+      string.format("Removed %d entr%s, history_end %d -> %d",
         #removed, #removed == 1 and "y" or "ies", old_end, new_end))
 
-    finalize_xmp(image, xmp_path, xmp_content, "remove_negadoctor_in_place")
+    finalize_xmp(image, xmp_path, xmp_content, "remove_modules_in_place")
     outcome = "removed"
   end)
 
   if not success then
-    dlog.msg(dlog.error, "remove_negadoctor_in_place", string.format("Failed: %s", tostring(error_msg)))
-    return false, error_msg or "Unknown error"
+    dlog.msg(dlog.error, "remove_modules_in_place", string.format("Failed: %s", tostring(error_msg)))
+    return false, counts, error_msg or "Unknown error"
   end
 
-  return outcome, nil
+  return outcome, counts, nil
 end
 
 -- ===================================================================
@@ -560,7 +740,7 @@ end
 -- film-base color is out of sRGB gamut) and restored afterwards.
 -- Returns: nega_results, filename_to_image, export_dir (or nil on failure /
 --   detached debug launch)
-local function export_and_detect(images, debug_ui_mode, ai_tune)
+local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
   if not preflight_check(images) then
     return nil, nil, nil
   end
@@ -672,13 +852,17 @@ local function export_and_detect(images, debug_ui_mode, ai_tune)
   end
 
   local log_file = export_dir .. "/processing.log"
-  local debug_flag = debug_ui_mode and " --debug-ui" or ""
+  -- annotate_apply implies the debug UI, but runs in the FOREGROUND (blocking)
+  -- so we can read the applied_results.txt the UI writes when it closes.
+  local debug_flag = (debug_ui_mode or annotate_apply) and " --debug-ui" or ""
+  local annotate_flag = annotate_apply and " --annotate-apply" or ""
   local ai_flag = ai_tune and " --ai-tune" or ""
-  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s',
-                                 python_script, debug_flag, ai_flag, file_args)
+  local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s%s',
+                                 python_script, debug_flag, annotate_flag, ai_flag, file_args)
 
-  -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
-  if debug_ui_mode then
+  -- Debug-only (no apply): launch Python detached so darktable isn't blocked
+  -- while the UI is open. The annotate+apply flow stays in the foreground.
+  if debug_ui_mode and not annotate_apply then
     dt.print(_("Running negadoctor analysis in background..."))
     if dt.configuration.running_os == "windows" then
       local bat_file = export_dir .. "/run_debug.bat"
@@ -720,6 +904,8 @@ local function export_and_detect(images, debug_ui_mode, ai_tune)
     local done, total = line:match("^PROGRESS|(%d+)|(%d+)")
     if done then
       dt.print(string.format(_("Negadoctor analysis: %s / %s steps done..."), done, total))
+    elseif annotate_apply and line:match("apply mode") then
+      dt.print(_("Annotate in the debug UI, then CLOSE it to apply your changes..."))
     end
   end
   if log_handle then log_handle:close() end
@@ -736,11 +922,23 @@ local function export_and_detect(images, debug_ui_mode, ai_tune)
 
   dt.print(string.format(_("Negadoctor analysis completed. Log: %s"), log_file))
 
+  -- Vignette (roll-wide lens correction) always comes from negadoctor_results.txt
   local results_file = export_dir .. "/negadoctor_results.txt"
   local nega_results, vignette = parse_nega_results(results_file)
   if not nega_results then
     dt.print(_("Failed to parse negadoctor results, aborting"))
     return nil, nil, nil, nil
+  end
+
+  -- In annotate+apply mode the per-frame params/crop come from the UI's
+  -- applied_results.txt (the user's corrections over the auto analysis).
+  if annotate_apply then
+    local applied = parse_applied_results(export_dir .. "/applied_results.txt")
+    if not applied then
+      dt.print(_("No applied results found (debug UI closed without producing them) - nothing applied"))
+      return nil, nil, nil, nil
+    end
+    return applied, filename_to_image, export_dir, vignette
   end
 
   return nega_results, filename_to_image, export_dir, vignette
@@ -834,7 +1032,97 @@ local function export_invert_and_apply(keep_temp, ai_tune)
   end
 end
 
--- Mode 4: remove negadoctor from the history of all selected frames
+-- Mode 5: annotate + apply. Export and analyze like the InPlace flow, open the
+-- debug UI (blocking), and when the user closes it, write the user's corrections
+-- (auto where none) into the XMPs: vignette (lens), crop, and negadoctor as a
+-- NEW history item. The temp folder is kept (it holds the user's annotations).
+local function export_annotate_and_apply()
+  dlog.log_level(dlog.info)
+  math.randomseed(os.time() + os.clock() * 1000)
+
+  local images = dt.gui.selection()
+
+  if #images == 0 then
+    dt.print(_("No images selected"))
+    return
+  end
+
+  -- annotate_apply = true: blocking foreground run; results come from the UI's
+  -- applied_results.txt (per-frame params + crop) on close.
+  local applied_results, filename_to_image, export_dir, vignette =
+    export_and_detect(images, false, false, true)
+  if not applied_results then
+    return
+  end
+
+  local stats = { applied = 0, failed = 0, cropped = 0, crop_failed = 0,
+                  lens_applied = 0, lens_kept = 0, bad = 0 }
+
+  for idx, result_data in ipairs(applied_results) do
+    if result_data.status == "success" then
+      local original_image = filename_to_image[result_data.filename]
+      if original_image then
+        dt.print(string.format(_("Applying annotated negadoctor to %s..."), original_image.filename))
+        if result_data.bad_inversion then
+          stats.bad = stats.bad + 1
+          dt.print(string.format(_("  Note: %s was flagged as a bad inversion in the UI"),
+            original_image.filename))
+        end
+
+        -- vignette (lens) first - it precedes negadoctor in the pipe, and the
+        -- negadoctor params assume vignette-corrected input.
+        if vignette and vignette.params then
+          local lens_outcome, lens_err = apply_lens_in_place(original_image, vignette.params)
+          if lens_outcome == "applied" then
+            stats.lens_applied = stats.lens_applied + 1
+          elseif lens_outcome == "kept" then
+            stats.lens_kept = stats.lens_kept + 1
+          else
+            dt.print(string.format(_("  Warning: lens/vignette apply failed: %s"),
+              lens_err or "Unknown error"))
+          end
+        end
+
+        -- crop (user annotation, else auto content border) as a new history item
+        if result_data.crop then
+          local crop_ok, crop_err = apply_crop_new_item(original_image, result_data.crop)
+          if crop_ok then
+            stats.cropped = stats.cropped + 1
+          else
+            stats.crop_failed = stats.crop_failed + 1
+            dt.print(string.format(_("  Warning: crop apply failed: %s"),
+              crop_err or "Unknown error"))
+          end
+        end
+
+        -- negadoctor as a NEW history item
+        local success, error_msg = apply_negadoctor_new_item(original_image, result_data.params_hex)
+        if success then
+          stats.applied = stats.applied + 1
+        else
+          stats.failed = stats.failed + 1
+          dt.print(string.format(_("  *** FAILED to apply: %s ***"), error_msg or "Unknown error"))
+        end
+      else
+        stats.failed = stats.failed + 1
+        dt.print(string.format(_("Warning: Could not find original image for %s"), result_data.filename))
+      end
+    end
+  end
+
+  dt.print(string.format(
+    _("Annotate+Apply complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept; %d flagged bad"),
+    stats.applied, stats.cropped, stats.failed + stats.crop_failed,
+    stats.lens_applied, stats.lens_kept, stats.bad))
+  dt.print(string.format(_("Temp folder (with your annotations) kept: %s"), export_dir))
+end
+
+-- Mode 4: remove the apply-flow modules (negadoctor + crop + lens/vignette)
+-- from the history of all selected frames, for a clean re-run. This strips ALL
+-- crop and lens entries too, so a manually-set crop or lens distortion/TCA
+-- correction would also be removed (re-apply it afterwards if needed).
+local REMOVE_OPS = { negadoctor = true, crop = true, lens = true }
+
 local function remove_negadoctor_selected()
   dlog.log_level(dlog.info)
   math.randomseed(os.time() + os.clock() * 1000)
@@ -846,11 +1134,15 @@ local function remove_negadoctor_selected()
     return
   end
 
-  local stats = { removed = 0, none = 0, failed = 0 }
+  local stats = { removed = 0, none = 0, failed = 0,
+                  negadoctor = 0, crop = 0, lens = 0 }
   for i, image in ipairs(images) do
-    local outcome, error_msg = remove_negadoctor_in_place(image)
+    local outcome, counts, error_msg = remove_modules_in_place(image, REMOVE_OPS)
     if outcome == "removed" then
       stats.removed = stats.removed + 1
+      for op, n in pairs(counts or {}) do
+        stats[op] = (stats[op] or 0) + n
+      end
     elseif outcome == "none" then
       stats.none = stats.none + 1
     else
@@ -860,8 +1152,10 @@ local function remove_negadoctor_selected()
     end
   end
 
-  dt.print(string.format(_("Remove Negadoctor: %d removed, %d had none, %d failed"),
-    stats.removed, stats.none, stats.failed))
+  dt.print(string.format(
+    _("Remove: %d frame(s) cleaned, %d had none, %d failed (entries: %d negadoctor, %d crop, %d lens)"),
+    stats.removed, stats.none, stats.failed,
+    stats.negadoctor, stats.crop, stats.lens))
 end
 
 -- ===================================================================
@@ -874,6 +1168,7 @@ local function destroy()
     dt.gui.libs.image.destroy_action("AutoNegadoctor_InPlace_KeepTemp")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_Debug")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_InPlace")
+    dt.gui.libs.image.destroy_action("AutoNegadoctor_Annotate_Apply")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Remove")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoNegadoctor_Debug", "shortcut")
@@ -881,6 +1176,7 @@ local function destroy()
     pcall(dt.destroy_event, "AutoNegadoctor_InPlace_KeepTemp", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_AI_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_AI_InPlace", "shortcut")
+    pcall(dt.destroy_event, "AutoNegadoctor_Annotate_Apply", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_Remove", "shortcut")
 end
 
@@ -961,12 +1257,30 @@ dt.register_event(
     "AutoNegadoctor_AI_InPlace"
 )
 
--- Mode 4: remove negadoctor from history (clean slate for re-runs)
+-- Mode 5: annotate + apply — export, analyze, open the debug UI (blocking), and
+-- on close write the user's corrections (auto where none) to the XMPs: vignette,
+-- crop, and negadoctor as a new history item.
+dt.gui.libs.image.register_action(
+    "AutoNegadoctor_Annotate_Apply",
+    _("Auto negadoctor annotate & apply (debug UI, apply on close)"),
+    function() export_annotate_and_apply() end,
+    _("Export, analyze, open the debug UI; when you close it, apply your annotations (auto where none) - negadoctor (new history item), crop and vignette")
+)
+
+dt.register_event(
+    "AutoNegadoctor_Annotate_Apply",
+    "shortcut",
+    function(event, shortcut) export_annotate_and_apply() end,
+    "AutoNegadoctor_Annotate_Apply"
+)
+
+-- Mode 4: remove the apply-flow modules (negadoctor + crop + lens/vignette)
+-- from history (clean slate for re-runs)
 dt.gui.libs.image.register_action(
     "AutoNegadoctor_Remove",
-    _("Remove negadoctor from history"),
+    _("Remove negadoctor + crop + vignette from history"),
     function() remove_negadoctor_selected() end,
-    _("Strip negadoctor entries from the selected images' history for a fresh run")
+    _("Strip negadoctor, crop and lens/vignette entries from the selected images' history for a fresh run (also removes a manual crop or lens correction)")
 )
 
 dt.register_event(
