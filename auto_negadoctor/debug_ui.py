@@ -764,6 +764,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.mask_view = 0           # 0=normal, 1=tint areas, 2=hide rejected
         self.show_histogram = True
         self._hist_data = None
+        self.show_clipping = False     # on-image red/blue clip overlay (L)
+        self._clip_stats = None        # {"hi": pct, "lo": pct, "total": n}
         self._display_base_pil = None
         self._amask_cache_stem = None
         self._amask_cache = None
@@ -801,7 +803,7 @@ class NegadoctorDebugUI(DebugUIBase):
         # capture the freshly loaded image as the undecorated display base
         # and re-apply the persistent mask view to the new frame
         self._display_base_pil = self.pil_image
-        if self.mask_view:
+        if self.mask_view or self.show_clipping:
             self.pil_image = self._decorate(self._display_base_pil)
             self._redraw()
         self._refresh_histogram()
@@ -824,6 +826,8 @@ class NegadoctorDebugUI(DebugUIBase):
             ("▣", "#ff4444", "Bad inversion flag"),
             ("▒", "#ff6060", "Rejected outside crop (M)"),
             ("□", "#44ee44", "User crop (true content)"),
+            ("■", "#ff3030", "Clipped highlights (L)"),
+            ("■", "#4080ff", "Clipped shadows (L)"),
         ])
         self.add_hints(parent, (
             "Mouse:\n"
@@ -851,6 +855,9 @@ class NegadoctorDebugUI(DebugUIBase):
             "  M — analysis areas / hide\n"
             "      rejected holder\n"
             "  T — histogram on/off\n"
+            "  L — clip overlay on image\n"
+            "      (red=blown, blue=crushed;\n"
+            "      meter top-right always on)\n"
             "  G — toggle bad inversion\n"
             "  Note box — comment on sel.\n"
             "  H — hide/show markers\n"
@@ -932,6 +939,10 @@ class NegadoctorDebugUI(DebugUIBase):
                                   command=self._cycle_mask_view, **btn_cfg)
         self.mask_btn.pack(fill=tk.X, pady=1)
 
+        self.clip_btn = tk.Button(btn_frame, text="Clip Overlay  (L)",
+                                   command=self._toggle_clipping, **btn_cfg)
+        self.clip_btn.pack(fill=tk.X, pady=1)
+
         self.bad_btn = tk.Button(btn_frame, text="Bad Inversion  (G)",
                                  command=self._toggle_bad_inversion, **btn_cfg)
         self.bad_btn.pack(fill=tk.X, pady=1)
@@ -962,6 +973,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<M>", lambda e: self._cycle_mask_view())
         self.bind_key("<t>", lambda e: self._toggle_histogram())
         self.bind_key("<T>", lambda e: self._toggle_histogram())
+        self.bind_key("<l>", lambda e: self._toggle_clipping())
+        self.bind_key("<L>", lambda e: self._toggle_clipping())
 
     def image_status_text(self, img_dict):
         p = img_dict.get("params") or {}
@@ -1185,38 +1198,65 @@ class NegadoctorDebugUI(DebugUIBase):
         self._amask_cache = mask
         return mask
 
+    # --- clipping indication ---------------------------------------------
+    # A channel at the 8-bit ceiling/floor of the displayed sRGB render is
+    # clipped: 255 == highlights blown (linear >= 1.0), 0 == shadows crushed.
+    # The on-image overlay (L, default off) paints those pixels a "wrong"
+    # colour; the meter + histogram spikes always report the fractions.
+    CLIP_HI_LEVEL = 255
+    CLIP_LO_LEVEL = 0
+    CLIP_HI_COLOR = (255, 0, 0)        # highlight clip -> red
+    CLIP_LO_COLOR = (40, 90, 255)      # shadow clip   -> blue
+    CLIP_METER_FULL_PCT = 2.0          # bar = full at this % clipped
+    CLIP_BUDGET_PCT = 0.3              # threshold tick (= PRINT_CLIP_BUDGET)
+
     def _decorate(self, pil):
-        """Apply the current mask view to a base image."""
-        if self.mask_view == 0 or pil is None:
+        """Apply the current mask view + clip overlay to a base image."""
+        if pil is None:
             return pil
-        mask = self._analysis_mask(self.images[self.current_idx])
+        if self.mask_view == 0 and not self.show_clipping:
+            return pil
         arr = np.array(pil.convert("RGB"))
-        if mask is not None and mask.shape[:2] != arr.shape[:2]:
-            mask = None
-        if self.mask_view == 1 and mask is None:
-            return pil
-        if self.mask_view == 1:
-            for code, (r, g, b, a) in MASK_TINTS.items():
-                sel = mask == code
-                if sel.any():
-                    f = a / 255.0
-                    arr[sel] = (arr[sel] * (1 - f)
-                                + np.array([r, g, b], dtype=np.float32) * f
-                                ).astype(np.uint8)
-        else:
-            # show the frame WITHOUT the rejected area: the user's crop
-            # correction is authoritative when present, else holder+border
-            crop = self.annotations[self.images[self.current_idx]["stem"]] \
-                .get("crop_correction")
-            if crop:
-                x, y, cw, ch = [int(v) for v in crop]
-                keep = np.zeros(arr.shape[:2], dtype=bool)
-                keep[y:y + ch, x:x + cw] = True
-                arr[~keep] = 0
-            elif mask is not None:
-                arr[(mask == 1) | (mask == 2)] = 0
+        # Clip masks come from the TRUE rendered values, captured before any
+        # mask blanking turns rejected pixels black (which would otherwise read
+        # as bogus shadow clipping).
+        clip_hi = clip_lo = None
+        if self.show_clipping:
+            clip_hi = (arr >= self.CLIP_HI_LEVEL).any(axis=2)
+            clip_lo = (arr <= self.CLIP_LO_LEVEL).any(axis=2)
+        if self.mask_view != 0:
+            mask = self._analysis_mask(self.images[self.current_idx])
+            if mask is not None and mask.shape[:2] != arr.shape[:2]:
+                mask = None
+            if self.mask_view == 1:
+                if mask is not None:
+                    for code, (r, g, b, a) in MASK_TINTS.items():
+                        sel = mask == code
+                        if sel.any():
+                            f = a / 255.0
+                            arr[sel] = (arr[sel] * (1 - f)
+                                        + np.array([r, g, b], dtype=np.float32) * f
+                                        ).astype(np.uint8)
             else:
-                return pil
+                # show the frame WITHOUT the rejected area: the user's crop
+                # correction is authoritative when present, else holder+border
+                crop = self.annotations[self.images[self.current_idx]["stem"]] \
+                    .get("crop_correction")
+                keep = None
+                if crop:
+                    x, y, cw, ch = [int(v) for v in crop]
+                    keep = np.zeros(arr.shape[:2], dtype=bool)
+                    keep[y:y + ch, x:x + cw] = True
+                elif mask is not None:
+                    keep = ~((mask == 1) | (mask == 2))
+                if keep is not None:
+                    arr[~keep] = 0
+                    if clip_hi is not None:
+                        clip_hi &= keep
+                        clip_lo &= keep
+        if clip_hi is not None:
+            arr[clip_hi] = self.CLIP_HI_COLOR
+            arr[clip_lo] = self.CLIP_LO_COLOR
         return Image.fromarray(arr)
 
     def _set_display_image(self, pil):
@@ -1252,6 +1292,7 @@ class NegadoctorDebugUI(DebugUIBase):
         histogram shows the photo content only (the inverted holder would
         otherwise fake a clipped-whites spike)."""
         self._hist_data = None
+        self._clip_stats = None
         if self._display_base_pil is None:
             return
         try:
@@ -1272,6 +1313,13 @@ class NegadoctorDebugUI(DebugUIBase):
                     pixels = arr[keep]
         if len(pixels) == 0:
             return
+        # clip fractions over the SAME pixel set the histogram covers (content
+        # only in hide-rejected mode) — drives the meter + histogram spikes
+        total = len(pixels)
+        hi = int(np.count_nonzero((pixels >= self.CLIP_HI_LEVEL).any(axis=1)))
+        lo = int(np.count_nonzero((pixels <= self.CLIP_LO_LEVEL).any(axis=1)))
+        self._clip_stats = {"hi": hi / total * 100.0,
+                            "lo": lo / total * 100.0, "total": total}
         hists = []
         for c in range(3):
             h, _edges = np.histogram(pixels[:, c], bins=self.HIST_BINS,
@@ -1301,10 +1349,71 @@ class NegadoctorDebugUI(DebugUIBase):
                 pts.extend((px, py))
             self.canvas.create_line(*pts, fill=colors[c], width=1,
                                     tags="histogram")
+        # clipping spikes: red at the right edge (blown highlights), blue at
+        # the left edge (crushed shadows), height ~ the clipped fraction
+        stats = getattr(self, "_clip_stats", None)
+        if stats:
+            track = ph - 6
+            for pct, color, ex in ((stats["hi"], "#ff3030", x0 + pw - 2),
+                                   (stats["lo"], "#4080ff", x0 + 2)):
+                if pct <= 0:
+                    continue
+                bh = track * min(1.0, pct / self.CLIP_METER_FULL_PCT)
+                self.canvas.create_line(ex, y0 + ph - 2, ex, y0 + ph - 2 - bh,
+                                        fill=color, width=3, tags="histogram")
         if self.mask_view == 2:
             self.canvas.create_text(x0 + 3, y0 + 2, anchor="nw",
                                     text="content only", fill="#aaaaaa",
                                     font=("Courier", 7), tags="histogram")
+
+    def _draw_clip_meter(self):
+        """A VU-style clip-level meter top-right (below the histogram): one
+        bar per direction (H = blown highlights, S = crushed shadows) filling
+        to CLIP_METER_FULL_PCT, with a tick at the clip budget and the exact
+        percentage. Always shown; (L) additionally tints clipped pixels on the
+        image."""
+        stats = getattr(self, "_clip_stats", None)
+        cw = self.canvas.winfo_width()
+        pw, rh, pad = 150, 13, 4
+        x0 = cw - pw - 12
+        y0 = (10 + 72 + 8) if (self.show_histogram
+                               and getattr(self, "_hist_data", None)) else 10
+        ph = 16 + 2 * (rh + pad)
+        self.canvas.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#1c1c1c",
+                                     outline="#666666", tags="clipmeter")
+        title = "clipping" + ("  L:ON" if self.show_clipping else "  (L)")
+        self.canvas.create_text(x0 + 4, y0 + 2, anchor="nw", text=title,
+                                fill="#dddddd" if self.show_clipping else "#aaaaaa",
+                                font=("Courier", 7, "bold"), tags="clipmeter")
+        rows = (("H", "#ff3030", stats["hi"] if stats else None),
+                ("S", "#4080ff", stats["lo"] if stats else None))
+        bx0, bx1 = x0 + 18, x0 + pw - 42
+        for i, (lab, color, val) in enumerate(rows):
+            ry = y0 + 15 + i * (rh + pad)
+            self.canvas.create_text(x0 + 4, ry + rh / 2, anchor="w", text=lab,
+                                    fill="#cccccc", font=("Courier", 8),
+                                    tags="clipmeter")
+            self.canvas.create_rectangle(bx0, ry, bx1, ry + rh, fill="#000000",
+                                         outline="#555555", tags="clipmeter")
+            if val is not None:
+                frac = min(1.0, val / self.CLIP_METER_FULL_PCT)
+                if frac > 0:
+                    self.canvas.create_rectangle(
+                        bx0, ry, bx0 + (bx1 - bx0) * frac, ry + rh,
+                        fill=color, outline="", tags="clipmeter")
+                txt = f"{val:.2f}%"
+            else:
+                txt = "—"
+            # budget tick (highlights only)
+            if lab == "H":
+                tx = bx0 + (bx1 - bx0) * min(1.0, self.CLIP_BUDGET_PCT
+                                            / self.CLIP_METER_FULL_PCT)
+                self.canvas.create_line(tx, ry - 1, tx, ry + rh + 1,
+                                        fill="#ffd700", width=1, tags="clipmeter")
+            over = val is not None and lab == "H" and val > self.CLIP_BUDGET_PCT
+            self.canvas.create_text(bx1 + 3, ry + rh / 2, anchor="w", text=txt,
+                                    fill="#ff6060" if over else "#cccccc",
+                                    font=("Courier", 8), tags="clipmeter")
 
     def _toggle_compare(self):
         """X: flip between the corrected render and the algorithm's default."""
@@ -1377,6 +1486,22 @@ class NegadoctorDebugUI(DebugUIBase):
         self.show_histogram = not self.show_histogram
         self._redraw_markers()
 
+    def _toggle_clipping(self):
+        """L: toggle the on-image clip overlay (red highlights / blue shadows).
+        The meter + histogram spikes report the fractions regardless."""
+        self.show_clipping = not self.show_clipping
+        if self._display_base_pil is not None:
+            self.pil_image = self._decorate(self._display_base_pil)
+        self._update_clip_btn()
+        self._redraw()
+
+    def _update_clip_btn(self):
+        if not hasattr(self, "clip_btn"):
+            return
+        on = self.show_clipping
+        self.clip_btn.config(text="Clip Overlay ✓ (L)" if on else "Clip Overlay  (L)",
+                             fg="#ff6666" if on else "white")
+
     def _toggle_bad_inversion(self):
         stem = self.images[self.current_idx]["stem"]
         ann = self.annotations[stem]
@@ -1396,7 +1521,8 @@ class NegadoctorDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def overlay_tags(self):
-        return ("patches", "corrections", "labels", "badges", "histogram")
+        return ("patches", "corrections", "labels", "badges", "histogram",
+                "clipmeter")
 
     def _draw_rect(self, rect, color, tags, width=2, dash=None, label=None):
         x, y, w, h = rect
@@ -1472,6 +1598,7 @@ class NegadoctorDebugUI(DebugUIBase):
                 fill="#ff8888", font=("Courier", 9, "bold"))
 
         self._draw_histogram()
+        self._draw_clip_meter()
 
         if self.view_negative:
             self.canvas.create_text(

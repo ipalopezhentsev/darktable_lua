@@ -402,7 +402,20 @@ the crop even without selecting "crop" first (an earlier session lost the
 user's crop because the drag was silently ignored in this mode). A small **RGB histogram** of
 the displayed converted image sits top-right (T toggles); in hide-rejected
 mode it is computed over photo content only, so the inverted holder can't
-fake a clipped-whites spike. Keys: 1/2/3 select patch kind, Ctrl+Click
+fake a clipped-whites spike. **Clipping indication** (added 2026-06-15): the
+displayed 8-bit sRGB render is checked per pixel for blown highlights (any
+channel == 255 → linear >= 1.0) and crushed shadows (any channel == 0); a
+VU-style **clip meter** sits top-right under the histogram (always on: an H bar
+for highlights with a gold tick at the clip budget `PRINT_CLIP_BUDGET`=0.3% and
+an S bar for shadows, each full at `CLIP_METER_FULL_PCT`=2%, with the exact %),
+red/blue **spikes** on the histogram edges show the same fractions, and **L**
+toggles an **on-image overlay** (default OFF) tinting clipped pixels red
+(highlights) / blue (shadows). Clip fractions use the SAME pixel set as the
+histogram (content-only in hide-rejected mode); the overlay masks are captured
+from the true render BEFORE mask-blanking so a blanked holder can't read as
+shadow clipping. Driven by `_clip_stats` (in `_refresh_histogram`),
+`_draw_clip_meter`, the clip branch of `_decorate`; smoke-tested
+(`clipping` step). Keys: 1/2/3 select patch kind, Ctrl+Click
 re-places the selected patch, **scroll resizes it** (first scroll on a
 detected patch seeds a correction from the detected rect, so adjusted sizes
 land in the annotations), C clears, V toggles inverted/negative view, G

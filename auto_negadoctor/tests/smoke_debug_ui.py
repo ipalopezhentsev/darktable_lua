@@ -339,6 +339,24 @@ def main():
             assert app.show_histogram
         step("histogram", histogram)
 
+        # Clipping indication: stats computed over the displayed image, the
+        # on-image overlay toggles (default off) and re-decorates the frame
+        def clipping():
+            assert app.show_clipping is False, "clip overlay must default off"
+            app._refresh_histogram()
+            stats = app._clip_stats
+            assert stats is not None and {"hi", "lo", "total"} <= set(stats), \
+                f"clip stats not computed: {stats}"
+            assert 0.0 <= stats["hi"] <= 100.0 and 0.0 <= stats["lo"] <= 100.0, \
+                f"clip pct out of range: {stats}"
+            base = app._display_base_pil
+            app._toggle_clipping()
+            assert app.show_clipping is True
+            assert app.pil_image is not base, "clip overlay not applied to image"
+            app._toggle_clipping()
+            assert app.show_clipping is False
+        step("clipping", clipping)
+
         # Live wb feedback for the corrected patch
         def live_wb():
             corr = app.annotations[stem]["patch_corrections"]["shadows"]
