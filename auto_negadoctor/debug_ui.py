@@ -186,7 +186,9 @@ class ColorWheel:
         self.on_change = on_change
         self._marker_wb = [1.0, 1.0, 1.0]
         self._auto_wb = None
-        self._last_xy = None              # cursor pos at the previous drag event
+        self._anchor_cursor = None        # cursor pos when the drag was anchored
+        self._anchor_marker = None        # marker pos when the drag was anchored
+        self._anchor_fine = False         # fine state the anchor was taken under
         self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0,
                                 cursor="crosshair")
         self.canvas.bind("<ButtonPress-1>", self._on_press)
@@ -274,24 +276,36 @@ class ColorWheel:
     def _is_fine(self, event):
         return bool(event.state & self._CTRL_MASK)
 
+    def _anchor(self, event):
+        # Pin the cursor→marker mapping to the current positions: from here the
+        # marker is anchor_marker + (cursor - anchor_cursor) * gain, an absolute
+        # function of where the cursor is (not an accumulation of per-event
+        # deltas), so fine mode tracks the cursor exactly like a plain drag —
+        # just slower — with no incremental drift or rim dead-zone.
+        self._anchor_cursor = (event.x, event.y)
+        self._anchor_marker = self._marker_pos
+        self._anchor_fine = self._is_fine(event)
+
     def _on_press(self, event):
-        self._last_xy = (event.x, event.y)
         # A plain click jumps the marker to the cursor; a Ctrl-click instead
         # starts nudging from the marker's current spot (no jump), so fine
         # tweaks don't lose the existing value the moment the button goes down.
         if not self._is_fine(event):
             self._emit(event.x, event.y)
+        self._anchor(event)
 
     def _on_drag(self, event):
-        # Incremental: move the marker by the cursor delta since the last
-        # event, scaled down while Ctrl is held. Working from the (clamped)
-        # marker position rather than the absolute cursor keeps a plain drag
-        # 1:1 with the cursor and lets the fine factor toggle mid-drag.
-        lx, ly = self._last_xy if self._last_xy is not None else (event.x, event.y)
+        # Absolute-anchored: marker = anchor + (cursor - anchor) * gain. The
+        # fine factor only scales the mapping (slower), it does NOT switch to a
+        # relative/incremental model, so the slow mode behaves identically to
+        # the plain mode in absolute terms. Re-anchor when Ctrl toggles
+        # mid-drag so the gain change is seamless from the current spot.
+        if self._anchor_cursor is None or self._is_fine(event) != self._anchor_fine:
+            self._anchor(event)
         gain = self.FINE_FACTOR if self._is_fine(event) else 1.0
-        mx, my = self._marker_pos
-        self._last_xy = (event.x, event.y)
-        self._emit(mx + (event.x - lx) * gain, my + (event.y - ly) * gain)
+        ax, ay = self._anchor_cursor
+        mx, my = self._anchor_marker
+        self._emit(mx + (event.x - ax) * gain, my + (event.y - ay) * gain)
 
 
 class NegadoctorDebugUI(DebugUIBase):
