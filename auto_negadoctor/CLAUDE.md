@@ -423,7 +423,20 @@ flags a bad inversion (whole frame). **Print-page params are adjustable
 too**: 4/5/6/7 select paper black / paper grade (gamma) / paper gloss
 (soft_clip) / print exposure, scroll adjusts the value (Shift = big step)
 with live preview, stored as `print_overrides` in the annotations and the
-report. Any correction/override **live re-renders the inversion**
+report. **Brighter/darker combo (keys ] / [, or the buttons)** automate the
+user's repeated manual move — raise paper black to lift midtones (which clips
+the highlights), then drop print exposure until the highlights stop clipping.
+`_brighten()` nudges black by `BRIGHTEN_BLACK_STEP` (0.05 on the [-0.5, 0.5]
+black param, a "5%" move), then re-solves exposure to **hold the highlight level
+constant** — `_exposure_for_high_pct` bisects exposure (the P99.9 render
+percentile is monotonic in exposure) to restore the P99.9 it measured BEFORE the
+black change. Pinning that level — instead of "lower exposure until clip is
+gone" — makes the result a deterministic function of black, so brighter-then-
+darker returns BOTH params exactly (the highlight level is the op's invariant;
+this fixed the original "exposure stays new" non-reversibility), and dark scenes
+aren't over-brightened to the clip ceiling. Both land as black + exposure
+`print_overrides`, so X compares with default and C clears. Smoke step `brighten`
+asserts the highlight hold AND the round-trip reversibility. Any correction/override **live re-renders the inversion**
 (debounced): corrected film base re-derives Dmin/D_max, corrected
 shadows/highlights re-derive wb_low/wb_high, print overrides replace their
 values (otherwise black/exposure keep their tuned values); **X toggles

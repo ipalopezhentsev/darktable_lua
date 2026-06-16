@@ -223,6 +223,41 @@ def main():
             assert app._live_rendered, "corrected render did not return"
         step("compare_toggle", compare_toggle)
 
+        # ] brighter / [ darker: raise/lower black, re-solve exposure to hold the
+        # highlight level (the user's manual move). Must be reversible: brighter
+        # then darker returns BOTH black and exposure to the originals.
+        def brighten():
+            saved = dict(app.annotations[stem]["print_overrides"])  # restore after
+            base = app._corrected_params(img) or app._variant_params(img)
+            blk0, exp0 = float(base["black"]), float(base["exposure"])
+            lin = app._neg_lin(img)
+            content = app._brighten_content_pixels(img, lin)
+            hi0 = app._high_pct(base, content)
+
+            app._brighten(False)
+            ov = app.annotations[stem]["print_overrides"]
+            exp_blk = min(an.nm.BLACK_RANGE[1], blk0 + dbg.BRIGHTEN_BLACK_STEP)
+            assert abs(ov["black"] - exp_blk) < 1e-9, \
+                f"brighter black wrong: {ov['black']} vs {exp_blk}"
+            assert ov.get("exposure", exp0) <= exp0 + 1e-9, \
+                "brighter must not raise exposure (it holds highlights)"
+            # the highlight level is preserved by the move
+            final = app._corrected_params(img)
+            assert abs(app._high_pct(final, content) - hi0) < 5e-3, \
+                "brighter did not hold the highlight level"
+
+            # darker reverses it: black AND exposure back to the originals
+            app._brighten(True)
+            ov = app.annotations[stem]["print_overrides"]
+            assert abs(ov["black"] - blk0) < 1e-9, \
+                f"darker did not restore black: {ov['black']} vs {blk0}"
+            assert abs(ov.get("exposure", exp0) - exp0) < 2e-3, \
+                f"darker did not restore exposure: {ov.get('exposure')} vs {exp0}"
+
+            app.annotations[stem]["print_overrides"].clear()
+            app.annotations[stem]["print_overrides"].update(saved)
+        step("brighten", brighten)
+
         # C clears a print override
         def clear_print():
             app._select_patch("gamma")

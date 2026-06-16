@@ -776,6 +776,7 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
 
   local exported_files = {}
   local filename_to_image = {}
+  local source_paths = {}
 
   local export_ok, export_err = pcall(function()
     for i, image in ipairs(images) do
@@ -793,6 +794,9 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
       if success then
         table.insert(exported_files, filename)
         filename_to_image[safe_name] = image
+        -- Record the original source path so the temp folder isn't anonymous:
+        -- image.path is the directory holding the original raw/file.
+        source_paths[safe_name] = image.path .. "/" .. image.filename
       else
         dt.print(string.format(_("  Failed to export: %s"), image.filename))
       end
@@ -834,6 +838,20 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
   else
     dlog.msg(dlog.warn, "export_and_detect",
       "Could not write exif_params.txt; Python will read EXIF from the exports")
+  end
+
+  -- Write a manifest mapping each exported stem back to its original source
+  -- file, so the temp export folder records where the frames came from.
+  local src_file = export_dir .. "/source_paths.txt"
+  local sf = io.open(src_file, "w")
+  if sf then
+    for safe_name, src_path in pairs(source_paths) do
+      sf:write(string.format("%s|%s\n", safe_name, src_path))
+    end
+    sf:close()
+  else
+    dlog.msg(dlog.warn, "export_and_detect",
+      "Could not write source_paths.txt")
   end
 
   -- Call Python script

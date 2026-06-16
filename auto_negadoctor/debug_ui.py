@@ -64,6 +64,20 @@ PRINT_SHORT = {"black": "blk", "gamma": "gamma", "soft_clip": "gloss",
 PRINT_STEP = {"black": (0.005, 0.02), "gamma": (0.05, 0.25),
               "soft_clip": (0.01, 0.05), "exposure": (0.01, 0.05)}
 
+# "Brighter"/"darker" one-key combo (] / [): the user's repeated manual trick is
+# to raise paper black (which lifts midtones but clips highlights) and then lower
+# print exposure until the highlights stop clipping — net brighter midtones with
+# the highlights still pinned just below clip. This does both in unison: nudge
+# black by BRIGHTEN_BLACK_STEP (0.05 on the [-0.5, 0.5] black param, a "5%" move),
+# then re-solve exposure to hold the highlights (the P99.9 render percentile) at
+# the level they were at before the move. Pinning that level (rather than "lower
+# exposure until clip is gone") keeps the op a deterministic function of black, so
+# brighter-then-darker returns exactly to the original exposure (the highlight
+# level is the operation's invariant), and dark scenes aren't over-brightened.
+BRIGHTEN_BLACK_STEP = 0.05
+# A display-render channel at/above this linear value is a blown highlight.
+CLIP_OUT_THR = 0.999
+
 # Shadows/highlights as color wheels (spec 02): two wheels drive wb_low /
 # wb_high directly with live preview, an alternative to picking patches. The
 # chosen value is stored as a direct abstract wb override (the exact value
@@ -863,6 +877,10 @@ class NegadoctorDebugUI(DebugUIBase):
             "    grow/shrink, C clears);\n"
             "    grabbing a crop EDGE\n"
             "    works in any mode\n"
+            "  ] / [ — brighter/darker\n"
+            "    (raises/lowers black, then\n"
+            "    re-solves exposure to keep\n"
+            "    highlights below clipping)\n"
             "  C — clear correction\n"
             "  V — inverted/negative view\n"
             "  X — corrected/default render\n"
@@ -957,6 +975,17 @@ class NegadoctorDebugUI(DebugUIBase):
                                    command=self._toggle_clipping, **btn_cfg)
         self.clip_btn.pack(fill=tk.X, pady=1)
 
+        # brighter/darker: raise/lower paper black, then re-solve exposure to
+        # keep highlights just below clipping (the user's manual brighten move)
+        bright_row = tk.Frame(btn_frame, bg="#484848")
+        bright_row.pack(fill=tk.X, pady=1)
+        tk.Button(bright_row, text="Darker  ( [ )",
+                  command=lambda: self._brighten(True), **btn_cfg
+                  ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Button(bright_row, text="Brighter  ( ] )",
+                  command=lambda: self._brighten(False), **btn_cfg
+                  ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         self.bad_btn = tk.Button(btn_frame, text="Bad Inversion  (G)",
                                  command=self._toggle_bad_inversion, **btn_cfg)
         self.bad_btn.pack(fill=tk.X, pady=1)
@@ -989,6 +1018,9 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<T>", lambda e: self._toggle_histogram())
         self.bind_key("<l>", lambda e: self._toggle_clipping())
         self.bind_key("<L>", lambda e: self._toggle_clipping())
+        # ] brighter / [ darker: black + exposure in unison (see _brighten)
+        self.bind_key("<bracketright>", lambda e: self._brighten(False))
+        self.bind_key("<bracketleft>", lambda e: self._brighten(True))
 
     def image_status_text(self, img_dict):
         p = img_dict.get("params") or {}
@@ -1778,6 +1810,116 @@ class NegadoctorDebugUI(DebugUIBase):
         self._update_info_from_selection()
         self._schedule_live_render()
         return True
+
+    # --- "brighter" / "darker" (black + exposure in unison) ----------------
+
+    def _brighten_content_pixels(self, img_dict, lin):
+        """Subsampled (N,3) float64 content pixels for the clip solve — the
+        user's crop rect when present (the authoritative content area), else the
+        auto border trim. Same stride as auto_negadoctor.tune_print_params."""
+        import auto_negadoctor as anp
+        h, w = lin.shape[:2]
+        crop = self.annotations[img_dict["stem"]].get("crop_correction")
+        if crop:
+            x, y, cw, ch = [int(v) for v in crop]
+            l, t = max(x, 0), max(y, 0)
+            r, b = max(w - x - cw, 0), max(h - y - ch, 0)
+        else:
+            l, t, r, b = img_dict.get("border") or (0, 0, 0, 0)
+        s = max(1, int(round(w * anp.PRINT_TUNE_SUBSAMPLE_FRAC)))
+        region = np.asarray(lin[t:h - b:s, l:w - r:s], dtype=np.float64)
+        if region.size == 0:
+            region = np.asarray(lin, dtype=np.float64)
+        return region.reshape(-1, 3)
+
+    @staticmethod
+    def _clip_fraction(params, content):
+        out = nm.render_negadoctor(content, params)
+        return float(np.mean((out >= CLIP_OUT_THR).any(axis=1)))
+
+    @staticmethod
+    def _high_pct(params, content):
+        """The rendered highlight level: P99.9 of the per-pixel mean over the
+        content (same statistic auto_negadoctor.tune_print_params pins)."""
+        import auto_negadoctor as anp
+        out = nm.render_negadoctor(content, params)
+        return float(np.percentile(out.mean(axis=1), anp.PRINT_HI_PCT))
+
+    def _exposure_for_high_pct(self, params, content, target):
+        """Exposure (in nm.EXPOSURE_RANGE) whose rendered high percentile equals
+        `target`. The high percentile is monotonic increasing in exposure, so
+        bisect; clamps to the range ends when target is unreachable."""
+        lo, hi = nm.EXPOSURE_RANGE
+        work = dict(params)
+
+        def hp(e):
+            work["exposure"] = e
+            return self._high_pct(work, content)
+
+        if hp(lo) >= target:
+            return lo
+        if hp(hi) <= target:
+            return hi
+        for _ in range(32):
+            mid = 0.5 * (lo + hi)
+            if hp(mid) < target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
+
+    def _brighten(self, darker=False):
+        """] / [: raise (or lower) paper black to lift (drop) midtones, then
+        re-solve print exposure to hold the highlights at the level they were at
+        before the move — the user's manual brighten move done in one keystroke.
+        Holding the highlight level (P99.9) makes the result a function of black
+        alone, so brighter-then-darker is exactly reversible. Stored as black +
+        exposure print overrides, so X compares with default and C clears."""
+        import auto_negadoctor as anp
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        base = self._corrected_params(img_dict) or self._variant_params(img_dict)
+        lin = self._neg_lin(img_dict)
+        if not base or lin is None:
+            self._set_info_text("Brighter/darker needs the source negative and "
+                                "params (none available for this frame).")
+            return
+        cur_black = float(base["black"])
+        cur_exp = float(base["exposure"])
+        step = -BRIGHTEN_BLACK_STEP if darker else BRIGHTEN_BLACK_STEP
+        new_black = nm.clamp(cur_black + step, nm.BLACK_RANGE)
+        if new_black == cur_black:
+            edge = "minimum" if darker else "maximum"
+            self._set_info_text(f"Paper black already at its {edge} "
+                                f"({cur_black:+.2f}) — can't go "
+                                f"{'darker' if darker else 'brighter'}.")
+            return
+        content = self._brighten_content_pixels(img_dict, lin)
+        # the highlight level to preserve, measured BEFORE the black change
+        target = self._high_pct(base, content)
+        work = dict(base)
+        work["black"] = new_black
+        new_exp = self._exposure_for_high_pct(work, content, target)
+
+        ann = self.annotations[stem]
+        ann["print_overrides"]["black"] = new_black
+        if abs(new_exp - cur_exp) > 1e-9:
+            ann["print_overrides"]["exposure"] = new_exp
+        self._auto_save(stem)
+        self._update_count_label()
+        self._populate_items_list()
+        self._redraw_markers()
+        self._schedule_live_render()
+
+        work["exposure"] = new_exp
+        clip = self._clip_fraction(work, content)
+        self._set_info_text(
+            f"{'Darker' if darker else 'Brighter'}: paper black "
+            f"{cur_black:+.3f} → {new_black:+.3f} ({step:+.0%}),  exposure "
+            f"{cur_exp:.3f} → {new_exp:.3f}\n"
+            f"  highlights held at P{anp.PRINT_HI_PCT:g}≈{target:.3f}, hard-clip "
+            f"{clip * 100:.2f}% (budget {anp.PRINT_CLIP_BUDGET * 100:.1f}%).  "
+            f"Press ] / [ again to go further; select blk/pexp + C to clear.")
 
     # --- crop edge dragging (modal tool via the press/drag/release hooks) ---
 
