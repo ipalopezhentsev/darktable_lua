@@ -1,0 +1,23 @@
+{
+  "stem": "DSC_0031",
+  "patch_corrections": {},
+  "print_overrides": {},
+  "wb_overrides": {},
+  "patch_notes": {},
+  "bad_inversion": false,
+  "bad_inversion_note": "",
+  "crop_correction": {
+    "auto_border": [
+      0.03953953953953954,
+      0.04416167664670659,
+      0.06256256256256257,
+      0.04116766467065868
+    ],
+    "corrected": [
+      0.026026026026026026,
+      0.029940119760479042,
+      0.9514514514514515,
+      0.9423652694610778
+    ]
+  }
+}

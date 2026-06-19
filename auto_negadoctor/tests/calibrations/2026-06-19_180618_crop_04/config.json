@@ -1,0 +1,21 @@
+{
+  "kind": "crop",
+  "rolls": [
+    "2506-1",
+    "2510-11-1",
+    "2511-12-1",
+    "2512-2601-1"
+  ],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 2e-06,
+    "max_iters": 15,
+    "tolerances": {
+      "containment_weight": 15.0
+    },
+    "params": "all"
+  },
+  "metric": "crop_overtrim_area_fraction (containment HARD)",
+  "created": "2026-06-19T17:56:25",
+  "git_commit": "8be3bf8"
+}

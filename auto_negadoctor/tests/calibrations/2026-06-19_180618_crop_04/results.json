@@ -1,0 +1,2488 @@
+{
+  "wall_seconds": 593.28,
+  "prep_seconds": 98.92,
+  "prep_seconds_by_roll": {
+    "2506-1": 22.93,
+    "2510-11-1": 25.55,
+    "2511-12-1": 24.92,
+    "2512-2601-1": 25.52
+  },
+  "trial_count": 879,
+  "objective_initial": 34.647031013048995,
+  "objective_final": 4.836704968441495,
+  "trace": {
+    "method": "coordinate_descent",
+    "trials": 879,
+    "best_objective": 4.836704968441495,
+    "improvements": [
+      {
+        "trial": 1,
+        "objective": 34.647031013048995
+      },
+      {
+        "trial": 2,
+        "objective": 28.321239652826474
+      },
+      {
+        "trial": 3,
+        "objective": 19.051953900007792
+      },
+      {
+        "trial": 4,
+        "objective": 14.039968486450526
+      },
+      {
+        "trial": 5,
+        "objective": 12.822547472622322
+      },
+      {
+        "trial": 6,
+        "objective": 11.965254925584267
+      },
+      {
+        "trial": 7,
+        "objective": 11.180660076243905
+      },
+      {
+        "trial": 8,
+        "objective": 10.610031813250373
+      },
+      {
+        "trial": 9,
+        "objective": 10.272035883188577
+      },
+      {
+        "trial": 77,
+        "objective": 10.269328834822845
+      },
+      {
+        "trial": 79,
+        "objective": 10.267048485611358
+      },
+      {
+        "trial": 87,
+        "objective": 10.185036083988177
+      },
+      {
+        "trial": 91,
+        "objective": 10.169984730239218
+      },
+      {
+        "trial": 95,
+        "objective": 10.152156647665628
+      },
+      {
+        "trial": 101,
+        "objective": 10.146668374961784
+      },
+      {
+        "trial": 112,
+        "objective": 10.146212454969938
+      },
+      {
+        "trial": 115,
+        "objective": 10.14530286274298
+      },
+      {
+        "trial": 145,
+        "objective": 9.33383420845996
+      },
+      {
+        "trial": 147,
+        "objective": 8.770278137418856
+      },
+      {
+        "trial": 151,
+        "objective": 8.768752659845479
+      },
+      {
+        "trial": 154,
+        "objective": 8.731776686866507
+      },
+      {
+        "trial": 164,
+        "objective": 8.700314086541631
+      },
+      {
+        "trial": 166,
+        "objective": 8.682879361397326
+      },
+      {
+        "trial": 168,
+        "objective": 8.550954772137406
+      },
+      {
+        "trial": 174,
+        "objective": 8.549854869839898
+      },
+      {
+        "trial": 184,
+        "objective": 8.482570519621415
+      },
+      {
+        "trial": 190,
+        "objective": 8.479318764872653
+      },
+      {
+        "trial": 199,
+        "objective": 8.361677920435401
+      },
+      {
+        "trial": 200,
+        "objective": 8.326791986597371
+      },
+      {
+        "trial": 204,
+        "objective": 8.313678199157238
+      },
+      {
+        "trial": 216,
+        "objective": 8.271212454969938
+      },
+      {
+        "trial": 230,
+        "objective": 6.225056643469817
+      },
+      {
+        "trial": 232,
+        "objective": 5.981516696337055
+      },
+      {
+        "trial": 235,
+        "objective": 5.856675912439384
+      },
+      {
+        "trial": 247,
+        "objective": 5.83534694874515
+      },
+      {
+        "trial": 249,
+        "objective": 5.8127337667008305
+      },
+      {
+        "trial": 251,
+        "objective": 5.8051618235001445
+      },
+      {
+        "trial": 330,
+        "objective": 5.62530906655158
+      },
+      {
+        "trial": 331,
+        "objective": 5.590426504348659
+      },
+      {
+        "trial": 335,
+        "objective": 5.565314191436944
+      },
+      {
+        "trial": 339,
+        "objective": 5.5629993766221295
+      },
+      {
+        "trial": 345,
+        "objective": 5.544012950075823
+      },
+      {
+        "trial": 387,
+        "objective": 5.392362796928666
+      },
+      {
+        "trial": 390,
+        "objective": 5.3194508130885385
+      },
+      {
+        "trial": 394,
+        "objective": 5.314309444174715
+      },
+      {
+        "trial": 411,
+        "objective": 5.313923953894015
+      },
+      {
+        "trial": 416,
+        "objective": 5.243958404512297
+      },
+      {
+        "trial": 422,
+        "objective": 5.209523520526514
+      },
+      {
+        "trial": 431,
+        "objective": 5.09790067013121
+      },
+      {
+        "trial": 435,
+        "objective": 5.039964365563167
+      },
+      {
+        "trial": 438,
+        "objective": 5.034486957016897
+      },
+      {
+        "trial": 447,
+        "objective": 5.032628811446177
+      },
+      {
+        "trial": 574,
+        "objective": 4.951072704440969
+      },
+      {
+        "trial": 604,
+        "objective": 4.915551404698112
+      },
+      {
+        "trial": 617,
+        "objective": 4.914527176877477
+      },
+      {
+        "trial": 621,
+        "objective": 4.836704968441495
+      }
+    ],
+    "cycles": [
+      {
+        "cycle": 1,
+        "objective": 5.8051618235001445,
+        "improvement": 28.841869189548852
+      },
+      {
+        "cycle": 2,
+        "objective": 5.032628811446177,
+        "improvement": 0.7725330120539677
+      },
+      {
+        "cycle": 3,
+        "objective": 4.836704968441495,
+        "improvement": 0.19592384300468169
+      },
+      {
+        "cycle": 4,
+        "objective": 4.836704968441495,
+        "improvement": 0.0
+      }
+    ],
+    "cycles_run": 4,
+    "converged_early": true,
+    "epsilon": 2e-06,
+    "contributions": [
+      {
+        "param": "CROP_JUNK_LINE_FRAC",
+        "improvement": 24.374995129860416,
+        "moves": 8,
+        "pct": 81.76695247608572
+      },
+      {
+        "param": "HOLDER_LUMA_THR",
+        "improvement": 2.414536542530554,
+        "moves": 3,
+        "pct": 8.099664991645835
+      },
+      {
+        "param": "CROP_PAD_FRAC",
+        "improvement": 1.6787509815204373,
+        "moves": 8,
+        "pct": 5.631441195941274
+      },
+      {
+        "param": "CROP_REBATE_WIDE_MAX_D",
+        "improvement": 0.38152898407389557,
+        "moves": 9,
+        "pct": 1.2798551196755925
+      },
+      {
+        "param": "CROP_SHADOW_CORE_FRAC",
+        "improvement": 0.3406771292250328,
+        "moves": 6,
+        "pct": 1.1428158441314973
+      },
+      {
+        "param": "CROP_SHADOW_REL",
+        "improvement": 0.2611537435639262,
+        "moves": 7,
+        "pct": 0.8760512822742751
+      },
+      {
+        "param": "CROP_SHADOW_MAX_FRAC",
+        "improvement": 0.17493653833474543,
+        "moves": 4,
+        "pct": 0.5868320194585405
+      },
+      {
+        "param": "CROP_REBATE_BAND_HUE_TOL",
+        "improvement": 0.08155610700520821,
+        "moves": 1,
+        "pct": 0.27358341161102867
+      },
+      {
+        "param": "BORDER_MAX_FRAC",
+        "improvement": 0.051514088939239144,
+        "moves": 3,
+        "pct": 0.17280619092241603
+      },
+      {
+        "param": "CROP_GAP_TOL_FRAC",
+        "improvement": 0.044323889758020485,
+        "moves": 2,
+        "pct": 0.14868636354964793
+      },
+      {
+        "param": "CROP_REBATE_HUE_TOL",
+        "improvement": 0.004987397577218999,
+        "moves": 2,
+        "pct": 0.016730436190989562
+      },
+      {
+        "param": "CROP_REBATE_WIDE_LINE_FRAC",
+        "improvement": 0.0013655122188040991,
+        "moves": 2,
+        "pct": 0.004580668513188274
+      },
+      {
+        "param": "CROP_LEAK_MARGIN_D",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "CROP_REBATE_MARGIN_D",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "CROP_REBATE_LINE_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "CROP_REBATE_TERM_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "CROP_REBATE_MAX_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "CROP_REBATE_WIDE_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      }
+    ]
+  },
+  "principal_components": null,
+  "init": {
+    "CROP_JUNK_LINE_FRAC": 0.022187500000000002,
+    "CROP_LEAK_MARGIN_D": 0.06,
+    "CROP_REBATE_MARGIN_D": 0.13,
+    "CROP_REBATE_LINE_FRAC": 0.15,
+    "CROP_REBATE_TERM_FRAC": 0.04,
+    "CROP_REBATE_MAX_FRAC": 0.04,
+    "CROP_REBATE_HUE_TOL": 0.03,
+    "CROP_REBATE_WIDE_MAX_D": 0.35,
+    "CROP_REBATE_WIDE_LINE_FRAC": 0.5,
+    "CROP_REBATE_BAND_HUE_TOL": 0.008,
+    "CROP_REBATE_WIDE_FRAC": 0.55,
+    "CROP_PAD_FRAC": 0.0125,
+    "CROP_SHADOW_REL": 0.73046875,
+    "CROP_SHADOW_MAX_FRAC": 0.03,
+    "CROP_SHADOW_CORE_FRAC": 0.010500000000000002,
+    "CROP_GAP_TOL_FRAC": 0.02,
+    "HOLDER_LUMA_THR": 0.039453125,
+    "BORDER_MAX_FRAC": 0.1
+  },
+  "fitted": {
+    "CROP_JUNK_LINE_FRAC": 0.1,
+    "CROP_LEAK_MARGIN_D": 0.06,
+    "CROP_REBATE_MARGIN_D": 0.13,
+    "CROP_REBATE_LINE_FRAC": 0.15,
+    "CROP_REBATE_TERM_FRAC": 0.04,
+    "CROP_REBATE_MAX_FRAC": 0.04,
+    "CROP_REBATE_HUE_TOL": 0.020000000000000004,
+    "CROP_REBATE_WIDE_MAX_D": 0.33046875,
+    "CROP_REBATE_WIDE_LINE_FRAC": 0.509375,
+    "CROP_REBATE_BAND_HUE_TOL": 0.009375,
+    "CROP_REBATE_WIDE_FRAC": 0.55,
+    "CROP_PAD_FRAC": 0.006,
+    "CROP_SHADOW_REL": 0.6156250000000001,
+    "CROP_SHADOW_MAX_FRAC": 0.028124999999999997,
+    "CROP_SHADOW_CORE_FRAC": 0.0166875,
+    "CROP_GAP_TOL_FRAC": 0.02,
+    "HOLDER_LUMA_THR": 0.026328124999999997,
+    "BORDER_MAX_FRAC": 0.08
+  },
+  "aggregate": {
+    "total_overtrim_area": 2.3804800309291325,
+    "median_overtrim_area": 0.014608171045296794,
+    "max_overtrim_area": 0.10269326212439985,
+    "total_undertrim_area": 0.16374832916749085,
+    "max_undertrim_area": 0.02413641186096276,
+    "containment_violations": 25,
+    "containment_weight": 15.0,
+    "n_frames": 150
+  },
+  "per_roll": {
+    "2506-1": {
+      "n": 38,
+      "median_overtrim_area": 0.010605852858846871,
+      "worst_frames": [
+        {
+          "stem": "DSC_0032",
+          "overtrim_area": 0.025942859026691363
+        },
+        {
+          "stem": "DSC_0035",
+          "overtrim_area": 0.015098931266595937
+        },
+        {
+          "stem": "DSC_0023",
+          "overtrim_area": 0.015007522492552433
+        },
+        {
+          "stem": "DSC_0012",
+          "overtrim_area": 0.014605174036311761
+        },
+        {
+          "stem": "DSC_0022",
+          "overtrim_area": 0.01438938938938939
+        }
+      ]
+    },
+    "2510-11-1": {
+      "n": 38,
+      "median_overtrim_area": 0.016766392140643637,
+      "worst_frames": [
+        {
+          "stem": "DSC_0003",
+          "overtrim_area": 0.0969375063686441
+        },
+        {
+          "stem": "DSC_0010",
+          "overtrim_area": 0.031565997134859414
+        },
+        {
+          "stem": "DSC_0032",
+          "overtrim_area": 0.02333845821869774
+        },
+        {
+          "stem": "DSC_0018",
+          "overtrim_area": 0.02218460975946006
+        },
+        {
+          "stem": "DSC_0030",
+          "overtrim_area": 0.020319720918523312
+        }
+      ]
+    },
+    "2511-12-1": {
+      "n": 37,
+      "median_overtrim_area": 0.01415187642732553,
+      "worst_frames": [
+        {
+          "stem": "DSC_0027",
+          "overtrim_area": 0.025398527269784754
+        },
+        {
+          "stem": "DSC_0014",
+          "overtrim_area": 0.022932738127348907
+        },
+        {
+          "stem": "DSC_0034",
+          "overtrim_area": 0.02288740836645028
+        },
+        {
+          "stem": "DSC_0009",
+          "overtrim_area": 0.018918619218020415
+        },
+        {
+          "stem": "DSC_0004",
+          "overtrim_area": 0.0189081296865728
+        }
+      ]
+    },
+    "2512-2601-1": {
+      "n": 37,
+      "median_overtrim_area": 0.01581596566626507,
+      "worst_frames": [
+        {
+          "stem": "DSC_0029",
+          "overtrim_area": 0.10269326212439985
+        },
+        {
+          "stem": "DSC_0028",
+          "overtrim_area": 0.05783140925356494
+        },
+        {
+          "stem": "DSC_0035",
+          "overtrim_area": 0.03316977156797516
+        },
+        {
+          "stem": "DSC_0036",
+          "overtrim_area": 0.019104433775092456
+        },
+        {
+          "stem": "DSC_0014",
+          "overtrim_area": 0.018010900121678566
+        }
+      ]
+    }
+  },
+  "per_frame": [
+    {
+      "contained": false,
+      "overtrim_area": 0.008518998039956123,
+      "undertrim_area": 0.0014048479617341893,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.0037425149700598802,
+        "right": -0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0002"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014196831562101024,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.005988023952095809,
+        "right": 0.0005005005005005005,
+        "bottom": 0.006736526946107785
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0003"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.010352043660426894,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.005239520958083832,
+        "right": 0.002002002002002002,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0004"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.012218805631979284,
+      "undertrim_area": 0.0013981046915178652,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.005239520958083832,
+        "right": -0.0015015015015015015,
+        "bottom": 0.006736526946107785
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0005"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.007087926249602896,
+      "undertrim_area": 0.005126383868898839,
+      "overtrim_edges": {
+        "left": -0.004004004004004004,
+        "top": 0.005239520958083832,
+        "right": -0.0015015015015015015,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0006"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.0075247403091714465,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.0029940119760479044,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0007"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012296727865590142,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.005239520958083832,
+        "right": 0.002002002002002002,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0008"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013208567849286413,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.0037425149700598802,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0009"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.008270995546444648,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.0037425149700598802,
+        "right": 0.0005005005005005005,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0010"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.00917421912930895,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.0007485029940119761,
+        "right": 0.0005005005005005005,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0011"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014605174036311761,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.005239520958083832,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0012"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.008250016483549418,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.0014970059880239522,
+        "right": 0.001001001001001001,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0013"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011560587533641425,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.004491017964071856,
+        "right": 0.003003003003003003,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0014"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.005207303111494728,
+      "undertrim_area": 0.003553328777879676,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.004491017964071856,
+        "right": 0.0,
+        "bottom": -0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0015"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.009418100735466005,
+      "undertrim_area": 0.005583427739116362,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.006736526946107785,
+        "right": -0.006006006006006006,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0016"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011470302637967309,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0065065065065065065,
+        "top": 0.004491017964071856,
+        "right": 0.0005005005005005005,
+        "bottom": 0.0007485029940119761
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0017"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011292729855604106,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.004491017964071856,
+        "right": 0.001001001001001001,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0018"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.00612738486989984,
+      "undertrim_area": 0.0007087926249602897,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.004491017964071856,
+        "right": 0.001001001001001001,
+        "bottom": -0.0007485029940119761
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0019"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.0026051500602398804,
+      "undertrim_area": 0.00046865728003452555,
+      "overtrim_edges": {
+        "left": -0.0005005005005005005,
+        "top": 0.002245508982035928,
+        "right": 0.0005005005005005005,
+        "bottom": 0.0
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0020"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012042356727985471,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.0014970059880239522,
+        "right": 0.0005005005005005005,
+        "bottom": 0.008233532934131737
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0021"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01438938938938939,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.006736526946107785,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0022"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015007522492552433,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.004491017964071856,
+        "right": 0.0025025025025025025,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0023"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.007504510498522475,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.005988023952095809,
+        "right": 0.0,
+        "bottom": 0.0
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0024"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.006119892347437258,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.0007485029940119761,
+        "right": 0.001001001001001001,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0025"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.008502514490538442,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.004491017964071856,
+        "right": 0.001001001001001001,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0026"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011324947702193212,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.004491017964071856,
+        "right": 0.003003003003003003,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0027"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012030743318168467,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.005239520958083832,
+        "right": 0.0005005005005005005,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0028"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.006828310346274418,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.0037425149700598802,
+        "right": 0.0005005005005005005,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0029"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01322654990319661,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.004491017964071856,
+        "right": 0.0025025025025025025,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0030"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.013211564858271446,
+      "undertrim_area": 0.005126383868898839,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.005239520958083832,
+        "right": -0.0055055055055055055,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0031"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.025942859026691363,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.019461077844311378,
+        "right": 0.004004004004004004,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0032"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011319702936469403,
+      "undertrim_area": 0.0007080433727140314,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005988023952095809,
+        "right": 0.003003003003003003,
+        "bottom": -0.0007485029940119761
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0033"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.010859662057266848,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.004491017964071856,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0034"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015098931266595937,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.004491017964071856,
+        "right": 0.003003003003003003,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0035"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.006814449179718641,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.0007485029940119761,
+        "right": 0.002002002002002002,
+        "bottom": 0.0
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0036"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.007771618924313535,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.0014970059880239522,
+        "right": 0.0015015015015015015,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0037"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.006603160046273818,
+      "undertrim_area": 0.004197685709661758,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.004491017964071856,
+        "right": -0.0045045045045045045,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0038"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.006347290404176632,
+      "undertrim_area": 0.007046717376058694,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.0014970059880239522,
+        "right": -0.0075075075075075074,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2506-1",
+      "stem": "DSC_0039"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01595158032283781,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0065065065065065065,
+        "top": 0.006736526946107785,
+        "right": 0.0015015015015015015,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0002"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.0969375063686441,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.015015015015015015,
+        "top": 0.0561377245508982,
+        "right": 0.02952952952952953,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0003"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.015973683264102426,
+      "undertrim_area": 0.009747397097696498,
+      "overtrim_edges": {
+        "left": -0.010510510510510511,
+        "top": 0.008233532934131737,
+        "right": 0.0035035035035035035,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0004"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01538214861568155,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0,
+        "top": 0.0074850299401197605,
+        "right": 0.0035035035035035035,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0005"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015339066611521701,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.005239520958083832,
+        "right": 0.0015015015015015015,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0006"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.020263527000053946,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0075075075075075074,
+        "top": 0.005988023952095809,
+        "right": 0.0035035035035035035,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0007"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014396132659605713,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005988023952095809,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0008"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.016571586556616495,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.01122754491017964,
+        "right": 0.0005005005005005005,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0009"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.031565997134859414,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.010510510510510511,
+        "top": 0.014221556886227544,
+        "right": 0.0045045045045045045,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0010"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01906097714480948,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.01122754491017964,
+        "right": 0.0025025025025025025,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0011"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.020054860249471028,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.0074850299401197605,
+        "right": 0.004004004004004004,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0012"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01699903496310682,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0013"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01984619349888811,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.01122754491017964,
+        "right": 0.002002002002002002,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0014"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01840350829871788,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.005988023952095809,
+        "right": 0.0035035035035035035,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0015"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.016244912577247906,
+      "undertrim_area": 0.006498264731797666,
+      "overtrim_edges": {
+        "left": -0.007007007007007007,
+        "top": 0.008982035928143712,
+        "right": 0.003003003003003003,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0016"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.020265400130669593,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.008233532934131737,
+        "right": 0.002002002002002002,
+        "bottom": 0.009730538922155689
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0017"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.02218460975946006,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.012724550898203593,
+        "right": 0.0045045045045045045,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0018"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013719932507357657,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.004491017964071856,
+        "right": 0.0025025025025025025,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0019"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01461866057674441,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.005005005005005005,
+        "top": 0.005239520958083832,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0020"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013993034951118784,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005239520958083832,
+        "right": 0.002002002002002002,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0021"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.012748526970083857,
+      "undertrim_area": 0.0009313205420989852,
+      "overtrim_edges": {
+        "left": -0.001001001001001001,
+        "top": 0.0037425149700598802,
+        "right": 0.003003003003003003,
+        "bottom": 0.006736526946107785
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0022"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.016279378180575784,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.0074850299401197605,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0023"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.019411252569935204,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.009730538922155689,
+        "right": 0.003003003003003003,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0024"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014661367954781129,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.006736526946107785,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0025"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.018655631679583777,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.006736526946107785,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0074850299401197605
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0026"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013955572338805872,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0027"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01696119772467078,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.006736526946107785,
+        "right": 0.0045045045045045045,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0029"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.020319720918523312,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.008233532934131737,
+        "right": 0.005005005005005005,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0030"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01811954169738601,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.004491017964071856,
+        "right": 0.0075075075075075074,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0031"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.02333845821869774,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.007007007007007007,
+        "top": 0.008233532934131737,
+        "right": 0.0035035035035035035,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0032"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017952083820347294,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.008233532934131737,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0033"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01651576726427026,
+      "undertrim_area": 0.0004671587755420091,
+      "overtrim_edges": {
+        "left": 0.007007007007007007,
+        "top": 0.0074850299401197605,
+        "right": -0.0005005005005005005,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0034"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017684226142309974,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.008982035928143712,
+        "right": 0.0045045045045045045,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0035"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.010159860459261656,
+      "undertrim_area": 0.0018716321111530692,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.005988023952095809,
+        "right": -0.002002002002002002,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0036"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01174602746459034,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.006736526946107785,
+        "right": 0.001001001001001001,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0037"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013403748059436683,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.004491017964071856,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0038"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.019037375699052346,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.006736526946107785,
+        "right": 0.0055055055055055055,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0039"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.013509392626159094,
+      "undertrim_area": 0.006984904065742389,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.008233532934131737,
+        "right": -0.0075075075075075074,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2510-11-1",
+      "stem": "DSC_0040"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012921604238969509,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.014970059880239521,
+        "right": 0.0025025025025025025,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0002"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01322654990319661,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005239520958083832,
+        "right": 0.0035035035035035035,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0003"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.0189081296865728,
+      "undertrim_area": 0.00046528564492636347,
+      "overtrim_edges": {
+        "left": -0.0005005005005005005,
+        "top": 0.01347305389221557,
+        "right": 0.0035035035035035035,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0004"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013336315357273441,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.004491017964071856,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0005"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.018820841799883716,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": 0.010479041916167664
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0006"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01676901452350554,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.006736526946107785,
+        "right": 0.0035035035035035035,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0007"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.010157987328646012,
+      "undertrim_area": 0.0007087926249602897,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005239520958083832,
+        "right": 0.0025025025025025025,
+        "bottom": -0.0007485029940119761
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0008"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.018918619218020415,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.012724550898203593,
+        "right": 0.002002002002002002,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0009"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.013566710422997848,
+      "undertrim_area": 0.015819711927496358,
+      "overtrim_edges": {
+        "left": -0.01701701701701702,
+        "top": 0.0074850299401197605,
+        "right": 0.002002002002002002,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0010"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014692836549123975,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0005005005005005005,
+        "top": 0.01122754491017964,
+        "right": 0.003003003003003003,
+        "bottom": 0.0007485029940119761
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0011"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017684600768433104,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.0074850299401197605,
+        "right": 0.003003003003003003,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0012"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01415187642732553,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.005005005005005005,
+        "top": 0.0029940119760479044,
+        "right": 0.001001001001001001,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0013"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.022932738127348907,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.01721556886227545,
+        "right": 0.001001001001001001,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0014"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.018167868467269664,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.006736526946107785,
+        "right": 0.0055055055055055055,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0015"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01339250927574281,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.005988023952095809,
+        "right": 0.0035035035035035035,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0016"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.009688206170242098,
+      "undertrim_area": 0.0032596218973464483,
+      "overtrim_edges": {
+        "left": -0.0035035035035035035,
+        "top": 0.005239520958083832,
+        "right": 0.002002002002002002,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0017"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017943842045638453,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.009730538922155689,
+        "right": 0.002002002002002002,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0018"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014646382909855964,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005988023952095809,
+        "right": 0.0035035035035035035,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0019"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012048725372078666,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.0037425149700598802,
+        "right": 0.0015015015015015015,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0020"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01346406286526047,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005239520958083832,
+        "right": 0.0015015015015015015,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0021"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01373154591717466,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0005005005005005005,
+        "top": 0.005988023952095809,
+        "right": 0.0035035035035035035,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0022"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015838068607529687,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.008982035928143712,
+        "right": 0.0015015015015015015,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0023"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017701084317850786,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.0074850299401197605,
+        "right": 0.0035035035035035035,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0024"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014894760029490568,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.0074850299401197605,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0025"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013232543921166675,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.006736526946107785,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0026"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.025398527269784754,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.011011011011011011,
+        "top": 0.009730538922155689,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0027"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.007007756259253265,
+      "undertrim_area": 0.011202819586053119,
+      "overtrim_edges": {
+        "left": -0.012012012012012012,
+        "top": 0.004491017964071856,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0028"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013011139882397367,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.0074850299401197605,
+        "right": 0.002002002002002002,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0029"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015570960181738624,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005988023952095809,
+        "right": 0.003003003003003003,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0030"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013478673284062506,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.004491017964071856,
+        "right": 0.0025025025025025025,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0031"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017947962932992872,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.007007007007007007,
+        "top": 0.009730538922155689,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0007485029940119761
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0032"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.0028276779773785763,
+      "undertrim_area": 0.004686572800345255,
+      "overtrim_edges": {
+        "left": -0.001001001001001001,
+        "top": 0.0014970059880239522,
+        "right": -0.004004004004004004,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0033"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.02288740836645028,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": 0.014221556886227544
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0034"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017191218164272055,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.0074850299401197605,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0035"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.010149370927814042,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.005988023952095809,
+        "right": 0.0005005005005005005,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0036"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012759016501531472,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005239520958083832,
+        "right": 0.0,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0037"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.013159866453279627,
+      "undertrim_area": 0.00606819394244544,
+      "overtrim_edges": {
+        "left": 0.005005005005005005,
+        "top": 0.004491017964071856,
+        "right": -0.0065065065065065065,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2511-12-1",
+      "stem": "DSC_0038"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01601376825927724,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.005988023952095809,
+        "right": 0.003003003003003003,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0001"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011563959168749588,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.006736526946107785,
+        "right": 0.002002002002002002,
+        "bottom": 0.0014970059880239522
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0002"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014611168054281826,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.006736526946107785,
+        "right": 0.002002002002002002,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0003"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017203580826335316,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.008233532934131737,
+        "right": 0.0025025025025025025,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0004"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.016804604005202808,
+      "undertrim_area": 0.00046416176655697614,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.008982035928143712,
+        "right": -0.0005005005005005005,
+        "bottom": 0.0074850299401197605
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0005"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.016096935258611906,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.0074850299401197605,
+        "right": 0.0015015015015015015,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0006"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.017566218913524303,
+      "undertrim_area": 0.024116931302560044,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.008982035928143712,
+        "right": -0.026026026026026026,
+        "bottom": 0.0074850299401197605
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0007"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014009518500536465,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.0074850299401197605,
+        "right": 0.002002002002002002,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0008"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011556841272410134,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.0029940119760479044,
+        "right": 0.002002002002002002,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0009"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01673155191119263,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.0074850299401197605,
+        "right": 0.0025025025025025025,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0010"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01669371467275659,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.008008008008008008,
+        "top": 0.004491017964071856,
+        "right": 0.003003003003003003,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0011"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015782623941306577,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.006736526946107785,
+        "right": 0.003003003003003003,
+        "bottom": 0.0029940119760479044
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0012"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01602650554746363,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0055055055055055055,
+        "top": 0.008982035928143712,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0013"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.018010900121678566,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.006736526946107785,
+        "right": 0.004004004004004004,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0014"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.013428098757440075,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.005239520958083832,
+        "right": 0.0025025025025025025,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0015"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01581596566626507,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.002002002002002002,
+        "top": 0.010479041916167664,
+        "right": 0.002002002002002002,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0016"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.016023508538478597,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0035035035035035035,
+        "top": 0.005988023952095809,
+        "right": 0.003003003003003003,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0017"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.010114530698363034,
+      "undertrim_area": 0.0014138389886892882,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.006736526946107785,
+        "right": 0.001001001001001001,
+        "bottom": -0.0014970059880239522
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0018"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.014396132659605713,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.006736526946107785,
+        "right": 0.001001001001001001,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0019"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01401176625727524,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.005988023952095809,
+        "right": 0.004004004004004004,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0020"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.0129935324546103,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.005988023952095809,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0021"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.015756400112687537,
+      "undertrim_area": 0.0014048479617341893,
+      "overtrim_edges": {
+        "left": 0.008008008008008008,
+        "top": 0.005239520958083832,
+        "right": 0.0035035035035035035,
+        "bottom": -0.0014970059880239522
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0022"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.01606097115079151,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.0074850299401197605,
+        "right": 0.002002002002002002,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0023"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015361544178909448,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0024"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.010369651088213963,
+      "undertrim_area": 0.0021241301181420943,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": -0.002245508982035928
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0025"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.009121396845947745,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.006736526946107785,
+        "right": 0.0015015015015015015,
+        "bottom": 0.0
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0026"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.012261513010016004,
+      "undertrim_area": 0.0007069194943446441,
+      "overtrim_edges": {
+        "left": 0.0015015015015015015,
+        "top": 0.0074850299401197605,
+        "right": 0.004004004004004004,
+        "bottom": -0.0007485029940119761
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0027"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.05783140925356494,
+      "undertrim_area": 0.003351030671389953,
+      "overtrim_edges": {
+        "left": 0.003003003003003003,
+        "top": 0.006736526946107785,
+        "right": 0.05205205205205205,
+        "bottom": -0.0037425149700598802
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0028"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.10269326212439985,
+      "undertrim_area": 0.001996007984031936,
+      "overtrim_edges": {
+        "left": 0.004004004004004004,
+        "top": 0.05089820359281437,
+        "right": 0.057057057057057055,
+        "bottom": -0.002245508982035928
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0029"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.011332814850778923,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.005239520958083832,
+        "right": 0.002002002002002002,
+        "bottom": 0.002245508982035928
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0030"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015098931266595937,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.005005005005005005,
+        "top": 0.004491017964071856,
+        "right": 0.002002002002002002,
+        "bottom": 0.004491017964071856
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0031"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.015764267261273248,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.001001001001001001,
+        "top": 0.005988023952095809,
+        "right": 0.0045045045045045045,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0032"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017644890399381417,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0055055055055055055,
+        "top": 0.005988023952095809,
+        "right": 0.002002002002002002,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0033"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.017922113730496965,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.0074850299401197605,
+        "right": 0.003003003003003003,
+        "bottom": 0.005988023952095809
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0034"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.03316977156797516,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.0025025025025025025,
+        "top": 0.006736526946107785,
+        "right": 0.005005005005005005,
+        "bottom": 0.020958083832335328
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0035"
+    },
+    {
+      "contained": true,
+      "overtrim_area": 0.019104433775092456,
+      "undertrim_area": 0.0,
+      "overtrim_edges": {
+        "left": 0.005005005005005005,
+        "top": 0.008982035928143712,
+        "right": 0.0025025025025025025,
+        "bottom": 0.0037425149700598802
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0036"
+    },
+    {
+      "contained": false,
+      "overtrim_area": 0.0167401683120246,
+      "undertrim_area": 0.02413641186096276,
+      "overtrim_edges": {
+        "left": 0.0045045045045045045,
+        "top": 0.008233532934131737,
+        "right": -0.026026026026026026,
+        "bottom": 0.005239520958083832
+      },
+      "roll": "2512-2601-1",
+      "stem": "DSC_0037"
+    }
+  ]
+}

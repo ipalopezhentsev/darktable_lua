@@ -361,6 +361,117 @@ def check_crop_containment(frames, fixtures):
     return violations
 
 
+def crop_overtrim_per_frame(frames, fixtures):
+    """Per-frame crop closeness vs the user's hand-drawn crop annotations, as
+    FRACTIONS of the frame (resolution-independent — never pixels). The
+    algorithm-INDEPENDENT crop metric: it compares the detected crop RECTANGLE
+    to the annotated rectangle, never the detector internals.
+
+    For each frame carrying a crop_correction:
+      - contained: detected crop stays inside the user rect (the HARD rule;
+        CROP_CONTAINMENT_ROUND_TOL px slack for cross-resolution denorm).
+      - overtrim_area: fraction of FRAME AREA of content the user kept but the
+        detected crop removed (= user_area − intersection(user, detected)). 0
+        when the detected crop covers the whole user rect.
+      - overtrim_edges: per-edge over-trim as a fraction of that edge's
+        dimension (left/right over width, top/bottom over height); a NEGATIVE
+        value means the detected crop extends OUTSIDE the user rect on that edge
+        (a containment violation).
+    Returns a list of {stem, contained, overtrim_area, overtrim_edges}."""
+    by_stem = {fr["stem"]: fr for fr in frames}
+    records = []
+    for f in fixtures:
+        data = json.loads(f.read_text())
+        crop = data.get("crop_correction")
+        if not crop or not crop.get("corrected"):
+            continue
+        stem = data.get("stem") or f.name.replace("_annotations.json", "")
+        fr = by_stem.get(stem)
+        if fr is None or fr.get("error") or "border" not in fr:
+            continue
+        rec = crop_overtrim(fr["border"], crop["corrected"],
+                            fr["width"], fr["height"])
+        records.append(dict(rec, stem=stem))
+    return records
+
+
+def crop_overtrim(border, crop_corrected, w, h):
+    """Pure crop-closeness record for ONE frame (no I/O): the detected `border`
+    margins (l, t, r, b in px) vs the user's normalized crop rect
+    [x, y, rw, rh]. Returns {contained, overtrim_area, overtrim_edges} — all
+    FRACTIONS (see crop_overtrim_per_frame). Reused by the calibration runner on
+    cached frames so the gate and the runner share ONE metric."""
+    x, y, cw, ch = _rect_to_px(crop_corrected, w, h)
+    user = (x, y, w - x - cw, h - y - ch)            # (l, t, r, b) margins, px
+    det = border
+    dims = (w, h, w, h)
+    edges, contained = {}, True
+    for i, name in enumerate(("left", "top", "right", "bottom")):
+        edges[name] = (det[i] - user[i]) / float(dims[i])   # +ve = over-trim
+        if det[i] < user[i] - CROP_CONTAINMENT_ROUND_TOL:
+            contained = False
+    # content lost = user rect area minus its intersection with the detected
+    # kept rectangle (correct whether or not the crop is contained).
+    ux0, uy0, ux1, uy1 = x, y, x + cw, y + ch
+    dx1, dy1 = w - det[2], h - det[3]
+    iw = max(0, min(ux1, dx1) - max(ux0, det[0]))
+    ih = max(0, min(uy1, dy1) - max(uy0, det[1]))
+    inter = iw * ih
+    user_area = max(0, cw) * max(0, ch)
+    overtrim_area = max(0.0, user_area - inter) / float(w * h)
+    # border LEFT IN = detected kept area minus its intersection with the user
+    # rect (the mirror of overtrim_area; >0 exactly when the crop is NOT
+    # contained — holder/junk the detector kept outside the user's rect).
+    det_area = max(0, dx1 - det[0]) * max(0, dy1 - det[1])
+    undertrim_area = max(0.0, det_area - inter) / float(w * h)
+    return {"contained": contained, "overtrim_area": overtrim_area,
+            "undertrim_area": undertrim_area, "overtrim_edges": edges}
+
+
+def selftest_crop_overtrim():
+    """Test for the metric: an exact-match crop over-trims 0; a known inset
+    over-trims the right area fraction; a crop extending outside the user rect
+    reads contained=False with a negative edge."""
+    base = {"stem": "X", "error": None, "width": 100, "height": 100}
+    # user keeps the central 80x80 (margins 10 all round, as fractions)
+    crop_ann = {"crop_correction": {"corrected": [0.10, 0.10, 0.80, 0.80]}}
+
+    def rec(border):
+        fr = dict(base, border=border)
+        fx = _FakeFixture(dict(crop_ann, stem="X"))
+        return crop_overtrim_per_frame([fr], [fx])[0]
+
+    exact = rec((10, 10, 10, 10))
+    assert exact["contained"] and abs(exact["overtrim_area"]) < 1e-9, exact
+    # trim 10px more on the left -> kept 70x80 inside the 80x80 user rect:
+    # lost 10*80 = 800 px of a 10000 px frame = 0.08
+    inset = rec((20, 10, 10, 10))
+    assert inset["contained"] and abs(inset["overtrim_area"] - 0.08) < 1e-9, inset
+    assert abs(inset["overtrim_edges"]["left"] - 0.10) < 1e-9, inset
+    assert abs(inset["undertrim_area"]) < 1e-9, inset    # contained -> no border
+    # detected extends 5px outside the user rect on the left -> not contained;
+    # border left in = 5px * 80px tall kept = 400/10000 = 0.04
+    out = rec((5, 10, 10, 10))
+    assert not out["contained"] and out["overtrim_edges"]["left"] < 0, out
+    assert abs(out["undertrim_area"] - 0.04) < 1e-9, out
+    print("Crop-overtrim metric self-test: OK")
+
+
+class _FakeFixture:
+    """Minimal stand-in for a fixtures Path with .read_text()/.name/.parent."""
+    def __init__(self, data):
+        import json as _json
+        self._text = _json.dumps(data)
+        self.name = f"{data.get('stem', 'X')}_annotations.json"
+
+        class _P:
+            name = "selftest"
+        self.parent = _P()
+
+    def read_text(self):
+        return self._text
+
+
 def report_annotated_frames(frames, fixtures):
     """Informational check against committed user annotations
     (fixtures/rolls/<roll_id>/.../{stem}_annotations.json): show whether the
@@ -710,13 +821,21 @@ def _render_crop_rows(lin, border, params, frac=None):
     return nm.linear_to_srgb(nm.render_negadoctor(region, params))
 
 
-def _histogram_match_medians(frames, fixtures):
-    """Median histogram-distance terms (production render vs GT render) over a
-    roll's GT-annotated frames. Returns (medians, n) or (None, 0)."""
+HIST_TERMS = ("total", "luma", "color", "hi999", "hi9999",
+              "hi_color", "clip_algo", "clip_gt")
+
+
+def histogram_per_frame(frames, fixtures):
+    """Per-frame picture-vs-picture histogram distance (production render vs the
+    user's GT-param render, over each GT-annotated frame's content crop). The
+    algorithm-INDEPENDENT 'look' metric: it compares two RENDERED images, never
+    the params that made them. Returns a list of {stem, <HIST_TERMS>}; hi999/
+    hi9999 are stored as |signed| magnitudes (top-end gap size). Shared single
+    source of the metric — reused by check_histogram_match (median-reduced) and
+    by the calibration runner (run_calibration.py)."""
     gt_by_stem = _load_ground_truth(fixtures)
     by_stem = {fr["stem"]: fr for fr in frames}
-    acc = {k: [] for k in ("total", "luma", "color", "hi999", "hi9999",
-                           "hi_color", "clip_algo", "clip_gt")}
+    records = []
     for stem, gt in sorted(gt_by_stem.items()):
         fr = by_stem.get(stem)
         if not fr or fr.get("error") or "params" not in fr or not fr.get("border"):
@@ -730,20 +849,29 @@ def _histogram_match_medians(frames, fixtures):
         if gt_f is None or prod_f is None:
             continue
         d = nm.histogram_distance(prod_f, gt_f, bins=HIST_BINS)
-        for k in ("total", "luma", "color"):
-            acc[k].append(d[k])
-        # highlight placement: |signed delta| (magnitude of the top-end gap)
-        acc["hi999"].append(abs(d["hi999"]))
-        acc["hi9999"].append(abs(d["hi9999"]))
-        acc["hi_color"].append(d["hi_color"])
-        acc["clip_algo"].append(d["top_a"]); acc["clip_gt"].append(d["top_b"])
-    if not acc["total"]:
+        records.append({
+            "stem": stem,
+            "total": d["total"], "luma": d["luma"], "color": d["color"],
+            # highlight placement: |signed delta| (magnitude of the top-end gap)
+            "hi999": abs(d["hi999"]), "hi9999": abs(d["hi9999"]),
+            "hi_color": d["hi_color"],
+            "clip_algo": d["top_a"], "clip_gt": d["top_b"],
+        })
+    return records
+
+
+def _histogram_match_medians(frames, fixtures):
+    """Median histogram-distance terms (production render vs GT render) over a
+    roll's GT-annotated frames. Returns (medians, n) or (None, 0)."""
+    records = histogram_per_frame(frames, fixtures)
+    if not records:
         return None, 0
 
-    def med(v):
-        return sorted(v)[len(v) // 2]
+    def med(vals):
+        return sorted(vals)[len(vals) // 2]
 
-    return ({k: med(v) for k, v in acc.items()}, len(acc["total"]))
+    return ({k: med([r[k] for r in records]) for k in HIST_TERMS},
+            len(records))
 
 
 def _histogram_violations(med, baseline):
@@ -977,6 +1105,7 @@ def main():
     selftest_invariants()
     selftest_ground_truth()
     selftest_histogram_match()
+    selftest_crop_overtrim()
 
     rolls = discover_rolls()
     if not rolls:

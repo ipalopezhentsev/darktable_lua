@@ -1,0 +1,191 @@
+{
+  "wall_seconds": 47.65,
+  "prep_seconds": 11.79,
+  "prep_seconds_by_roll": {
+    "2506-1": 2.75,
+    "2510-11-1": 2.95,
+    "2511-12-1": 3.01,
+    "2512-2601-1": 3.08
+  },
+  "trial_count": 121,
+  "objective_initial": 0.0067,
+  "objective_final": 0.0067,
+  "trace": {
+    "method": "coordinate_descent",
+    "trials": 121,
+    "best_objective": 0.0067,
+    "improvements": [
+      {
+        "trial": 1,
+        "objective": 0.0067
+      }
+    ],
+    "cycles": [
+      {
+        "cycle": 1,
+        "objective": 0.0067,
+        "improvement": 0.0
+      }
+    ],
+    "cycles_run": 1,
+    "converged_early": true,
+    "epsilon": 0.0005,
+    "contributions": [
+      {
+        "param": "BORDER_DARK_THR",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "BORDER_PAD_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_DOWNSAMPLE_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_INSET_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_BINS",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_PROFILE_PCT",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_MIN_BIN_SAMPLES",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_MIN_STRENGTH",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_PEAK_CENTER_FRAC",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      },
+      {
+        "param": "VIG_TAIL_CUT_REL",
+        "improvement": 0.0,
+        "moves": 0,
+        "pct": 0.0
+      }
+    ]
+  },
+  "principal_components": null,
+  "init": {
+    "BORDER_DARK_THR": 0.02,
+    "BORDER_PAD_FRAC": 0.004,
+    "VIG_DOWNSAMPLE_FRAC": 0.003625,
+    "VIG_INSET_FRAC": 0.007125000000000001,
+    "VIG_BINS": 22.0,
+    "VIG_PROFILE_PCT": 98.77734375,
+    "VIG_MIN_BIN_SAMPLES": 25.0,
+    "VIG_MIN_STRENGTH": 0.02,
+    "VIG_PEAK_CENTER_FRAC": 0.15,
+    "VIG_TAIL_CUT_REL": 0.97
+  },
+  "fitted": {
+    "BORDER_DARK_THR": 0.02,
+    "BORDER_PAD_FRAC": 0.004,
+    "VIG_DOWNSAMPLE_FRAC": 0.003625,
+    "VIG_INSET_FRAC": 0.007125000000000001,
+    "VIG_BINS": 22.0,
+    "VIG_PROFILE_PCT": 98.77734375,
+    "VIG_MIN_BIN_SAMPLES": 25.0,
+    "VIG_MIN_STRENGTH": 0.02,
+    "VIG_PEAK_CENTER_FRAC": 0.15,
+    "VIG_TAIL_CUT_REL": 0.97
+  },
+  "aggregate": {
+    "rejected_rolls": 0,
+    "median_residual": 0.0067,
+    "max_residual": 0.0456,
+    "n_frames": 4
+  },
+  "per_roll": {
+    "2506-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0456,
+      "corner_falloff": 0.5891
+    },
+    "2510-11-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0058,
+      "corner_falloff": 0.5175
+    },
+    "2511-12-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0061,
+      "corner_falloff": 0.4737
+    },
+    "2512-2601-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0073,
+      "corner_falloff": 0.5221
+    }
+  },
+  "per_frame": [
+    {
+      "roll": "2506-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0456,
+      "corner_falloff": 0.5891,
+      "reason": null,
+      "strength": 0.775
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0058,
+      "corner_falloff": 0.5175,
+      "reason": null,
+      "strength": 0.55
+    },
+    {
+      "roll": "2511-12-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0061,
+      "corner_falloff": 0.4737,
+      "reason": null,
+      "strength": 0.45
+    },
+    {
+      "roll": "2512-2601-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0073,
+      "corner_falloff": 0.5221,
+      "reason": null,
+      "strength": 0.575
+    }
+  ]
+}

@@ -479,20 +479,24 @@ class NegadoctorDebugUI(DebugUIBase):
     def _neg_lin(self, img_dict):
         """Linearized negative of the current frame (cached). Uses the
         pipeline loader (full TIFF precision) WITH the roll's vignette
-        correction applied, so patch RGB sampling and live re-renders stay
-        consistent with the pipeline analysis."""
-        if getattr(self, "_neg_cache_stem", None) == img_dict["stem"]:
+        correction applied (unless the user toggled it OFF with N), so patch RGB
+        sampling and live re-renders stay consistent with the pipeline analysis.
+        The cache key includes the vignette toggle + the review source so a
+        toggle reloads."""
+        vig = img_dict.get("vignette") if getattr(self, "vignette_on", True) else None
+        key = (img_dict["stem"], bool(getattr(self, "vignette_on", True)),
+               getattr(self, "review_source", None))
+        if getattr(self, "_neg_cache_key", None) == key:
             return self._neg_cache
         path = img_dict.get("negative_path")
         lin = None
         if path and Path(path).exists():
             import auto_negadoctor
             try:
-                lin = auto_negadoctor.load_frame(
-                    path, img_dict.get("vignette"))[1]
+                lin = auto_negadoctor.load_frame(path, vig)[1]
             except Exception:
                 lin = None
-        self._neg_cache_stem = img_dict["stem"]
+        self._neg_cache_key = key
         self._neg_cache = lin
         return lin
 
@@ -797,8 +801,20 @@ class NegadoctorDebugUI(DebugUIBase):
         self._display_base_pil = None
         self._amask_cache_stem = None
         self._amask_cache = None
-        self._neg_cache_stem = None
+        self._neg_cache_key = None
         self._neg_cache = None
+        self.vignette_on = True        # N: apply the roll vignette correction
+        # Calibration review: frames carry review={live,fitted} payloads + a
+        # review_kind. The R toggle swaps the live (current source-code) result
+        # vs the fitted (this session's) result into img_dict, reusing every
+        # render path. PERSISTS across frames.
+        _imgs = getattr(self, "images", None) or []
+        self.review_mode = any(im.get("review") for im in _imgs)
+        self.review_kind = next((im.get("review_kind") for im in _imgs
+                                 if im.get("review")), None)
+        self.review_source = "fitted"  # "fitted" | "live"
+        if self.review_mode:
+            self._apply_review_source()
         self._live_job = None
         self._live_rendered = False
         self._crop_drag_edge = None
@@ -967,6 +983,18 @@ class NegadoctorDebugUI(DebugUIBase):
                                      command=self._toggle_variant, **btn_cfg)
         self.variant_btn.pack(fill=tk.X, pady=1)
 
+        # N: show the roll's vignette correction applied vs removed (before/after)
+        self.vignette_btn = tk.Button(btn_frame, text="Vignette: On  (N)",
+                                      command=self._toggle_vignette, **btn_cfg)
+        self.vignette_btn.pack(fill=tk.X, pady=1)
+
+        # R: while reviewing a calibration session, flip fitted (session) vs
+        # live (current source-code) params/crop/vignette
+        self.review_btn = tk.Button(btn_frame, text="Source: — (R)",
+                                    command=self._toggle_review_source, **btn_cfg)
+        self.review_btn.pack(fill=tk.X, pady=1)
+        self._update_review_btn()
+
         self.mask_btn = tk.Button(btn_frame, text=MASK_VIEW_LABELS[0],
                                   command=self._cycle_mask_view, **btn_cfg)
         self.mask_btn.pack(fill=tk.X, pady=1)
@@ -1012,6 +1040,10 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<X>", lambda e: self._toggle_compare())
         self.bind_key("<a>", lambda e: self._toggle_variant())
         self.bind_key("<A>", lambda e: self._toggle_variant())
+        self.bind_key("<n>", lambda e: self._toggle_vignette())
+        self.bind_key("<N>", lambda e: self._toggle_vignette())
+        self.bind_key("<r>", lambda e: self._toggle_review_source())
+        self.bind_key("<R>", lambda e: self._toggle_review_source())
         self.bind_key("<m>", lambda e: self._cycle_mask_view())
         self.bind_key("<M>", lambda e: self._cycle_mask_view())
         self.bind_key("<t>", lambda e: self._toggle_histogram())
@@ -1527,6 +1559,79 @@ class NegadoctorDebugUI(DebugUIBase):
         self.variant_btn.config(
             text=label,
             fg="#9fff9f" if is_ai else ("white" if has_ai else "#888888"))
+
+    def _toggle_vignette(self):
+        """N: apply / remove the roll's vignette correction in the preview so its
+        effect is visible (before/after). Reloads the negative (the correction is
+        baked into the linear buffer)."""
+        self.vignette_on = not self.vignette_on
+        self._neg_cache_key = None      # force reload with/without vignette
+        self._update_vignette_btn()
+        self._set_info_text("Vignette correction "
+                            f"{'ON' if self.vignette_on else 'OFF'}.")
+        self._schedule_live_render(delay_ms=10)
+
+    def _update_vignette_btn(self):
+        if not hasattr(self, "vignette_btn"):
+            return
+        on = self.vignette_on
+        self.vignette_btn.config(
+            text=f"Vignette: {'On' if on else 'OFF'}  (N)",
+            fg="white" if on else "#ffb060")
+
+    def _apply_review_source(self):
+        """Swap each review frame's payload (params / border / vignette) to the
+        active source (fitted vs live) IN PLACE, so every existing render path
+        (inversion, crop mask, vignette load) uses it unchanged."""
+        if not getattr(self, "review_mode", False):
+            return
+        for img in self.images:
+            rev = img.get("review")
+            if not rev:
+                continue
+            src = rev.get(self.review_source) or {}
+            kind = img.get("review_kind")
+            if kind == "inversion":
+                if src.get("params") is not None:
+                    img["params"] = src["params"]
+                    img["params_analytical"] = src["params"]
+                if src.get("params_hex") is not None:
+                    img["params_hex"] = src["params_hex"]
+            elif kind == "crop":
+                if src.get("border") is not None:
+                    img["border"] = list(src["border"])
+            elif kind == "vignette":
+                img["vignette"] = src.get("vignette")
+        self._neg_cache_key = None      # vignette/params may have changed
+        self._amask_cache_stem = None   # border may have changed
+
+    def _toggle_review_source(self):
+        """R: flip the preview between the FITTED params (this calibration
+        session's result) and the LIVE params (the current source-code
+        constants). Only meaningful while reviewing a session."""
+        if not getattr(self, "review_mode", False):
+            self._set_info_text("Not reviewing a calibration session "
+                                "(open one via run_calibration.py --review).")
+            return
+        self.review_source = "live" if self.review_source == "fitted" else "fitted"
+        self._apply_review_source()
+        self._update_review_btn()
+        self._sync_wheels()
+        self._populate_items_list()
+        self._update_info_from_selection()
+        self._redraw_markers()
+        self._schedule_live_render(delay_ms=10)
+
+    def _update_review_btn(self):
+        if not hasattr(self, "review_btn"):
+            return
+        if not self.review_mode:
+            self.review_btn.config(text="Source: — (R)", fg="#888888")
+            return
+        fitted = self.review_source == "fitted"
+        self.review_btn.config(
+            text=f"Source: {'FITTED' if fitted else 'live (code)'}  (R)",
+            fg="#9fd0ff" if fitted else "#ffd080")
 
     def _toggle_histogram(self):
         self.show_histogram = not self.show_histogram

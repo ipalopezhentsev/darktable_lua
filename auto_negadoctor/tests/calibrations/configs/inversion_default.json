@@ -1,0 +1,13 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 6,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  }
+}

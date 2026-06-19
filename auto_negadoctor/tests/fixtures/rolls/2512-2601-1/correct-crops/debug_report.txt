@@ -1,0 +1,480 @@
+AUTO NEGADOCTOR DEBUG REPORT
+Generated: 2026-06-18 00:06:56
+Export dir: C:\Users\ilyap\AppData\Local\Temp\darktable_autonegadoctor_1781732584
+Images processed: 37
+Run wall time: 40.2s
+
+Detection constants at time of run:
+  BASE_GB_TOL = 1.05
+  BASE_MIN_LUMA = 0.04
+  BASE_MIN_RG_RATIO = 1.2
+  BASE_STRIDE_DIV = 2
+  BASE_UNIFORMITY_MAX = 0.1
+  BASE_WIN_FRAC = 0.04
+  BORDER_DARK_THR = 0.02
+  BORDER_MAX_FRAC = 0.25
+  BORDER_PAD_FRAC = 0.004
+  CLIP_FRAC_MAX = 0.02
+  CLIP_SRGB_THR = 0.97
+  CROP_GAP_TOL_FRAC = 0.02
+  CROP_JUNK_LINE_FRAC = 0.05
+  CROP_LEAK_MARGIN_D = 0.06
+  CROP_PAD_FRAC = 0.012
+  CROP_REBATE_LINE_FRAC = 0.15
+  CROP_REBATE_MARGIN_D = 0.13
+  CROP_REBATE_MAX_FRAC = 0.04
+  CROP_REBATE_TERM_FRAC = 0.04
+  CROP_SHADOW_CORE_FRAC = 0.016
+  CROP_SHADOW_MAX_FRAC = 0.03
+  CROP_SHADOW_REL = 0.7
+  DMAX_DEFAULT = 2.046
+  HIGHLIGHT_BAND_PCT = [70.0, 95.0]
+  HIGHLIGHT_CLIP_FRAC_MAX = 0.02
+  HOLDER_LUMA_THR = 0.04
+  LENS_MODFLAGS_OFFSET = 4
+  LENS_MODFLAG_VIGNETTING = 2
+  LENS_V_OFFSET = 336
+  MASK_BORDER = 2
+  MASK_USED = 0
+  MIN_PATCH_DENSITY = 0.05
+  MIN_WIN_FRAC = 0.016
+  OFFSET_DEFAULT = -0.05
+  PATCH_CHROMA_FLOOR = 0.02
+  PATCH_CHROMA_MAX = 0.35
+  PATCH_LUMA_FLOOR = 0.02
+  PATCH_STRIDE_DIV = 2
+  PATCH_UNIFORMITY_MAX = 0.45
+  PATCH_WIN_FRAC = 0.04
+  PRINT_CLIP_BUDGET = 0.003
+  PRINT_GAMMA = 5.0
+  PRINT_HI_CEIL = 0.97
+  PRINT_HI_PCT = 99.9
+  PRINT_TUNE_ITERS = 12
+  PRINT_TUNE_SUBSAMPLE_FRAC = 0.003
+  P_HIGH = 99.5
+  P_LOW = 2.0
+  SHADOW_BAND_PCT = [5.0, 30.0]
+  SHADOW_MIN_LUMA = 0.005
+  VIG_BINS = 32
+  VIG_DOWNSAMPLE_FRAC = 0.004
+  VIG_INSET_FRAC = 0.012
+  VIG_MIN_BIN_SAMPLES = 25
+  VIG_MIN_STRENGTH = 0.02
+  VIG_PEAK_CENTER_FRAC = 0.15
+  VIG_PROFILE_PCT = 90.0
+  VIG_TAIL_CUT_REL = 0.97
+  WB_HIGH_BAND_PCT = [70.0, 95.0]
+  WB_HIGH_DESAT = 0.0
+  WB_HIGH_PRIOR = [1.8, 1.35, 1.0]
+  WB_LOW_BAND_PCT = [5.0, 30.0]
+  WB_LOW_DESAT = 0.45
+  WB_LOW_PRIOR = [1.0, 0.75, 0.7]
+  WB_REGION_MIN_FRAC = 0.0001
+  _AI_WORKERS = 1
+  _FRAME_CACHE = True
+  _PROC_WORKERS_ENV = 0
+
+================================================
+IMAGE: DSC_0001  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.925,0.832)  wb_high=(1.323,1.198,1.000)
+  black=0.0043  gamma=5.00  soft_clip=0.75  exposure=1.6359
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.028,0.021,0.951,0.940
+    auto border-trim rect was: 0.038,0.040,0.927,0.905
+
+================================================
+IMAGE: DSC_0002  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.588,0.588,1.000)  wb_high=(1.000,1.068,1.504)
+  black=0.0334  gamma=5.00  soft_clip=0.75  exposure=1.6445
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.026,0.027,0.951,0.941
+    auto border-trim rect was: 0.035,0.042,0.933,0.915
+
+================================================
+IMAGE: DSC_0003  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.990,0.902)  wb_high=(1.371,1.215,1.000)
+  black=-0.1116  gamma=5.00  soft_clip=0.75  exposure=1.6913
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.032,0.027,0.949,0.939
+    auto border-trim rect was: 0.129,0.043,0.843,0.908
+
+================================================
+IMAGE: DSC_0004  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.942,0.906,1.000)  wb_high=(1.126,1.088,1.000)
+  black=-0.0387  gamma=5.00  soft_clip=0.75  exposure=1.8676
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.027,0.028,0.949,0.943
+    auto border-trim rect was: 0.036,0.060,0.931,0.898
+
+================================================
+IMAGE: DSC_0005  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.937,0.981)  wb_high=(1.201,1.089,1.000)
+  black=-0.0242  gamma=5.00  soft_clip=0.75  exposure=1.7489
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.024,0.030,0.936,0.944
+    auto border-trim rect was: 0.033,0.073,0.837,0.885
+
+================================================
+IMAGE: DSC_0006  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.926,0.859)  wb_high=(1.438,1.235,1.000)
+  black=-0.0049  gamma=5.00  soft_clip=0.75  exposure=1.3958
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.020,0.027,0.936,0.942
+    auto border-trim rect was: 0.055,0.079,0.907,0.874
+
+================================================
+IMAGE: DSC_0007  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.954,0.880)  wb_high=(1.296,1.144,1.000)
+  black=0.0326  gamma=5.00  soft_clip=0.75  exposure=1.5143
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.027,0.017,0.926,0.943
+    auto border-trim rect was: 0.036,0.058,0.937,0.891
+
+================================================
+IMAGE: DSC_0008  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.907,0.801)  wb_high=(1.415,1.220,1.000)
+  black=-0.1404  gamma=5.00  soft_clip=0.75  exposure=2.0000
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.036,0.029,0.938,0.939
+    auto border-trim rect was: 0.045,0.046,0.914,0.909
+
+================================================
+IMAGE: DSC_0009  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.904,0.805)  wb_high=(1.471,1.247,1.000)
+  black=-0.1457  gamma=5.00  soft_clip=0.75  exposure=2.0000
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.027,0.032,0.950,0.940
+    auto border-trim rect was: 0.056,0.045,0.914,0.912
+
+================================================
+IMAGE: DSC_0010  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.952,0.871)  wb_high=(1.374,1.183,1.000)
+  black=-0.1518  gamma=5.00  soft_clip=0.75  exposure=1.8632
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.029,0.026,0.949,0.943
+    auto border-trim rect was: 0.091,0.137,0.817,0.817
+
+================================================
+IMAGE: DSC_0011  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.898,0.801)  wb_high=(1.459,1.237,1.000)
+  black=-0.1371  gamma=5.00  soft_clip=0.75  exposure=1.8169
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.021,0.029,0.952,0.940
+    auto border-trim rect was: 0.073,0.120,0.835,0.835
+
+================================================
+IMAGE: DSC_0012  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.947,0.904)  wb_high=(1.474,1.238,1.000)
+  black=0.0089  gamma=5.00  soft_clip=0.75  exposure=1.5201
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.019,0.027,0.951,0.941
+    auto border-trim rect was: 0.030,0.042,0.925,0.913
+
+================================================
+IMAGE: DSC_0013  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.905,0.811)  wb_high=(1.458,1.232,1.000)
+  black=-0.1130  gamma=5.00  soft_clip=0.75  exposure=1.8278
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.017,0.033,0.953,0.941
+    auto border-trim rect was: 0.028,0.048,0.934,0.914
+
+================================================
+IMAGE: DSC_0014  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.909,0.826)  wb_high=(1.449,1.230,1.000)
+  black=-0.1781  gamma=5.00  soft_clip=0.75  exposure=1.9627
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.018,0.027,0.958,0.947
+    auto border-trim rect was: 0.028,0.043,0.933,0.918
+
+================================================
+IMAGE: DSC_0015  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.992,0.828)  wb_high=(1.524,1.276,1.000)
+  black=0.0085  gamma=5.00  soft_clip=0.75  exposure=1.3841
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.031,0.028,0.949,0.941
+    auto border-trim rect was: 0.039,0.043,0.778,0.912
+
+================================================
+IMAGE: DSC_0016  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.951,0.778)  wb_high=(1.558,1.287,1.000)
+  black=0.0169  gamma=5.00  soft_clip=0.75  exposure=1.1798
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.023,0.023,0.950,0.944
+    auto border-trim rect was: 0.089,0.042,0.876,0.914
+
+================================================
+IMAGE: DSC_0017  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.975,0.991)  wb_high=(1.123,1.027,1.000)
+  black=-0.0995  gamma=5.00  soft_clip=0.75  exposure=1.8401
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.022,0.028,0.951,0.942
+    auto border-trim rect was: 0.031,0.044,0.929,0.911
+
+================================================
+IMAGE: DSC_0018  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.970,0.957,1.000)  wb_high=(1.733,1.355,1.000)
+  black=-0.1622  gamma=5.00  soft_clip=0.75  exposure=1.7825
+  NOTE: shadows wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.021,0.032,0.948,0.937
+    auto border-trim rect was: 0.031,0.046,0.894,0.908
+
+================================================
+IMAGE: DSC_0019  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.964,0.946,1.000)  wb_high=(1.400,1.178,1.000)
+  black=-0.0496  gamma=5.00  soft_clip=0.75  exposure=1.6214
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.020,0.029,0.951,0.940
+    auto border-trim rect was: 0.086,0.046,0.876,0.909
+
+================================================
+IMAGE: DSC_0020  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.986,1.000,0.972)  wb_high=(1.748,1.396,1.000)
+  black=-0.1877  gamma=5.00  soft_clip=0.75  exposure=1.7738
+  NOTE: shadows wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.026,0.028,0.959,0.948
+    auto border-trim rect was: 0.056,0.147,0.884,0.815
+
+================================================
+IMAGE: DSC_0021  (1998 x 1336 px)  [GLOBAL BASE WINNER]
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.781,0.857,1.000)  wb_high=(1.000,1.036,1.380)
+  black=0.0272  gamma=5.00  soft_clip=0.75  exposure=1.5580
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.025,0.026,0.951,0.944
+    auto border-trim rect was: 0.034,0.041,0.933,0.915
+
+================================================
+IMAGE: DSC_0022  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.819,0.679)  wb_high=(1.757,1.388,1.000)
+  black=-0.1551  gamma=5.00  soft_clip=0.75  exposure=1.8818
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.026,0.031,0.950,0.942
+    auto border-trim rect was: 0.036,0.046,0.932,0.914
+
+================================================
+IMAGE: DSC_0023  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.999,0.973,1.000)  wb_high=(1.735,1.357,1.000)
+  black=-0.0291  gamma=5.00  soft_clip=0.75  exposure=1.4942
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.025,0.028,0.952,0.943
+    auto border-trim rect was: 0.034,0.044,0.918,0.912
+
+================================================
+IMAGE: DSC_0024  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.920,0.853)  wb_high=(1.744,1.368,1.000)
+  black=-0.0726  gamma=5.00  soft_clip=0.75  exposure=1.4881
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.027,0.034,0.952,0.944
+    auto border-trim rect was: 0.065,0.058,0.854,0.903
+
+================================================
+IMAGE: DSC_0025  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.847,0.723)  wb_high=(1.711,1.358,1.000)
+  black=-0.2063  gamma=5.00  soft_clip=0.75  exposure=1.8818
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.020,0.033,0.951,0.940
+    auto border-trim rect was: 0.031,0.049,0.932,0.912
+
+================================================
+IMAGE: DSC_0026  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.955,0.911)  wb_high=(1.168,1.052,1.000)
+  black=-0.0397  gamma=5.00  soft_clip=0.75  exposure=1.5408
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.036,0.027,0.939,0.938
+    auto border-trim rect was: 0.046,0.043,0.921,0.907
+
+================================================
+IMAGE: DSC_0027  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.933,0.878)  wb_high=(1.318,1.150,1.000)
+  black=-0.0498  gamma=5.00  soft_clip=0.75  exposure=1.5202
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.032,0.028,0.950,0.943
+    auto border-trim rect was: 0.040,0.046,0.932,0.911
+
+================================================
+IMAGE: DSC_0028  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.955,0.969,1.000)  wb_high=(1.265,1.108,1.000)
+  black=-0.1626  gamma=5.00  soft_clip=0.75  exposure=1.7062
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.029,0.027,0.950,0.941
+    auto border-trim rect was: 0.143,0.250,0.607,0.708
+
+================================================
+IMAGE: DSC_0029  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.992,0.971,1.000)  wb_high=(1.279,1.104,1.000)
+  black=-0.3196  gamma=5.00  soft_clip=0.75  exposure=1.8288
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.028,0.028,0.950,0.941
+    auto border-trim rect was: 0.250,0.250,0.501,0.707
+
+================================================
+IMAGE: DSC_0030  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.936,0.903)  wb_high=(1.664,1.325,1.000)
+  black=-0.1685  gamma=5.00  soft_clip=0.75  exposure=1.7674
+  NOTE: shadows wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.023,0.029,0.951,0.942
+    auto border-trim rect was: 0.063,0.073,0.871,0.885
+
+================================================
+IMAGE: DSC_0031  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.945,0.917)  wb_high=(1.232,1.083,1.000)
+  black=-0.1507  gamma=5.00  soft_clip=0.75  exposure=1.7247
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.017,0.034,0.953,0.942
+    auto border-trim rect was: 0.088,0.250,0.788,0.712
+
+================================================
+IMAGE: DSC_0032  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.996,0.971)  wb_high=(1.242,1.101,1.000)
+  black=0.0155  gamma=5.00  soft_clip=0.75  exposure=1.4091
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.033,0.028,0.949,0.939
+    auto border-trim rect was: 0.041,0.043,0.908,0.911
+
+================================================
+IMAGE: DSC_0033  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(0.751,0.771,1.000)  wb_high=(1.073,1.000,1.111)
+  black=-0.0142  gamma=5.00  soft_clip=0.75  exposure=1.6397
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.028,0.028,0.949,0.942
+    auto border-trim rect was: 0.060,0.250,0.908,0.676
+
+================================================
+IMAGE: DSC_0034  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.908,0.802)  wb_high=(1.470,1.262,1.000)
+  black=-0.2187  gamma=5.00  soft_clip=0.75  exposure=2.0000
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.024,0.028,0.951,0.942
+    auto border-trim rect was: 0.038,0.074,0.881,0.880
+
+================================================
+IMAGE: DSC_0035  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.907,0.807)  wb_high=(1.447,1.245,1.000)
+  black=-0.2097  gamma=5.00  soft_clip=0.75  exposure=2.0000
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.023,0.034,0.950,0.942
+    auto border-trim rect was: 0.106,0.052,0.644,0.790
+
+================================================
+IMAGE: DSC_0036  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.914,0.818)  wb_high=(1.438,1.239,1.000)
+  black=-0.2152  gamma=5.00  soft_clip=0.75  exposure=2.0000
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.020,0.028,0.952,0.943
+    auto border-trim rect was: 0.187,0.247,0.641,0.639
+
+================================================
+IMAGE: DSC_0037  (1998 x 1336 px)
+  Dmin=(0.8074,0.3416,0.1870)  D_max=2.046  offset=-0.050
+  wb_low=(1.000,0.911,0.821)  wb_high=(1.434,1.233,1.000)
+  black=-0.2110  gamma=5.00  soft_clip=0.75  exposure=2.0000
+  NOTE: shadows wb fell back to roll median
+  NOTE: highlights wb fell back to roll median
+
+  CROP CORRECTION (true content area, x,y,w,h as frac of frame): 0.027,0.031,0.932,0.941
+    auto border-trim rect was: 0.205,0.058,0.545,0.802
+
+================================================
+SUMMARY
+  Total corrected patches: 0
+    film_base  0
+    shadows    0
+    highlights 0
+  Total print overrides: 0
+    black      0
+    gamma      0
+    soft_clip  0
+    exposure   0
+  Total wb wheel overrides: 0
+    shadows    0
+    highlights 0
+  Crop corrections: 37
+  Bad inversions flagged: 0 / 37
+  wb fallbacks (patch missing): 53
+  Images with corrections: 37 / 37

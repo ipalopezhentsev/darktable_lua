@@ -392,6 +392,48 @@ def main():
             assert app.show_clipping is False
         step("clipping", clipping)
 
+        # N: vignette correction on/off in the preview (reloads the negative)
+        def vignette_toggle():
+            before = app.vignette_on
+            app._toggle_vignette()
+            assert app.vignette_on != before, "vignette toggle did not flip"
+            assert app._neg_cache_key is None, "neg cache not invalidated"
+            app._toggle_vignette()
+            assert app.vignette_on == before, "vignette toggle not reversible"
+        step("vignette_toggle", vignette_toggle)
+
+        # R: live(code) vs fitted(session) review toggle. Not a review session
+        # here, so R is a no-op; then inject review payloads and verify the swap.
+        def review_toggle():
+            assert not app.review_mode, "should not start in review mode"
+            app._toggle_review_source()
+            assert app.review_source == "fitted", "R changed source off-review"
+            img = app.images[app.current_idx]
+            base = dict(img["params"])
+            live = dict(base)
+            live["gamma"] = base["gamma"] + 1.0
+            img["review_kind"] = "inversion"
+            img["review"] = {
+                "fitted": {"params": base, "params_hex": img["params_hex"]},
+                "live": {"params": live,
+                         "params_hex": an.nm.encode_negadoctor_params(live)}}
+            app.review_mode = True
+            app.review_kind = "inversion"
+            app._apply_review_source()
+            assert abs(img["params"]["gamma"] - base["gamma"]) < 1e-9
+            app._toggle_review_source()
+            assert app.review_source == "live"
+            assert abs(img["params"]["gamma"] - live["gamma"]) < 1e-9, \
+                "R did not swap in the live params"
+            app._toggle_review_source()
+            assert app.review_source == "fitted"
+            assert abs(img["params"]["gamma"] - base["gamma"]) < 1e-9, \
+                "R did not swap back to fitted"
+            img.pop("review", None)
+            img.pop("review_kind", None)
+            app.review_mode = False
+        step("review_toggle", review_toggle)
+
         # Live wb feedback for the corrected patch
         def live_wb():
             corr = app.annotations[stem]["patch_corrections"]["shadows"]

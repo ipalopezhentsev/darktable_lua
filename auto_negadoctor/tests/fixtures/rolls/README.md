@@ -52,3 +52,13 @@ Make a new `fixtures/rolls/<roll_id>/` folder, drop the roll's
 `exif_params.txt` in it, and repopulate its TIFFs as above. The regression /
 tuning utilities pick it up automatically — they iterate over every roll folder
 that has local images.
+
+## These annotations are the calibration ground truth
+
+The annotations here are the fixed ground truth that the **recorded calibration
+sessions** (`tests/calibrations/`, spec 05) tune the algorithm toward. Run them
+with `tests/run_calibration.py`; each session records its inputs, its
+algorithm-independent closeness metric, and its results in a dated folder. See
+[../../calibrations/README.md](../../calibrations/README.md). All three
+calibration kinds (crop, vignette, inversion) derive what they need from the
+roll's local TIFFs — there are no extra hand-produced fixture files.

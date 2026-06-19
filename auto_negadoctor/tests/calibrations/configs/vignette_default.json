@@ -1,0 +1,11 @@
+{
+  "kind": "vignette",
+  "rolls": [],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 10,
+    "tolerances": {},
+    "params": "all"
+  }
+}

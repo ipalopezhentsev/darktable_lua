@@ -67,18 +67,30 @@
      non-monotone tail cut — corner bright leak breaks the ceiling there)
      is fitted with darktable's own lens-module "manual vignette" model
      (v_strength/v_radius/v_steepness, exact lens.cc tanh-spline transcribed
-     in nega_model). All level/color analysis then runs on corrected data
-     (`load_frame(path, vignette)`), EXCEPT crop detection, which runs on
-     uncorrected data (junk geometry is correction-invariant and the
-     hard-truth crop fixtures were drawn uncorrected — corrected detection
-     trimmed 1-3px less and broke containment). On the reference roll:
+     in nega_model). All level/color analysis — INCLUDING crop detection (since
+     2026-06-19) — runs on corrected data (`load_frame(path, vignette)`). Crop was
+     historically run on UNcorrected data, but that was a bug on heavily-vignetted
+     rolls: the film base is sampled on CORRECTED data, so comparing it against
+     UNcorrected edge pixels (which strong vignette — e.g. 55% corner falloff —
+     darkens far below the bright central base) made the rebate detectors mistake
+     a per-frame edge REBATE for image and leave it uncropped (user-reported:
+     foggy roll 2512-2601-1 DSC_0007, right rebate left in; ran fine ALONE only
+     because then the frame is its own global-base winner). Vignette correction is
+     a per-pixel scalar, so it does NOT move geometry — the hand-drawn crop
+     fixtures stay valid; only the value-based junk/rebate classification changes.
+     On the reference roll:
      strength 0.35 / radius 0.075 / steepness 0.60, fit residual 0.004,
      corner falloff ~30% (the user's hand value is stronger — 0.751/0.097/
      0.5 ON TOP of lensfun — they may over-correct visually; informational
      comparison in test_calibration).
-   - per frame: trim dark holder borders, find the lightest uniform orange
-     window = local film-base candidate (white-clip + R/G-ratio guards
-     against backlight holes)
+   - per frame: find the lightest uniform orange window = local film-base
+     candidate. The search runs on the **FULL UNCROPPED frame** (NO border/crop
+     gate) — the base is the lightest orange patch anywhere, usually the
+     unexposed rebate OUTSIDE the content crop; the white-clip (stray backlight)
+     + R/G-ratio + min-luma + uniformity guards are what exclude holder/holes.
+     Hence `BORDER_*` constants are NOT inversion params: `BORDER_DARK_THR`/
+     `BORDER_PAD_FRAC` only feed `detect_dark_border`'s **vignette** mask now,
+     and `BORDER_MAX_FRAC` is a **crop** cap (`_crop_decide`).
    - roll-wide: physical lightness = mean(rgb)/exposure_factor where
      `factor = shutter_s * iso / aperture²`; the lightest wins as the GLOBAL
      film base; each frame gets `Dmin = winner_rgb * factor_frame/factor_winner`
@@ -122,6 +134,30 @@
      gradient edges (DSC_0014 R/B, 0035 B, 0040 R/T) where true rebate merges
      into adjacent bright scene — within the picker's ≤2% (P_LOW) junk
      robustness, far better than the prior scene-eating over-trims.
+     **WIDE deliberate-rebate path (2026-06-19):** when the user scrolls film in
+     the holder to scan extra rebate, the unexposed rebate band can fill ~HALF a
+     frame — far past CROP_REBATE_MAX_FRAC (and past BORDER_MAX_FRAC), so the
+     conservative path leaves it INSIDE the content (real failure: roll 2511-12-1
+     DSC_0002, left ~41% rebate kept). A separate wide tier trims it, gated so it
+     NEVER eats ordinary scene: in a negative, lots of smooth daytime scene
+     (sky/ground/walls) also inverts to light orange and matches the base by
+     hue+density+texture, so per-pixel signatures alone caused ~13 catastrophic
+     false-positive over-trims across the 4 rolls (whole daytime frames trimmed to
+     a sliver — they pass containment because they over-trim INWARD, which that
+     gate doesn't catch). The decisive guard is **band-mean hue**: a real rebate
+     band IS the film base so its WHOLE-BAND mean color matches base chromaticity
+     to ~0.002, while a scene band that speckles the per-pixel mask still averages
+     0.012-0.044 off-base. Five `CROP_REBATE_WIDE_*`/`_HUE_*` constants: per-pixel
+     mask = tight hue (HUE_TOL 0.03) + low density (WIDE_MAX_D 0.35, looser than
+     base_like so vignette-darkened near-holder rebate still counts) + brighter
+     than holder; columns must be SOLID (WIDE_LINE_FRAC 0.5); the contiguous
+     edge-anchored run (skip leading holder, do NOT bridge through the dark scene
+     that follows) must TERMINATE before WIDE_FRAC (0.55) AND its band mean must
+     be within BAND_HUE_TOL (0.008) of base. Result: 0 changes on the two daytime
+     rolls, only DSC_0002 fixed (left→956, contained) + two small contained rebate
+     slivers on 2506-1. The wide cap is INDEPENDENT of BORDER_MAX_FRAC so ordinary
+     edges keep their tight 0.1 conservative trim. `_crop_fields` now also carries
+     `hue_dev`, `base_hue` and per-line `col_rgb`/`row_rgb` (the band-mean source).
      **HARD RULE (user, 2026-06-12): the detected crop must NEVER extend
      outside the user's hand-drawn crop annotations** — gated by
      check_crop_containment() in run_quality_tests against the
@@ -419,7 +455,10 @@ shadow clipping. Driven by `_clip_stats` (in `_refresh_histogram`),
 re-places the selected patch, **scroll resizes it** (first scroll on a
 detected patch seeds a correction from the detected rect, so adjusted sizes
 land in the annotations), C clears, V toggles inverted/negative view, G
-flags a bad inversion (whole frame). **Print-page params are adjustable
+flags a bad inversion (whole frame), **N toggles the vignette correction
+on/off** (before/after; reloads the negative via the `_neg_cache_key`), **R
+flips the calibration-review source fitted↔live** (only in a `--review`
+session). **Print-page params are adjustable
 too**: 4/5/6/7 select paper black / paper grade (gamma) / paper gloss
 (soft_clip) / print exposure, scroll adjusts the value (Shift = big step)
 with live preview, stored as `print_overrides` in the annotations and the
@@ -585,6 +624,130 @@ behavior (and self-test non-trivial checkers).
   absolute-pixel constants: runs the detectors on a synthetic frame at W and an
   exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).
   Checks scaling not absolute values, so threshold tuning is safe.
+- `tests/test_calibration_runner.py` — self-tests for the spec-05 calibration
+  runner: the optimizers find a synthetic minimum, the crop over-trim metric is
+  correct (delegates to `run_quality_tests.selftest_crop_overtrim`), the
+  registry's apply/restore leaves the module globals untouched, `build_spec`
+  rejects unknown params, the vignette objective is dominated by a rejected
+  roll, and an end-to-end `vignette` session (method `none`, an INLINE envelope +
+  a fake evaluator, NO TIFFs) writes the full session schema + records wall
+  time + restores globals.
+
+### Calibration sessions (spec 05) — `tests/run_calibration.py`
+
+Reworks tuning from lost stdout into **recorded, reproducible sessions** under
+`tests/calibrations/<YYYY-MM-DD_HHMMSS>_<kind>_<NN>/` (`config.json` inputs +
+`results.json`/`report.md` outputs + record-only `fitted_params.json`; per-kind
+`INDEX_<kind>.md` leaderboards; wall time recorded). The hand annotations in
+`fixtures/rolls/` are the unchanged ground truth. See
+`tests/calibrations/README.md`. RECORD-ONLY: the runner never edits
+`auto_negadoctor.py`; the user adopts good fitted values by hand.
+
+**Tuning order: crop + vignette FIRST, then inversion** — inversion depends on
+both (its pickers/wb/print tune run INSIDE the content crop and on
+vignette-corrected data), so tune it only once crop and vignette are settled, and
+re-run it whenever either is re-tuned.
+
+Three independent KINDS, each with its OWN algorithm-INDEPENDENT metric and its
+own history index (never mixed):
+- **crop** — objective = total **over-trim** (fraction of frame AREA of content
+  the detected crop removed inside the user's hand-drawn rect; per-edge as a
+  fraction of the edge — never pixels), with **containment** (never extend
+  outside the user rect) a hard `+BIG_PENALTY` constraint. Fits `CROP_*_FRAC`.
+  Fast path: prep the per-frame vignette-CORRECTED buffer + global-base `dmin` once;
+  `detect_content_crop` is split into `_crop_fields` (heavy trial-INVARIANT pixel
+  math — full-res log10 density extremes + line means, precomputed once per frame)
+  + `_crop_decide` (cheap; reads the fitted CROP_* / HOLDER_LUMA_THR /
+  BORDER_MAX_FRAC at call time), so each trial re-runs only `_crop_decide`
+  (~16× cheaper/eval, bit-identical — guarded by
+  `test_calibration_runner.test_crop_fields_split_identical`).
+- **inversion** — objective = median **histogram EMD** (`nega_model.
+  histogram_distance`) between the algorithm's render and the user's GT-param
+  render over the content crop (picture-vs-picture; the GT render is FIXED per
+  trial), with rendered hard-clip > `clip_max_frac` a hard constraint. Fits ANY
+  constant that shapes the picture (film base/Dmin, P_LOW/P_HIGH pickers, patch
+  search, **white balance** — desats/bands/priors, print tune). Dispatch: a
+  print-tune-only fit (`PRINT_TUNE_PARAMS`) re-tunes on cached frames (fast,
+  spec-04 path); any wb/picker/base/patch param re-runs the WHOLE pipeline per
+  trial (`_make_inversion_full`) — correct, slower.
+- **vignette** — objective = `(#rolls rejected)·BIG + median residual`. The
+  radial envelope is derived from the roll's TIFFs by `vignette_envelope()` (the
+  accumulation half split out of `estimate_vignette`) — NO committed fixture. A
+  profile-fit-only fit (`VIG_FIT_PARAMS`: `VIG_MIN_STRENGTH` + the promoted
+  tail-cut constants `VIG_PEAK_CENTER_FRAC` / `VIG_TAIL_CUT_REL`, was hardcoded
+  0.15 / 0.97) captures each roll's envelope ONCE, then re-runs only
+  `fit_vignette_profile` per trial; fitting an accumulation constant
+  (`VIG_BINS`/`VIG_DOWNSAMPLE_FRAC`/…) re-folds the envelope per trial but the
+  TIFF DECODE is trial-invariant, so `vignette_envelope` was split into
+  `_vig_decode_frame` (heavy, invariant: luma/clip/border) + `_vig_frame_envelope`
+  (cheap, reads the VIG_* constants) and `vignette_frame_cache` decodes every
+  frame ONCE into RAM; the runner's full path re-folds from that cache per trial
+  (~40× cheaper/eval than re-decoding, bit-identical — guarded by
+  `test_vignette.test_frame_cache_envelope_identical`). `estimate_vignette` /
+  `vignette_envelope` take an optional `frame_cache=`. The "a new roll fails to
+  auto-find vignette" guard: add the roll and
+  re-run; the optimizer searches the `VIG_*` to keep ALL rolls non-rejected, or
+  the report names which still fails. (residual = the vignette-model fit error;
+  see below.)
+
+Fitting methods (all native, recorded in `config.json` with their
+hyperparameters): `none` (evaluate once), `grid` (per-param `grid_step`),
+`coordinate_descent` (`epsilon`/`max_iters` + per-param step controls),
+`random_search` (`n_trials`/`seed`). Every method hyperparameter has a CLI flag
+that overrides the config (`--epsilon`/`--max-iters`/`--step-shrink`/
+`--init-step`/`--step-min`/`--n-trials`/`--seed`, plus `--method`/`--rolls`/
+`--pca`; per-param ranges stay in the config) — precedence CLI > config >
+optimizer default. The EFFECTIVE method + its params (defaults filled in) are
+echoed to the console banner, the `report.md` "method params" line, and the
+`INDEX_<kind>.md` method column, so a one-off override is still fully recorded. `tests/calibration_registry.py` is the
+COMPLETE catalog of every tuning constant per kind (tuple constants exposed per
+element as `NAME[i]`, ints flagged); a config fits a SUBSET. **Tuning config object (dependency injection).** The 58 fittable constants are
+the immutable `auto_negadoctor.Tuning` namedtuple. **Values are EXTERNAL** —
+`tuning.py` holds the schema + per-field docs (JSON can't carry comments) and
+`presets/*.json` hold the values (nested by calibration kind → pipeline
+sub-stage via `tuning.GROUPS`; load flattens + validates, and still accepts a
+flat preset); `DEFAULT_TUNING = tuning.load($NEGA_PRESET or
+"default")` and is mirrored back onto the module globals (so the registry's
+getattr/setattr utilities still resolve). `presets/default.json` is byte-identical
+to the old hardcoded constants. Select a preset with `--preset NAME|PATH` /
+`NEGA_PRESET`; the source holds NO hardcoded tuning values (only structural
+correctness facts like `CLIP_SRGB_THR` / byte offsets stay inline). Adopting a
+calibration result = drop in its `fitted_preset.json` (no editing `auto_negadoctor.py`).
+See `presets/README.md`. The analysis functions (`process_roll`,
+`detect_content_crop`/`_crop_decide`, `estimate_vignette`/`vignette_envelope`/
+`fit_vignette_profile`, the pickers, `make_params`, `tune_print_params`,
+`detect_dark_border`) take `cfg=DEFAULT_TUNING` and read constants as `cfg.NAME`.
+`calibration_registry.to_tuning(overrides)` builds a per-trial cfg (handles
+`NAME[i]` tuple elements + int coercion); the runner passes it down instead of
+mutating globals, and writes both `fitted_params.json` (just what moved) and a
+complete `fitted_preset.json` (drop-in). `apply`/`snapshot`/`restore` (global
+setattr) remain as utilities but are no longer on the hot path.
+PARALLELISM: (0) PREP — the trial-invariant precompute (decode + `_crop_fields` /
+the fixed GT render) runs frame-parallel per roll via `_map_frames_prep` (was a
+serial per-frame loop that idled the cores after process_roll); (1) per-frame
+within a trial (`_eval_frames` → `an._map_frames`; vignette refolds via the same
+pool) — all methods, ~4–5×; (2) per-trial for `random_search` (`_random` runs
+trials in a thread pool, `--workers`/`fit.workers`; points sampled up front +
+recorded in order → bit-identical to serial). Worker count = `an._proc_workers`
+(`min(cpu,8)` default = memory-bandwidth knee; override `NEGA_PROC_WORKERS`). Enabled
+by the cfg refactor (no shared mutation). Scaling is GIL-bound: render-heavy
+inversion scales, crop's pure-Python `_crop_decide` less so. `coordinate_descent`
+is a dependent chain — per-frame parallel only. Guards:
+`test_calibration_runner.test_to_tuning_builds_cfg` /
+`test_random_search_parallel_equivalence`, and byte-identical default confirmed
+by the full quality gate (crop containment numbers unchanged).
+The metric helpers are
+SHARED with the gates: `run_quality_tests.histogram_per_frame` (extracted from
+`_histogram_match_medians`) and `crop_overtrim` / `crop_overtrim_per_frame`.
+`--review <session>` works for **all three kinds**: it runs the pipeline twice
+(once under the session's FITTED constants, once under the LIVE source-code
+constants), attaches per-frame `review={fitted,live}` payloads (kind-specific:
+inversion params / crop border / roll vignette) via `write_debug_sessions`, and
+opens the debug UI. There key **R** flips fitted↔live (swapping the payload into
+`img_dict` so every render path uses it) and key **N** toggles the vignette
+correction on/off in the preview (before/after). `_review_payload` /
+`_review_run` build the payloads; the UI side is `_apply_review_source` /
+`_toggle_review_source` / `_toggle_vignette` (smoke-tested).
 
 ## Known Bugs / TODOs
 

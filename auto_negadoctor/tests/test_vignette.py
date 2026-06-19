@@ -116,10 +116,54 @@ def test_corner_leak_tail_still_cut():
               f"bins={info.get('bins')}")
 
 
+def test_frame_cache_envelope_identical():
+    """The decode-once cache (vignette_frame_cache + vignette_envelope(...,
+    frame_cache=)) must reproduce the decode-each-trial envelope EXACTLY — this
+    is the speedup the calibration runner's vignette FULL path relies on. Driven
+    by a monkeypatched load_frame so it needs no TIFFs."""
+    print("frame-cache envelope equivalence (no TIFFs):")
+    import numpy as np
+
+    # Two synthetic frames: a centred radial falloff + a bit of per-frame noise,
+    # as float exports (enc_f.max()==0 -> no clip mask), with a dark border.
+    def synth(seed):
+        rng = np.random.default_rng(seed)
+        h, w = 120, 160
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+        cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+        rad = np.hypot(xx - cx, yy - cy) / np.hypot(cx, cy)
+        base = (1.0 - 0.4 * rad ** 2) * (0.8 + 0.1 * seed)
+        lin = np.repeat((base + rng.normal(0, 0.002, base.shape))[:, :, None],
+                        3, axis=2)
+        lin[:6, :] = 0.0; lin[-6:, :] = 0.0   # dark holder border top/bottom
+        lin[:, :6] = 0.0; lin[:, -6:] = 0.0
+        enc = np.zeros_like(lin)
+        return enc, lin
+
+    frames = {"a.tif": synth(1), "b.tif": synth(2), "c.tif": synth(3)}
+    paths = list(frames)
+    orig_lf, orig_exif = an.load_frame, an.read_exif_fallback
+    an.load_frame = lambda p, vig=None: frames[__import__("os").path.basename(p)]
+    an.read_exif_fallback = lambda p: {}
+    try:
+        env_fresh = an.vignette_envelope(paths, {})           # decode each call
+        fc = an.vignette_frame_cache(paths, {})               # decode once
+        env_cached = an.vignette_envelope(paths, {}, frame_cache=fc)
+    finally:
+        an.load_frame, an.read_exif_fallback = orig_lf, orig_exif
+
+    check("cache build decoded all frames",
+          sum(c is not None for c in fc) == len(paths))
+    check("envelope radii identical", env_fresh["r"] == env_cached["r"])
+    check("envelope values identical (bit-for-bit)", env_fresh["e"] == env_cached["e"])
+    check("frame count identical", env_fresh["used"] == env_cached["used"])
+
+
 def main():
     test_reference_roll_unchanged()
     test_central_dip_roll_now_corrected()
     test_corner_leak_tail_still_cut()
+    test_frame_cache_envelope_identical()
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): {', '.join(FAILURES)}")

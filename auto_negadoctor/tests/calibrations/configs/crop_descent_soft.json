@@ -1,0 +1,11 @@
+{
+  "kind": "crop",
+  "rolls": [],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.000002,
+    "max_iters": 15,
+    "tolerances": { "containment_weight": 5.0 },
+    "params": "all"
+  }
+}

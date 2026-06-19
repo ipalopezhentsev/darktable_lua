@@ -1,0 +1,347 @@
+{
+  "stem": "DSC_0005",
+  "negative_path": "C:\\Users\\ilyap\\AppData\\Local\\Temp/darktable_autonegadoctor_1781732584/DSC_0005.tif",
+  "width": 1998,
+  "height": 1336,
+  "exif": {
+    "exposure_s": 0.025,
+    "aperture": 18.0,
+    "iso": 100.0,
+    "exposure_factor": 0.007716049382716049,
+    "missing_exif": false
+  },
+  "border": [
+    65,
+    98,
+    261,
+    56
+  ],
+  "film_base": {
+    "local": {
+      "rect": [
+        130,
+        371,
+        79,
+        79
+      ],
+      "rgb_linear": [
+        0.5548670887947083,
+        0.22559019923210144,
+        0.11720055341720581
+      ],
+      "score": 0.2992192804813385,
+      "clipped_r": false
+    },
+    "applied_dmin": [
+      0.8073900938034058,
+      0.3416048288345337,
+      0.18695363402366638
+    ],
+    "is_global_winner": false,
+    "global_winner_stem": "DSC_0021",
+    "global_rect_on_winner": [
+      290,
+      168,
+      79,
+      79
+    ]
+  },
+  "patches": {
+    "shadows": {
+      "used_fallback": true
+    },
+    "highlights": {
+      "used_fallback": true
+    }
+  },
+  "picked_min": [
+    0.27157318592071533,
+    0.09665117412805557,
+    0.041263073682785034
+  ],
+  "picked_max": [
+    0.7771884799003601,
+    0.32640668749809265,
+    0.17959025502204895
+  ],
+  "wb_high_boot": [
+    1.3179442399620989,
+    1.1657741670099833,
+    1.0
+  ],
+  "source_16bit_tiff": false,
+  "vignette": {
+    "strength": 0.95,
+    "radius": 0.075,
+    "steepness": 0.575
+  },
+  "vignette_info": {
+    "frames": 37,
+    "bins": 29,
+    "residual": 0.0154,
+    "corner_falloff": 0.5221,
+    "profile": [
+      [
+        0.016,
+        1.0
+      ],
+      [
+        0.047,
+        1.0122
+      ],
+      [
+        0.078,
+        1.0274
+      ],
+      [
+        0.109,
+        1.0331
+      ],
+      [
+        0.141,
+        1.0487
+      ],
+      [
+        0.172,
+        1.0601
+      ],
+      [
+        0.203,
+        1.0673
+      ],
+      [
+        0.234,
+        1.0806
+      ],
+      [
+        0.266,
+        1.0983
+      ],
+      [
+        0.297,
+        1.1162
+      ],
+      [
+        0.328,
+        1.1425
+      ],
+      [
+        0.359,
+        1.1643
+      ],
+      [
+        0.391,
+        1.1879
+      ],
+      [
+        0.422,
+        1.2119
+      ],
+      [
+        0.453,
+        1.2417
+      ],
+      [
+        0.484,
+        1.269
+      ],
+      [
+        0.516,
+        1.3012
+      ],
+      [
+        0.547,
+        1.3212
+      ],
+      [
+        0.578,
+        1.3488
+      ],
+      [
+        0.609,
+        1.388
+      ],
+      [
+        0.641,
+        1.4194
+      ],
+      [
+        0.672,
+        1.4671
+      ],
+      [
+        0.703,
+        1.5284
+      ],
+      [
+        0.734,
+        1.5948
+      ],
+      [
+        0.766,
+        1.6492
+      ],
+      [
+        0.797,
+        1.6496
+      ],
+      [
+        0.828,
+        1.7545
+      ],
+      [
+        0.859,
+        1.8234
+      ],
+      [
+        0.891,
+        1.9155
+      ]
+    ]
+  },
+  "params": {
+    "film_stock": 1,
+    "Dmin": [
+      0.8073900938034058,
+      0.3416048288345337,
+      0.18695363402366638
+    ],
+    "wb_high": [
+      1.2012262073752014,
+      1.089455333804745,
+      1.0
+    ],
+    "wb_low": [
+      1.0,
+      0.9370721799472171,
+      0.9810717253642449
+    ],
+    "D_max": 2.046,
+    "offset": -0.05,
+    "black": -0.02417564544201109,
+    "gamma": 5.0,
+    "soft_clip": 0.75,
+    "exposure": 1.7489446065336978
+  },
+  "params_hex": "010000001eb14e3fd4e6ae3ec6703f3e00000000c8c1993f46738b3f0000803f0000803f0000803ff6e36f3f84277b3f0000803faaf10240cdcc4cbd010cc6bc0000a0400000403f6bdddf3f",
+  "params_analytical": {
+    "film_stock": 1,
+    "Dmin": [
+      0.8073900938034058,
+      0.3416048288345337,
+      0.18695363402366638
+    ],
+    "wb_high": [
+      1.2012262073752014,
+      1.089455333804745,
+      1.0
+    ],
+    "wb_low": [
+      1.0,
+      0.9370721799472171,
+      0.9810717253642449
+    ],
+    "D_max": 2.046,
+    "offset": -0.05,
+    "black": -0.02417564544201109,
+    "gamma": 5.0,
+    "soft_clip": 0.75,
+    "exposure": 1.7489446065336978
+  },
+  "params_ai": null,
+  "params_ai_hex": null,
+  "scene": null,
+  "scene_tuning": null,
+  "constants": {
+    "_PROC_WORKERS_ENV": 0,
+    "_AI_WORKERS": 1,
+    "_FRAME_CACHE": true,
+    "BORDER_DARK_THR": 0.02,
+    "BORDER_MAX_FRAC": 0.25,
+    "BORDER_PAD_FRAC": 0.004,
+    "HOLDER_LUMA_THR": 0.04,
+    "CROP_JUNK_LINE_FRAC": 0.05,
+    "CROP_LEAK_MARGIN_D": 0.06,
+    "CROP_REBATE_MARGIN_D": 0.13,
+    "CROP_REBATE_LINE_FRAC": 0.15,
+    "CROP_REBATE_TERM_FRAC": 0.04,
+    "CROP_REBATE_MAX_FRAC": 0.04,
+    "CROP_PAD_FRAC": 0.012,
+    "CROP_SHADOW_REL": 0.7,
+    "CROP_SHADOW_MAX_FRAC": 0.03,
+    "CROP_SHADOW_CORE_FRAC": 0.016,
+    "CROP_GAP_TOL_FRAC": 0.02,
+    "BASE_WIN_FRAC": 0.04,
+    "MIN_WIN_FRAC": 0.016,
+    "BASE_STRIDE_DIV": 2,
+    "CLIP_SRGB_THR": 0.97,
+    "CLIP_FRAC_MAX": 0.02,
+    "BASE_MIN_LUMA": 0.04,
+    "BASE_UNIFORMITY_MAX": 0.1,
+    "BASE_MIN_RG_RATIO": 1.2,
+    "BASE_GB_TOL": 1.05,
+    "P_LOW": 2.0,
+    "P_HIGH": 99.5,
+    "OFFSET_DEFAULT": -0.05,
+    "DMAX_DEFAULT": 2.046,
+    "PATCH_WIN_FRAC": 0.04,
+    "PATCH_STRIDE_DIV": 2,
+    "SHADOW_BAND_PCT": [
+      5.0,
+      30.0
+    ],
+    "HIGHLIGHT_BAND_PCT": [
+      70.0,
+      95.0
+    ],
+    "SHADOW_MIN_LUMA": 0.005,
+    "PATCH_CHROMA_MAX": 0.35,
+    "PATCH_CHROMA_FLOOR": 0.02,
+    "PATCH_UNIFORMITY_MAX": 0.45,
+    "PATCH_LUMA_FLOOR": 0.02,
+    "MIN_PATCH_DENSITY": 0.05,
+    "HIGHLIGHT_CLIP_FRAC_MAX": 0.02,
+    "PRINT_HI_PCT": 99.9,
+    "PRINT_HI_CEIL": 0.97,
+    "PRINT_CLIP_BUDGET": 0.003,
+    "PRINT_TUNE_ITERS": 12,
+    "PRINT_TUNE_SUBSAMPLE_FRAC": 0.003,
+    "PRINT_GAMMA": 5.0,
+    "WB_LOW_BAND_PCT": [
+      5.0,
+      30.0
+    ],
+    "WB_HIGH_BAND_PCT": [
+      70.0,
+      95.0
+    ],
+    "WB_LOW_DESAT": 0.45,
+    "WB_HIGH_DESAT": 0.0,
+    "WB_REGION_MIN_FRAC": 0.0001,
+    "WB_HIGH_PRIOR": [
+      1.8,
+      1.35,
+      1.0
+    ],
+    "WB_LOW_PRIOR": [
+      1.0,
+      0.75,
+      0.7
+    ],
+    "VIG_DOWNSAMPLE_FRAC": 0.004,
+    "VIG_INSET_FRAC": 0.012,
+    "VIG_BINS": 32,
+    "VIG_PROFILE_PCT": 90.0,
+    "VIG_MIN_BIN_SAMPLES": 25,
+    "VIG_MIN_STRENGTH": 0.02,
+    "VIG_PEAK_CENTER_FRAC": 0.15,
+    "VIG_TAIL_CUT_REL": 0.97,
+    "LENS_MODFLAG_VIGNETTING": 2,
+    "LENS_V_OFFSET": 336,
+    "LENS_MODFLAGS_OFFSET": 4,
+    "MASK_USED": 0,
+    "MASK_BORDER": 2
+  },
+  "processing_time_s": 10.92,
+  "run_wall_time_s": 40.17
+}

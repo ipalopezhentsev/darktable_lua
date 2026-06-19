@@ -1,0 +1,10 @@
+{
+  "kind": "crop",
+  "rolls": [],
+  "fit": {
+    "method": "random_search",
+    "tolerances": { "containment_weight": 3.0 },
+    "params": "all",
+    "n_trials": 1000
+  }
+}
