@@ -212,6 +212,24 @@ def main():
                 "marker not re-placed after resize"
         step("wheel_resize", wheel_resize)
 
+        # Fast live preview: a wheel drag renders the negative downscaled for
+        # speed, then upscales back so the display stays in full-frame coords
+        # (zoom/markers keep working); a full-res render follows on settle.
+        def wheel_preview():
+            full = app._neg_lin(img)
+            if full is None:
+                return                       # JPEG-only fallback w/o a negative
+            prev = app._neg_lin_preview(img)
+            fl = max(full.shape[:2])
+            pl = max(prev.shape[:2])
+            assert pl == min(fl, app._PREVIEW_RENDER_MAX), \
+                f"preview not downscaled to the cap: {pl} (full {fl})"
+            app._live_preview = True
+            app._apply_live_render()         # render the low-res preview now
+            assert app.pil_image.size == (img["width"], img["height"]), \
+                f"preview not upscaled to full dims: {app.pil_image.size}"
+        step("wheel_preview", wheel_preview)
+
         # X: compare corrected vs default render
         def compare_toggle():
             app._toggle_compare()

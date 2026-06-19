@@ -500,6 +500,35 @@ class NegadoctorDebugUI(DebugUIBase):
         self._neg_cache = lin
         return lin
 
+    # Live wheel/preview render: the negative downscaled to this long-edge size.
+    # A WB drag re-renders the WHOLE frame per move; rendering at the full export
+    # resolution (~2000px, ~170ms) is wasted while the canvas shows it downscaled
+    # to fit. The preview render (~1100px, ~55ms) feels live; a crisp full-res
+    # pass follows once the drag settles (see _on_wheel_change). render cost
+    # scales with pixel count, so this is ~3x faster per interactive frame.
+    _PREVIEW_RENDER_MAX = 1100
+
+    def _neg_lin_preview(self, img_dict):
+        """The linear negative downscaled for fast live-preview renders, cached
+        alongside the full-res _neg_lin (shares its invalidation key)."""
+        lin = self._neg_lin(img_dict)
+        if lin is None:
+            return None
+        key = self._neg_cache_key   # _neg_lin just refreshed this to the cur frame
+        if self._neg_preview_key == key:
+            return self._neg_preview
+        h, w = lin.shape[:2]
+        longest = max(h, w)
+        prev = lin
+        if longest > self._PREVIEW_RENDER_MAX:
+            import cv2
+            s = self._PREVIEW_RENDER_MAX / longest
+            prev = cv2.resize(lin, (max(1, round(w * s)), max(1, round(h * s))),
+                              interpolation=cv2.INTER_AREA)
+        self._neg_preview_key = key
+        self._neg_preview = prev
+        return prev
+
     def _invert_pil(self, lin, params):
         """sRGB PIL inversion of a linear negative for the given params
         (fused render + sRGB + quantize in one parallel pass)."""
@@ -750,17 +779,22 @@ class NegadoctorDebugUI(DebugUIBase):
                 print(f"Failed to write applied results: {e}")
         super()._on_close()
 
-    def _schedule_live_render(self, delay_ms=250):
-        """Debounced re-render: scroll-resizing fires many events."""
+    def _schedule_live_render(self, delay_ms=250, preview=False):
+        """Debounced re-render: scroll-resizing fires many events. ``preview``
+        renders at reduced resolution for a fast live update (see
+        _neg_lin_preview)."""
         if self._live_job is not None:
             try:
                 self.root.after_cancel(self._live_job)
             except Exception:
                 pass
+        self._live_preview = preview
         self._live_job = self.root.after(delay_ms, self._apply_live_render)
 
     def _apply_live_render(self):
         self._live_job = None
+        preview = self._live_preview
+        self._live_preview = False
         if self.view_negative:
             return
         img_dict = self.images[self.current_idx]
@@ -773,15 +807,23 @@ class NegadoctorDebugUI(DebugUIBase):
             # preview is ALWAYS a fresh algorithmic inversion (AI variant uses
             # params_ai, otherwise the analytical params).
             params = self._variant_params(img_dict)
-        lin = self._neg_lin(img_dict) if params else None
-        if lin is None or not params:
-            # nothing to render honestly (no source negative / no params) —
-            # leave the current display untouched, no baked-file fallback.
+        if not params:
+            return
+        lin = self._neg_lin_preview(img_dict) if preview else self._neg_lin(img_dict)
+        if lin is None:
+            # nothing to render honestly (no source negative) — leave the
+            # current display untouched, no baked-file fallback.
             return
         # the badge ("RE-RENDERED FROM CORRECTIONS") is only meaningful when the
         # render came from user corrections, not the plain analytical/AI preview.
         self._live_rendered = corrected
-        self._set_display_image(self._invert_pil(lin, params))
+        pil = self._invert_pil(lin, params)
+        if pil.size != (img_dict["width"], img_dict["height"]):
+            # a preview render is downscaled; upscale (cheap NEAREST) so the
+            # display/markers/zoom keep working in full-frame coordinates. The
+            # crisp full-res render replaces it once the drag settles.
+            pil = pil.resize((img_dict["width"], img_dict["height"]), Image.NEAREST)
+        self._set_display_image(pil)
 
     # ------------------------------------------------------------------
     # Selection state
@@ -803,6 +845,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self._amask_cache = None
         self._neg_cache_key = None
         self._neg_cache = None
+        self._neg_preview_key = None   # downscaled negative for fast live preview
+        self._neg_preview = None
         self.vignette_on = True        # N: apply the roll vignette correction
         # Calibration review: frames carry review={live,fitted} payloads + a
         # review_kind. The R toggle swaps the live (current source-code) result
@@ -816,6 +860,8 @@ class NegadoctorDebugUI(DebugUIBase):
         if self.review_mode:
             self._apply_review_source()
         self._live_job = None
+        self._live_preview = False     # next scheduled render is a low-res preview
+        self._wheel_settle_job = None  # debounced heavy bookkeeping after a wheel drag
         self._live_rendered = False
         self._crop_drag_edge = None
         self._crop_drag_rect = None
@@ -1205,19 +1251,48 @@ class NegadoctorDebugUI(DebugUIBase):
             text=f"{tag} ({wb[0]:.2f},{wb[1]:.2f},{wb[2]:.2f})",
             fg="#9fff9f" if tag == "OVR" else "#9fd0ff")
 
+    # Wheel-drag render cadence: a quick low-res preview while the user is
+    # moving the marker, then a crisp full-res render plus the (deferred) heavy
+    # bookkeeping once the drag settles.
+    WHEEL_PREVIEW_DELAY_MS = 30
+    WHEEL_SETTLE_DELAY_MS = 200
+
     def _on_wheel_change(self, name, wb):
         img_dict = self.images[self.current_idx]
         stem = img_dict["stem"]
         self.annotations[stem]["wb_overrides"][WB_NAME_OVR[name]] = \
             [float(v) for v in wb]
         self.selected_patch = name
-        self._auto_save(stem)
+        # Per motion event do only the cheap work: the wheel readout the user is
+        # watching + a fast low-res preview render. The disk write, item table,
+        # info panel, marker redraw and the crisp full-res render are heavy and
+        # only need to run when the drag SETTLES (running them every event made
+        # dragging stutter), so they are debounced together.
         self._update_wheel_readout(name, wb)
+        self._schedule_live_render(delay_ms=self.WHEEL_PREVIEW_DELAY_MS,
+                                   preview=True)
+        self._schedule_wheel_settle()
+
+    def _schedule_wheel_settle(self):
+        if self._wheel_settle_job is not None:
+            try:
+                self.root.after_cancel(self._wheel_settle_job)
+            except Exception:
+                pass
+        self._wheel_settle_job = self.root.after(self.WHEEL_SETTLE_DELAY_MS,
+                                                 self._wheel_settle)
+
+    def _wheel_settle(self):
+        """Heavy bookkeeping + crisp full-res render, run once a wheel drag has
+        come to rest (debounced from _on_wheel_change)."""
+        self._wheel_settle_job = None
+        stem = self.images[self.current_idx]["stem"]
+        self._auto_save(stem)
         self._update_count_label()
         self._populate_items_list()
         self._update_info_from_selection()
         self._redraw_markers()
-        self._schedule_live_render()
+        self._schedule_live_render(delay_ms=0)   # full-res replaces the preview
 
     # ------------------------------------------------------------------
     # Crop correction helpers
