@@ -147,7 +147,6 @@ FIELDS = collections.OrderedDict([
         "Scan exposure bias: darktable's default, kept fixed. The auto formula "
         "needs the lightest PHOTO content, but on uncropped scans the lightest "
         "area is the film base itself, which degenerates the formula to ~0.")),
-    ("SHADOW_BAND_PCT", _F("preview-luma percentile band for the shadows patch", kind="tuple")),
     ("HIGHLIGHT_BAND_PCT", _F("preview-luma percentile band for the highlight patch", kind="tuple")),
 
     # --- white balance (the colors the user picks on the wheels) -------------
@@ -235,7 +234,7 @@ GROUPS = collections.OrderedDict([
                            "PATCH_WIN_FRAC", "HIGHLIGHT_CLIP_FRAC_MAX", "SHADOW_MIN_LUMA",
                            "MIN_WIN_FRAC"]),
         ("levels", ["P_LOW", "P_HIGH", "DMAX_DEFAULT", "OFFSET_DEFAULT",
-                    "SHADOW_BAND_PCT", "HIGHLIGHT_BAND_PCT"]),
+                    "HIGHLIGHT_BAND_PCT"]),
         ("white_balance", ["WB_LOW_DESAT", "WB_HIGH_DESAT", "WB_LOW_BAND_PCT",
                            "WB_HIGH_BAND_PCT", "WB_LOW_PRIOR", "WB_HIGH_PRIOR",
                            "WB_REGION_MIN_FRAC"]),

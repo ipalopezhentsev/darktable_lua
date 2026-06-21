@@ -30,10 +30,11 @@ Pipeline (single pass, no darktable round-trip):
      pick the physically lightest as the global film base, distribute it
      to every frame as Dmin rescaled by that frame's exposure factor
   3. per frame: D_max/offset from frame percentiles, render the inverted
-     preview with nega_model's exact forward model, find a dark-gray patch
-     (-> wb_low) and a light-neutral patch (-> wb_high) on the preview
-     using the patches' NEGATIVE-space colors, then black + exposure
-  4. frames without usable neutral patches fall back to roll-median wb
+     preview with nega_model's exact forward model, derive wb_low from a
+     region gray-world over a dark print-luma band, wb_high from a
+     light-neutral patch (NEGATIVE-space color) with a bright-region
+     fallback, then black + exposure
+  4. frames without usable region/patch wb fall back to roll-median wb
   5. emit negadoctor_results.txt (params as ready 152-char hex blob) and,
      for --debug-ui, per-frame {stem}_debug_nega.json sessions (the UI renders
      the inverted preview + mask live from these — no baked images), then
@@ -1412,22 +1413,23 @@ def load_frame(path, vignette=None):
     return finish(enc_f, lin)
 
 
-def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
-                 session_dir=None, cfg=DEFAULT_TUNING):
-    """Run the full analysis. Returns list of per-frame result dicts.
+def process_roll_prefix(image_paths, exif_by_stem, progress=None,
+                        cfg=DEFAULT_TUNING, _prog=None):
+    """The trial-INVARIANT prefix of process_roll: stage 0 (roll-wide vignette)
+    + stage A (per-frame film-base candidates, exif, dims, decoded buffers) +
+    the GLOBAL film base. None of it depends on the wb / picker / patch / print
+    constants, so a calibration fitting ONLY those can compute this ONCE and feed
+    it back via `process_roll(prep=...)` instead of recomputing it (and
+    reprinting the vignette / global-base lines) on every trial. It DOES depend
+    on the vignette (`VIG_*` / `BORDER_*`) and film-base (`BASE_*`) constants, so
+    a fit that touches those must rebuild it per trial.
 
-    ai_tune: after the analytical params are computed, add a vision-LLM
-    per-scene nudge as an ALTERNATE variant (params_ai / params_ai_hex on each
-    frame; analytical params untouched). session_dir holds the LLM response
-    cache. See run_scene_tuning().
-
-    cfg: the Tuning object supplying every fittable constant (DEFAULT_TUNING =
-    the module globals → byte-identical to before). The calibration runner passes
-    a per-trial cfg so independent trials can run in parallel threads."""
+    Returns a dict consumed by process_roll; `winner_stem` is None when no frame
+    yielded a film-base candidate."""
     n = len(image_paths)
     paths = list(image_paths)
     workers = _proc_workers(n)
-    prog = _Progress(progress, 3 * n)
+    prog = _prog if _prog is not None else _Progress(progress, 3 * n)
 
     # ---- Stage 0: roll-wide vignette estimation (uncorrected frames) ----
     vig, vig_info = estimate_vignette(image_paths, exif_by_stem, cfg=cfg)
@@ -1499,15 +1501,62 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
               f"Reload auto_negadoctor.lua in darktable so exports use "
               f"32-bit float TIFF.")
     winner_stem, winner_rgb, winner_factor = choose_global_base(good)
+    winner_rect = (next(f["base"]["rect"] for f in good if f["stem"] == winner_stem)
+                   if winner_stem is not None else None)
+    if winner_stem is not None:
+        print(f"Global film base: {winner_stem} rect={winner_rect} "
+              f"rgb={['%.4f' % v for v in winner_rgb]} factor={winner_factor:.5g}")
+    return {"vig": vig, "vig_info": vig_info, "frames": frames,
+            "winner_stem": winner_stem, "winner_rgb": winner_rgb,
+            "winner_factor": winner_factor, "winner_rect": winner_rect}
+
+
+def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
+                 session_dir=None, cfg=DEFAULT_TUNING, prep=None):
+    """Run the full analysis. Returns list of per-frame result dicts.
+
+    ai_tune: after the analytical params are computed, add a vision-LLM
+    per-scene nudge as an ALTERNATE variant (params_ai / params_ai_hex on each
+    frame; analytical params untouched). session_dir holds the LLM response
+    cache. See run_scene_tuning().
+
+    cfg: the Tuning object supplying every fittable constant (DEFAULT_TUNING =
+    the module globals → byte-identical to before). The calibration runner passes
+    a per-trial cfg so independent trials can run in parallel threads.
+
+    prep: a precomputed `process_roll_prefix(...)` result. When given, stage 0
+    (vignette) + stage A (film base) are NOT recomputed — only stage B1/B2 run,
+    on shallow copies of the prefix frames (so the shared prefix is not mutated;
+    the heavy decoded buffers are shared by reference and stay resident for the
+    next trial). The calibration runner passes it to avoid re-estimating the
+    trial-invariant prefix on every inversion trial."""
+    n = len(image_paths)
+    workers = _proc_workers(n)
+    prog = _Progress(progress, 3 * n)
+
+    # Stage 0 (vignette) + stage A (film base) + the global film base form the
+    # trial-INVARIANT prefix (see process_roll_prefix). A fresh run builds it
+    # inline; a calibration that fits only wb/picker/print constants computes it
+    # ONCE and feeds it back via `prep=`.
+    reuse = prep is not None
+    if not reuse:
+        prep = process_roll_prefix(image_paths, exif_by_stem, cfg=cfg, _prog=prog)
+
+    vig, vig_info = prep["vig"], prep["vig_info"]
+    winner_stem = prep["winner_stem"]
+    winner_rgb, winner_factor = prep["winner_rgb"], prep["winner_factor"]
+    winner_rect = prep["winner_rect"]
+    # On REUSE, stage B1/B2 must not mutate the shared prefix dicts — work on
+    # shallow copies (the `_loaded` buffers are shared by reference, read-only).
+    frames = [dict(fr) for fr in prep["frames"]] if reuse else prep["frames"]
+
     if winner_stem is None:
-        for fr in good:
-            fr["error"] = "no film-base candidate found on any frame of the roll"
+        for fr in frames:
+            if not fr["error"]:
+                fr["error"] = "no film-base candidate found on any frame of the roll"
         for fr in frames:
             fr.pop("_loaded", None)
         return frames, None
-    winner_rect = next(f["base"]["rect"] for f in good if f["stem"] == winner_stem)
-    print(f"Global film base: {winner_stem} rect={winner_rect} "
-          f"rgb={['%.4f' % v for v in winner_rgb]} factor={winner_factor:.5g}")
 
     # ---- Stage B1: per-frame patches + wb (frame-parallel) ----
     def stage_b1(fr):
@@ -1588,11 +1637,8 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
                                          "highlights")
                            if wb_high_raw else None)
 
-            # shadow patch kept only as a UI marker (wb_low now region-based)
-            shadow = find_neutral_patch(preview, lin, enc_f, fr["border"], win,
-                                        cfg.SHADOW_BAND_PCT, "shadows",
-                                        dmin, d_max, base_rect, cfg=cfg)
-            fr["shadow_patch"] = shadow
+            # wb_low is region-based (no shadow patch): only the highlight
+            # patch survives, as the wb_high source.
             fr["highlight_patch"] = highlight
             fr["wb_low"] = wb_low
             fr["wb_high"] = wb_high
@@ -1773,10 +1819,6 @@ def write_debug_sessions(frames, roll, output_dir, wall_time_s=None):
                 "global_rect_on_winner": roll["winner_rect"] if roll else None,
             },
             "patches": {
-                "shadows": dict(fr["shadow_patch"],
-                                used_fallback=fr["fallback_wb_low"])
-                           if fr.get("shadow_patch") else
-                           {"used_fallback": True},
                 "highlights": dict(fr["highlight_patch"],
                                    used_fallback=fr["fallback_wb_high"])
                               if fr.get("highlight_patch") else

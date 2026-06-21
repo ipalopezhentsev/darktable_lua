@@ -33,6 +33,7 @@ import math
 from pathlib import Path
 
 import tkinter as tk
+from tkinter import messagebox
 
 import numpy as np
 from PIL import Image, ImageTk
@@ -44,11 +45,13 @@ from common.debug_ui_base import DebugUIBase, image_to_canvas, canvas_to_image
 import nega_model as nm
 
 
-PATCHES = ("film_base", "shadows", "highlights")
-PATCH_KEYS = {"1": "film_base", "2": "shadows", "3": "highlights"}
-PATCH_COLORS = {"film_base": "#ff9900", "shadows": "#00ddff",
-                "highlights": "#ffffff"}
-PATCH_SHORT = {"film_base": "base", "shadows": "shad", "highlights": "high"}
+# wb_low is region-based (no shadow patch); only the film-base and the
+# light-neutral highlight patch (wb_high source) remain as on-image patches.
+# The shadows WHEEL (WB_NAMES below) is the manual wb_low control.
+PATCHES = ("film_base", "highlights")
+PATCH_KEYS = {"1": "film_base", "3": "highlights"}
+PATCH_COLORS = {"film_base": "#ff9900", "highlights": "#ffffff"}
+PATCH_SHORT = {"film_base": "base", "highlights": "high"}
 
 # Print-page params (negadoctor "print properties" tab), adjustable in the
 # UI with live preview: select with 4/5/6/7, scroll to adjust (Shift = big
@@ -63,6 +66,22 @@ PRINT_SHORT = {"black": "blk", "gamma": "gamma", "soft_clip": "gloss",
                "exposure": "pexp"}
 PRINT_STEP = {"black": (0.005, 0.02), "gamma": (0.05, 0.25),
               "soft_clip": (0.01, 0.05), "exposure": (0.01, 0.05)}
+# How darktable's negadoctor "print properties" sliders DISPLAY each param
+# (mirrors negadoctor.c set_factor/set_format and its EV powf/log2 conversion):
+#   paper black / paper gloss -> percent (factor 100, "%")
+#   paper grade (gamma)       -> plain number
+#   print exposure adjustment -> EV (= log2 of the linear exposure multiplier)
+# black & exposure show a sign (their ranges cross zero). "ev" stores the param
+# as a linear multiplier but shows/edits it in EV; others scale by "factor".
+PRINT_DISPLAY = {
+    "black":     {"factor": 100.0, "suffix": "%",   "sign": True,  "ev": False},
+    "gamma":     {"factor": 1.0,   "suffix": "",    "sign": False, "ev": False},
+    "soft_clip": {"factor": 100.0, "suffix": "%",   "sign": False, "ev": False},
+    "exposure":  {"factor": 1.0,   "suffix": " EV", "sign": True,  "ev": True},
+}
+# tk.Scale step (in DISPLAY units) for each print slider.
+PRINT_SLIDER_RES = {"black": 0.05, "gamma": 0.01, "soft_clip": 0.1,
+                    "exposure": 0.01}
 
 # "Brighter"/"darker" one-key combo (] / [): the user's repeated manual trick is
 # to raise paper black (which lifts midtones but clips highlights) and then lower
@@ -92,6 +111,9 @@ WB_NAME_PARAM = {"wb_shadows": "wb_low", "wb_highlights": "wb_high"}
 WB_NAME_LABEL = {"wb_shadows": "shadows wheel (wb_low)",
                  "wb_highlights": "highlights wheel (wb_high)"}
 WB_NAME_SHORT = {"wb_shadows": "wb_lo", "wb_highlights": "wb_hi"}
+# Per-channel manual wb sliders (one row each under a wheel)
+WB_CH_LABELS = ("R", "G", "B")
+WB_CH_COLORS = ("#ff8888", "#88dd88", "#88bbff")
 
 
 # User crop correction: the true photo-content rectangle, drawn by the user
@@ -105,9 +127,9 @@ CROP_KEY = "8"
 # auto_negadoctor.build_analysis_mask and their RGBA tints. The analysis
 # area is strictly the content-crop rectangle: code 2 = outside the crop.
 MASK_TINTS = {2: (255, 60, 60, 110)}    # rejected (outside crop) - red
-MASK_VIEW_LABELS = {0: "Analysis Crop  (M)",
-                    1: "Hide Rejected  (M)",
-                    2: "Normal View  (M)"}
+# Toolbar button label per mask-view state (no key hint — the menu carries the
+# accelerator).
+MASK_BTN_LABELS = {0: "Analysis crop", 1: "Hide rejected", 2: "Normal view"}
 
 
 # --- resolution-independent annotation coords --------------------------------
@@ -189,13 +211,13 @@ class ColorWheel:
     the disk at a new pixel size (a bigger wheel = finer manual precision) and
     re-places the marker/pin from the remembered wb values."""
 
-    MIN_SIZE = 90
+    MIN_SIZE = 150
     # Ctrl-drag multiplies cursor movement by this, so the same hand motion
     # makes a much smaller wb change (fine manual precision near neutral).
     FINE_FACTOR = 0.18
     _CTRL_MASK = 0x0004              # tk event.state bit for the Ctrl key
 
-    def __init__(self, parent, kind, on_change, size=150, bg="#484848"):
+    def __init__(self, parent, kind, on_change, size=260, bg="#484848"):
         self.kind = kind                  # "low" or "high"
         self.on_change = on_change
         self._marker_wb = [1.0, 1.0, 1.0]
@@ -325,6 +347,9 @@ class ColorWheel:
 class NegadoctorDebugUI(DebugUIBase):
     WINDOW_TITLE = "Auto Negadoctor Debug UI"
     HAS_ITEM_PANEL_FOOTER = True   # color wheels live below the item table
+    ITEM_PANEL_WIDTH = 360         # wider so the color wheels have room to grow
+    REFLOW_TO_IMAGE = True         # give pillarbox width to the wheels/table
+    SHOW_BOTTOM_BUTTONS = False    # all actions are on the menu bar + toolbar
 
     # Annotate-and-apply flow (Lua AutoNegadoctor_Annotate_Apply): when set, the
     # UI writes applied_results.txt on close (the user's corrections applied over
@@ -339,6 +364,9 @@ class NegadoctorDebugUI(DebugUIBase):
                     "corr": "corrected", "nt": "✎"}
     ITEM_WIDTHS  = {"patch": 44, "det": 64, "fb": 24, "corr": 64, "nt": 22}
     ITEM_ANCHORS = {"patch": "w", "fb": "center", "nt": "center"}
+    # the two value columns absorb the panel's spare width so the table fills
+    # it and the numbers (e.g. "57.44%, 3…") stop truncating
+    ITEM_STRETCH = ("det", "corr")
     NOTE_COLUMN  = "nt"
 
     # ------------------------------------------------------------------
@@ -358,6 +386,9 @@ class NegadoctorDebugUI(DebugUIBase):
             "patch_notes": {},         # {patch / print param / wb / "crop": str}
             "bad_inversion": False,
             "bad_inversion_note": "",
+            # set on the ONE frame chosen as the roll-wide film-base source:
+            # {"winner_rgb": [r,g,b], "winner_factor": float}
+            "global_base": None,
         }
 
     def serialize_annotations(self, stem):
@@ -405,6 +436,12 @@ class NegadoctorDebugUI(DebugUIBase):
                 "corrected": _norm_xywh(ann["crop_correction"], W, H) if W
                              else [int(v) for v in ann["crop_correction"]],
             }
+        if ann.get("global_base"):
+            gb = ann["global_base"]
+            out["global_base"] = {
+                "winner_rgb": [float(v) for v in gb["winner_rgb"]],
+                "winner_factor": float(gb["winner_factor"]),
+            }
         return out
 
     def deserialize_annotations(self, img_dict, data):
@@ -443,6 +480,15 @@ class NegadoctorDebugUI(DebugUIBase):
                                   or p in WB_NAMES or p == CROP_NAME) and n}
         ann["bad_inversion"] = bool(data.get("bad_inversion", False))
         ann["bad_inversion_note"] = str(data.get("bad_inversion_note", ""))
+        gb = data.get("global_base")
+        if gb and isinstance(gb, dict):
+            try:
+                rgb = [float(v) for v in gb["winner_rgb"]]
+                fac = float(gb["winner_factor"])
+                if len(rgb) == 3 and all(math.isfinite(v) for v in rgb) and fac > 0:
+                    ann["global_base"] = {"winner_rgb": rgb, "winner_factor": fac}
+            except (KeyError, ValueError, TypeError):
+                pass
 
     # ------------------------------------------------------------------
     # Patch geometry helpers
@@ -499,35 +545,6 @@ class NegadoctorDebugUI(DebugUIBase):
         self._neg_cache_key = key
         self._neg_cache = lin
         return lin
-
-    # Live wheel/preview render: the negative downscaled to this long-edge size.
-    # A WB drag re-renders the WHOLE frame per move; rendering at the full export
-    # resolution (~2000px, ~170ms) is wasted while the canvas shows it downscaled
-    # to fit. The preview render (~1100px, ~55ms) feels live; a crisp full-res
-    # pass follows once the drag settles (see _on_wheel_change). render cost
-    # scales with pixel count, so this is ~3x faster per interactive frame.
-    _PREVIEW_RENDER_MAX = 1100
-
-    def _neg_lin_preview(self, img_dict):
-        """The linear negative downscaled for fast live-preview renders, cached
-        alongside the full-res _neg_lin (shares its invalidation key)."""
-        lin = self._neg_lin(img_dict)
-        if lin is None:
-            return None
-        key = self._neg_cache_key   # _neg_lin just refreshed this to the cur frame
-        if self._neg_preview_key == key:
-            return self._neg_preview
-        h, w = lin.shape[:2]
-        longest = max(h, w)
-        prev = lin
-        if longest > self._PREVIEW_RENDER_MAX:
-            import cv2
-            s = self._PREVIEW_RENDER_MAX / longest
-            prev = cv2.resize(lin, (max(1, round(w * s)), max(1, round(h * s))),
-                              interpolation=cv2.INTER_AREA)
-        self._neg_preview_key = key
-        self._neg_preview = prev
-        return prev
 
     def _invert_pil(self, lin, params):
         """sRGB PIL inversion of a linear negative for the given params
@@ -593,8 +610,6 @@ class NegadoctorDebugUI(DebugUIBase):
         if not rgb or not p:
             return None
         try:
-            if patch == "shadows":
-                return nm.compute_wb_low(p["Dmin"], rgb, p["D_max"])
             if patch == "highlights":
                 return nm.compute_wb_high(p["Dmin"], rgb, p["D_max"],
                                           p["offset"], p["wb_low"])
@@ -609,8 +624,9 @@ class NegadoctorDebugUI(DebugUIBase):
     def _corrected_params(self, img_dict):
         """Negadoctor params recomputed from the user's corrections, or None
         when there are none. A corrected film base re-derives Dmin/D_max and
-        re-evaluates wb against them; corrected shadows/highlights re-derive
-        wb_low/wb_high. black/exposure keep their applied (auto-tuned) values.
+        re-evaluates wb against them; a corrected highlight patch re-derives
+        wb_high; the wheel overrides set wb_low/wb_high directly.
+        black/exposure keep their applied (auto-tuned) values.
         """
         ann = self.annotations[img_dict["stem"]]
         corr = ann["patch_corrections"]
@@ -618,15 +634,28 @@ class NegadoctorDebugUI(DebugUIBase):
         wb_overrides = ann["wb_overrides"]
         crop = ann.get("crop_correction")
         p = img_dict.get("params")
-        if (not corr and not overrides and not wb_overrides and not crop) or not p:
+        # roll-wide film-base override: this frame's Dmin transferred from the
+        # chosen source frame (None when no override is set)
+        gbase_dmin = self._global_base_dmin(img_dict)
+        if (not corr and not overrides and not wb_overrides and not crop
+                and gbase_dmin is None) or not p:
             return None
         out = {k: (list(v) if isinstance(v, list) else v) for k, v in p.items()}
         dmin, d_max = list(p["Dmin"]), p["D_max"]
-        if "film_base" in corr:
+        # film_base_changed: Dmin moved (global override and/or a per-frame
+        # film-base rect), so the detected highlight wb is re-derived against
+        # the new Dmin below (wb_low is region-based, kept as applied).
+        film_base_changed = False
+        if gbase_dmin is not None:
+            dmin = list(gbase_dmin)
+            out["Dmin"] = dmin
+            film_base_changed = True
+        if "film_base" in corr:   # a per-frame rect correction WINS over global
             rgb = self._neg_rgb_at(img_dict, corr["film_base"])
             if rgb:
                 dmin = [nm.clamp(v, nm.DMIN_RANGE) for v in rgb]
                 out["Dmin"] = dmin
+                film_base_changed = True
 
         # User crop: recompute the picker percentiles inside the true
         # content rect (the whole point: a missed holder remnant outside it
@@ -657,17 +686,11 @@ class NegadoctorDebugUI(DebugUIBase):
         def patch_rgb(patch):
             if patch in corr:
                 return self._neg_rgb_at(img_dict, corr[patch])
-            if "film_base" in corr:   # Dmin changed: re-derive detected wb too
+            if film_base_changed:   # Dmin changed: re-derive detected wb too
                 det = (img_dict.get("patches") or {}).get(patch) or {}
                 return det.get("rgb_neg_linear")
             return None
 
-        sh_rgb = patch_rgb("shadows")
-        if sh_rgb:
-            try:
-                out["wb_low"] = nm.compute_wb_low(dmin, sh_rgb, d_max)
-            except (ValueError, ZeroDivisionError, OverflowError):
-                pass
         hi_rgb = patch_rgb("highlights")
         if hi_rgb:
             try:
@@ -712,6 +735,40 @@ class NegadoctorDebugUI(DebugUIBase):
         return {"black": nm.BLACK_RANGE, "gamma": nm.GAMMA_RANGE,
                 "soft_clip": nm.SOFT_CLIP_RANGE,
                 "exposure": nm.EXPOSURE_RANGE}[name]
+
+    # --- darktable "print properties" display (percent / EV / plain) --------
+
+    @staticmethod
+    def _fmt_print(name, val):
+        """A print param exactly as darktable's negadoctor print sliders show
+        it: paper black/gloss as a percent, paper grade plain, print exposure
+        as EV (log2 of the linear multiplier); signed where the range spans 0."""
+        if val is None:
+            return "—"
+        cfg = PRINT_DISPLAY.get(name)
+        if cfg is None:
+            return f"{val:.3f}"
+        disp = (math.log2(val) if cfg["ev"] and val > 0
+                else val * cfg["factor"])
+        s = f"{disp:+.2f}" if cfg["sign"] else f"{disp:.2f}"
+        return f"{s}{cfg['suffix']}"
+
+    @staticmethod
+    def _print_to_display(name, val):
+        """Param value -> darktable slider position (display units)."""
+        cfg = PRINT_DISPLAY[name]
+        return (math.log2(val) if cfg["ev"] and val > 0 else val * cfg["factor"])
+
+    @staticmethod
+    def _print_from_display(name, disp):
+        """darktable slider position (display units) -> param value."""
+        cfg = PRINT_DISPLAY[name]
+        return (2.0 ** disp) if cfg["ev"] else disp / cfg["factor"]
+
+    @classmethod
+    def _print_display_range(cls, name):
+        lo, hi = cls._print_range(name)
+        return (cls._print_to_display(name, lo), cls._print_to_display(name, hi))
 
     # ------------------------------------------------------------------
     # Annotate-and-apply: emit the final per-frame decisions on close
@@ -779,22 +836,18 @@ class NegadoctorDebugUI(DebugUIBase):
                 print(f"Failed to write applied results: {e}")
         super()._on_close()
 
-    def _schedule_live_render(self, delay_ms=250, preview=False):
-        """Debounced re-render: scroll-resizing fires many events. ``preview``
-        renders at reduced resolution for a fast live update (see
-        _neg_lin_preview)."""
+    def _schedule_live_render(self, delay_ms=250):
+        """Debounced re-render: scroll-resizing / wheel dragging fire many
+        events."""
         if self._live_job is not None:
             try:
                 self.root.after_cancel(self._live_job)
             except Exception:
                 pass
-        self._live_preview = preview
         self._live_job = self.root.after(delay_ms, self._apply_live_render)
 
     def _apply_live_render(self):
         self._live_job = None
-        preview = self._live_preview
-        self._live_preview = False
         if self.view_negative:
             return
         img_dict = self.images[self.current_idx]
@@ -807,23 +860,15 @@ class NegadoctorDebugUI(DebugUIBase):
             # preview is ALWAYS a fresh algorithmic inversion (AI variant uses
             # params_ai, otherwise the analytical params).
             params = self._variant_params(img_dict)
-        if not params:
-            return
-        lin = self._neg_lin_preview(img_dict) if preview else self._neg_lin(img_dict)
-        if lin is None:
-            # nothing to render honestly (no source negative) — leave the
-            # current display untouched, no baked-file fallback.
+        lin = self._neg_lin(img_dict) if params else None
+        if lin is None or not params:
+            # nothing to render honestly (no source negative / no params) —
+            # leave the current display untouched, no baked-file fallback.
             return
         # the badge ("RE-RENDERED FROM CORRECTIONS") is only meaningful when the
         # render came from user corrections, not the plain analytical/AI preview.
         self._live_rendered = corrected
-        pil = self._invert_pil(lin, params)
-        if pil.size != (img_dict["width"], img_dict["height"]):
-            # a preview render is downscaled; upscale (cheap NEAREST) so the
-            # display/markers/zoom keep working in full-frame coordinates. The
-            # crisp full-res render replaces it once the drag settles.
-            pil = pil.resize((img_dict["width"], img_dict["height"]), Image.NEAREST)
-        self._set_display_image(pil)
+        self._set_display_image(self._invert_pil(lin, params))
 
     # ------------------------------------------------------------------
     # Selection state
@@ -832,6 +877,12 @@ class NegadoctorDebugUI(DebugUIBase):
     def init_selection_state(self):
         # selected_patch holds a patch name OR a print-param name
         self.selected_patch = None
+        # User-chosen roll-wide film base: the local base of one frame,
+        # transferred to every frame's Dmin via the exposure-factor ratio. None
+        # = use the auto-detected winner. Persisted in the source frame's
+        # annotation; restored below. Set via Adjust → "Set global film base".
+        self.global_base_source = None      # stem of the chosen source frame
+        self.global_base_override = None     # {source_stem, winner_rgb, winner_factor}
         self.view_negative = False
         self.compare_default = False
         self.variant = "analytical"  # "analytical" | "ai"; PERSISTS across frames
@@ -845,8 +896,6 @@ class NegadoctorDebugUI(DebugUIBase):
         self._amask_cache = None
         self._neg_cache_key = None
         self._neg_cache = None
-        self._neg_preview_key = None   # downscaled negative for fast live preview
-        self._neg_preview = None
         self.vignette_on = True        # N: apply the roll vignette correction
         # Calibration review: frames carry review={live,fitted} payloads + a
         # review_kind. The R toggle swaps the live (current source-code) result
@@ -860,15 +909,29 @@ class NegadoctorDebugUI(DebugUIBase):
         if self.review_mode:
             self._apply_review_source()
         self._live_job = None
-        self._live_preview = False     # next scheduled render is a low-res preview
         self._wheel_settle_job = None  # debounced heavy bookkeeping after a wheel drag
+        self._print_settle_job = None  # debounced heavy bookkeeping after a print-slider drag
         self._live_rendered = False
         self._crop_drag_edge = None
         self._crop_drag_rect = None
+        self._patch_drag = None        # in-progress patch move (press/drag/release)
+        # restore a saved global film-base override (the source frame's
+        # annotation carries the snapshot)
+        for img in (getattr(self, "images", None) or []):
+            gb = self.annotations[img["stem"]].get("global_base")
+            if gb:
+                self.global_base_source = img["stem"]
+                self.global_base_override = {
+                    "source_stem": img["stem"],
+                    "winner_rgb": list(gb["winner_rgb"]),
+                    "winner_factor": float(gb["winner_factor"])}
+                break
 
     def reset_selection(self):
         self.selected_patch = None
         self._crop_drag_edge = None
+        self._patch_drag = None
+        self._hide_inline_slider()
 
     def reset_for_new_image(self):
         self.reset_selection()
@@ -889,7 +952,6 @@ class NegadoctorDebugUI(DebugUIBase):
         self._apply_variant_to_current()
         self._update_variant_btn()
         self._update_count_label()
-        self._update_bad_btn()
         # capture the freshly loaded image as the undecorated display base
         # and re-apply the persistent mask view to the new frame
         self._display_base_pil = self.pil_image
@@ -898,6 +960,7 @@ class NegadoctorDebugUI(DebugUIBase):
             self._redraw()
         self._refresh_histogram()
         self._sync_wheels()
+        self._reposition_inline_slider()
         # re-apply the corrected render when entering a frame that has
         # corrections saved
         self._schedule_live_render()
@@ -907,63 +970,216 @@ class NegadoctorDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def build_left_info(self, parent):
-        self.add_legend(parent, [
-            ("□", PATCH_COLORS["film_base"], "Local film base"),
-            ("◈", "#ffd700", "GLOBAL film base (winner)"),
-            ("□", PATCH_COLORS["shadows"], "Shadows patch (wb_low)"),
-            ("□", PATCH_COLORS["highlights"], "Highlights patch (wb_high)"),
-            ("┊", "#00ff88", "Corrected position"),
-            ("▣", "#ff4444", "Bad inversion flag"),
-            ("▒", "#ff6060", "Rejected outside crop (M)"),
-            ("□", "#44ee44", "User crop (true content)"),
-            ("■", "#ff3030", "Clipped highlights (L)"),
-            ("■", "#4080ff", "Clipped shadows (L)"),
-        ])
-        self.add_hints(parent, (
-            "Mouse:\n"
-            "  Scroll — zoom in/out\n"
-            "  Scroll (patch sel'd) —\n"
-            "    resize patch (Shift=10px)\n"
-            "  Middle drag — pan\n"
-            "  Click — select patch\n"
-            "  Ctrl+click — place patch\n"
-            "  Ctrl+drag — zoom to rect\n"
-            "Keys:\n"
-            "  Space/B — next/prev image\n"
-            "  1/2/3 — base/shadows/highl.\n"
-            "  4/5/6/7 — black/gamma/\n"
-            "    gloss/print exposure\n"
-            "    (scroll adjusts value)\n"
-            "  8 — crop: drag rect around\n"
-            "    true content (scroll =\n"
-            "    grow/shrink, C clears);\n"
-            "    grabbing a crop EDGE\n"
-            "    works in any mode\n"
-            "  ] / [ — brighter/darker\n"
-            "    (raises/lowers black, then\n"
-            "    re-solves exposure to keep\n"
-            "    highlights below clipping)\n"
-            "  C — clear correction\n"
-            "  V — inverted/negative view\n"
-            "  X — corrected/default render\n"
-            "  M — analysis areas / hide\n"
-            "      rejected holder\n"
-            "  T — histogram on/off\n"
-            "  L — clip overlay on image\n"
-            "      (red=blown, blue=crushed;\n"
-            "      meter top-right always on)\n"
-            "  G — toggle bad inversion\n"
-            "  Note box — comment on sel.\n"
-            "  H — hide/show markers\n"
-            "  +/- zoom, Arrows pan, F fit\n"
-            "Corrections re-render the\n"
-            "inversion live.\n"
-            "Shadows/highlights color\n"
-            "wheels are in the right\n"
-            "panel (set wb directly,\n"
-            "start at the auto value;\n"
-            "Ctrl-drag = fine tune)."
-        ))
+        # Keep the left panel minimal — only the image list. The per-image
+        # status text (base status_label) is hidden; its detail is in the bottom
+        # "Selected" panel, and the marker legend + shortcut reference live on
+        # the Help menu.
+        self.status_label.pack_forget()
+
+    # Marker legend, shown from Help → Marker legend… (was the always-on block
+    # in the lower-left panel) — rendered with the same coloured symbols via
+    # the base add_legend helper, in a small popup.
+    _LEGEND_ENTRIES = [
+        ("□", PATCH_COLORS["film_base"], "Local film base"),
+        ("◈", "#ffd700", "GLOBAL film base (winner)"),
+        ("□", PATCH_COLORS["highlights"], "Highlights patch (wb_high)"),
+        ("┊", "#00ff88", "Corrected position"),
+        ("▣", "#ff4444", "Bad inversion flag"),
+        ("▒", "#ff6060", "Rejected outside crop (M)"),
+        ("□", "#44ee44", "User crop (true content)"),
+        ("■", "#ff3030", "Clipped highlights (L)"),
+        ("■", "#4080ff", "Clipped shadows (L)"),
+    ]
+
+    def _show_legend(self):
+        win = getattr(self, "_legend_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            return
+        win = tk.Toplevel(self.root, bg="#484848")
+        win.title("Marker legend")
+        win.transient(self.root)
+        self._legend_win = win
+        self.add_legend(win, self._LEGEND_ENTRIES)
+        tk.Button(win, text="Close", command=win.destroy, bg="#585858",
+                  fg="white", relief=tk.FLAT, padx=10, pady=4).pack(pady=8)
+
+    # Full mouse/key reference, shown from Help → Shortcuts… (was the always-on
+    # text block in the lower-left panel).
+    _SHORTCUTS_TEXT = (
+        "MOUSE\n"
+        "  Scroll                zoom in / out\n"
+        "  Scroll (patch sel'd)  resize patch (Shift = 10 px)\n"
+        "  Middle drag           pan\n"
+        "  Click                 select patch\n"
+        "  Drag a patch          move it (film base / shadows / highlights)\n"
+        "  Ctrl+Click            place selected patch\n"
+        "  Ctrl+drag             zoom to rectangle\n"
+        "  Drag a crop edge      adjust that edge (any mode)\n\n"
+        "KEYS\n"
+        "  Space / B   next / previous image\n"
+        "  1 / 3       film base / highlights patch\n"
+        "  4 / 5 / 6 / 7   paper black / gamma / gloss / print exposure\n"
+        "              (drag the print-properties sliders, or scroll the\n"
+        "               selected param; Shift = big step. Shown in darktable\n"
+        "               units: % / gamma / EV)\n"
+        "  8           crop: drag a rect around the true content\n"
+        "              (scroll grows/shrinks, C clears)\n"
+        "  ] / [       brighter / darker (raises/lowers paper black,\n"
+        "              then re-solves exposure to hold the highlights)\n"
+        "  C           clear the selected correction\n"
+        "  V           inverted preview / raw negative\n"
+        "  X           corrected render / algorithm default\n"
+        "  A           variant: analytical / AI (LLM)\n"
+        "  N           vignette correction on / off\n"
+        "  R           review source: fitted / live (review sessions)\n"
+        "  M           cycle analysis-crop view (tint / hide rejected)\n"
+        "  T           histogram on / off\n"
+        "  L           on-image clip overlay (red=blown, blue=crushed)\n"
+        "  G           toggle the bad-inversion flag\n"
+        "  H           hide / show markers\n"
+        "  F           fit to window;  + / -  zoom;  arrows pan\n\n"
+        "Corrections re-render the inversion live. The shadows/highlights\n"
+        "color wheels set wb directly (start at the auto value; Ctrl-drag\n"
+        "= fine tune)."
+    )
+
+    def _show_shortcuts(self):
+        messagebox.showinfo("Mouse & keyboard shortcuts", self._SHORTCUTS_TEXT,
+                            parent=self.root)
+
+    # ------------------------------------------------------------------
+    # Menu bar + toolbar (mirror the keyboard shortcuts; the shortcuts
+    # themselves stay bound in bind_feature_keys)
+    # ------------------------------------------------------------------
+
+    def build_menus(self, menubar):
+        view = tk.Menu(menubar, tearoff=0)
+        view.add_command(label="Inverted / negative", accelerator="V",
+                         command=self._toggle_view)
+        view.add_command(label="Corrected / default render", accelerator="X",
+                         command=self._toggle_compare)
+        view.add_separator()
+        view.add_command(label="Variant: analytical / AI", accelerator="A",
+                         command=self._toggle_variant)
+        view.add_command(label="Vignette correction on / off", accelerator="N",
+                         command=self._toggle_vignette)
+        view.add_command(label="Review source: fitted / live", accelerator="R",
+                         command=self._toggle_review_source)
+        view.add_separator()
+        view.add_command(label="Cycle analysis-crop view", accelerator="M",
+                         command=self._cycle_mask_view)
+        view.add_command(label="Histogram on / off", accelerator="T",
+                         command=self._toggle_histogram)
+        view.add_command(label="Clip overlay on / off", accelerator="L",
+                         command=self._toggle_clipping)
+        view.add_command(label="Hide / show markers", accelerator="H",
+                         command=self._toggle_hide_markers)
+        view.add_separator()
+        view.add_command(label="Fit to window", accelerator="F",
+                         command=self._fit_to_window)
+        view.add_command(label="Zoom in", accelerator="+",
+                         command=lambda: self._zoom_step(2.0))
+        view.add_command(label="Zoom out", accelerator="-",
+                         command=lambda: self._zoom_step(0.5))
+        menubar.add_cascade(label="View", menu=view)
+
+        sel = tk.Menu(menubar, tearoff=0)
+        sel.add_command(label="Film base patch", accelerator="1",
+                        command=lambda: self._select_patch("film_base"))
+        sel.add_command(label="Highlights patch", accelerator="3",
+                        command=lambda: self._select_patch("highlights"))
+        sel.add_separator()
+        sel.add_command(label="Paper black", accelerator="4",
+                        command=lambda: self._select_patch("black"))
+        sel.add_command(label="Paper grade (gamma)", accelerator="5",
+                        command=lambda: self._select_patch("gamma"))
+        sel.add_command(label="Paper gloss (soft clip)", accelerator="6",
+                        command=lambda: self._select_patch("soft_clip"))
+        sel.add_command(label="Print exposure", accelerator="7",
+                        command=lambda: self._select_patch("exposure"))
+        sel.add_separator()
+        sel.add_command(label="Crop (true content)", accelerator="8",
+                        command=lambda: self._select_patch(CROP_NAME))
+        sel.add_separator()
+        sel.add_command(label="Clear correction for selection", accelerator="C",
+                        command=self._clear_correction)
+        sel.add_command(label="Clear selection", command=self._clear_selection)
+        menubar.add_cascade(label="Select", menu=sel)
+
+        adj = tk.Menu(menubar, tearoff=0)
+        adj.add_command(label="Brighter (black ↑, hold highlights)",
+                        accelerator="]", command=lambda: self._brighten(False))
+        adj.add_command(label="Darker (black ↓, hold highlights)",
+                        accelerator="[", command=lambda: self._brighten(True))
+        adj.add_separator()
+        adj.add_command(label="Set global film base from this frame",
+                        command=self._set_global_base_from_current)
+        adj.add_command(label="Clear global film-base override",
+                        command=self._clear_global_base_override)
+        adj.add_separator()
+        adj.add_command(label="Toggle bad-inversion flag", accelerator="G",
+                        command=self._toggle_bad_inversion)
+        menubar.add_cascade(label="Adjust", menu=adj)
+
+        nav = tk.Menu(menubar, tearoff=0)
+        nav.add_command(label="Next image", accelerator="Space",
+                        command=lambda: self._nav_image(+1))
+        nav.add_command(label="Previous image", accelerator="B",
+                        command=lambda: self._nav_image(-1))
+        menubar.add_cascade(label="Navigate", menu=nav)
+
+        helpm = tk.Menu(menubar, tearoff=0)
+        helpm.add_command(label="Marker legend…", command=self._show_legend)
+        helpm.add_command(label="Mouse & keyboard shortcuts…",
+                          command=self._show_shortcuts)
+        menubar.add_cascade(label="Help", menu=helpm)
+
+    def build_toolbar(self, parent):
+        """View & navigation controls across the top of the center panel. The
+        view toggles carry the state (text + colour) so the menu items can stay
+        plain commands; edit actions live in the lower button panel. A second
+        row holds the live view-state status (what used to be drawn on top of
+        the image)."""
+        tb = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
+              "padx": 6, "pady": 3, "highlightthickness": 0, "bd": 0}
+
+        row = tk.Frame(parent, bg="#3f3f3f")
+        row.pack(side=tk.TOP, fill=tk.X)
+
+        def sep():
+            tk.Frame(row, width=1, bg="#6a6a6a").pack(
+                side=tk.LEFT, fill=tk.Y, padx=5, pady=3)
+
+        def btn(text, cmd, **kw):
+            b = tk.Button(row, text=text, command=cmd, **tb, **kw)
+            b.pack(side=tk.LEFT, padx=1, pady=2)
+            return b
+
+        btn("◀", lambda: self._nav_image(-1))
+        btn("▶", lambda: self._nav_image(+1))
+        sep()
+        btn("－", lambda: self._zoom_step(0.5))
+        btn("＋", lambda: self._zoom_step(2.0))
+        btn("Fit", self._fit_to_window)
+        sep()
+        self.view_btn = btn("Negative", self._toggle_view)
+        self.compare_btn = btn("Default", self._toggle_compare)
+        sep()
+        self.variant_btn = btn("Analytical", self._toggle_variant)
+        self.vignette_btn = btn("Vignette ✓", self._toggle_vignette)
+        self.review_btn = btn("Source —", self._toggle_review_source)
+        self._update_review_btn()
+        sep()
+        self.mask_btn = btn(MASK_BTN_LABELS[0], self._cycle_mask_view)
+        self.hist_btn = btn("Histogram ✓", self._toggle_histogram)
+        self.clip_btn = btn("Clip", self._toggle_clipping)
+
+        # second row: live view-state status (moved off the image)
+        self.canvas_status = tk.Label(parent, text="", bg="#2c2c2c",
+                                      fg="#cccccc", font=("Courier", 9),
+                                      anchor="w", padx=8, pady=2)
+        self.canvas_status.pack(side=tk.TOP, fill=tk.X)
 
     def build_item_panel_footer(self, parent):
         """Two color wheels (shadows -> wb_low, highlights -> wb_high) below
@@ -971,101 +1187,272 @@ class NegadoctorDebugUI(DebugUIBase):
         with live preview; the marker starts at the frame's auto-found wb and
         dragging stores a wb_override."""
         wrap = tk.Frame(parent, bg="#484848")
-        wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
-        tk.Label(wrap, text="Shadows / Highlights wheels:", bg="#484848",
-                 fg="#c0c0c0", font=("", 9, "bold")).pack(anchor="w")
-        tk.Label(wrap, text="● gold pin = auto wb (divergence ref)",
-                 bg="#484848", fg="#ffd700", font=("", 8)).pack(anchor="w")
-        tk.Label(wrap, text="drag = set · Ctrl-drag = fine tune",
-                 bg="#484848", fg="#9a9a9a", font=("", 8)).pack(anchor="w")
+        wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=(2, 4))
+        self._wheel_wrap = wrap
+        tk.Label(wrap, text="Shadows / Highlights wheels  "
+                 "(drag = set · Ctrl-drag = fine · ● gold = auto wb · "
+                 "R/G/B sliders = exact darktable wb values)",
+                 bg="#484848", fg="#c0c0c0", font=("", 8, "bold"),
+                 wraplength=self.scaled(self.ITEM_PANEL_WIDTH) - 20,
+                 justify=tk.LEFT
+                 ).pack(anchor="w")
         self.wheels = {}
         self.wheel_readouts = {}
+        self.wb_sliders = {}
+        self._syncing_wb_sliders = False
         for name in WB_NAMES:
             kind = WB_NAME_KIND[name]
             tk.Label(wrap, text=WB_NAME_LABEL[name], bg="#484848", fg="#cccccc",
-                     font=("", 8)).pack(anchor="w", pady=(4, 0))
+                     font=("", 8)).pack(anchor="w", pady=(2, 0))
             wheel = ColorWheel(wrap, kind,
                                on_change=lambda wb, n=name: self._on_wheel_change(n, wb),
-                               size=150)
+                               size=self.scaled(180))
             wheel.pack(anchor="center")
             self.wheels[name] = wheel
             ro = tk.Label(wrap, text="", bg="#484848", fg="#9fd0ff",
                           font=("Courier", 8))
             ro.pack(anchor="w")
             self.wheel_readouts[name] = ro
+            self._build_wb_sliders(wrap, name)
         # grow the wheels to fill the pane (wider panel / taller pane = finer
         # manual precision), bounded so both wheels stay fully visible
         parent.bind("<Configure>", self._resize_wheels)
 
-    # reserved vertical space in the footer for the labels/readouts around the
-    # two wheels (title + caption + per-wheel name + readout + paddings)
-    _WHEEL_CHROME_H = 150
+    def _build_wb_sliders(self, parent, name):
+        """Three per-channel sliders (R/G/B over WB_RANGE) under a wheel. They
+        give the full 3-DOF darktable wb (overall magnitude included) that the
+        wheel's 2-DOF chroma drag can't express; moving one updates the
+        override, the wheel marker (chroma direction) and the live render."""
+        grp = tk.Frame(parent, bg="#484848")
+        grp.pack(anchor="w", fill=tk.X, pady=(0, 2))
+        sliders = []
+        for ch in range(3):
+            row = tk.Frame(grp, bg="#484848")
+            row.pack(fill=tk.X)
+            tk.Label(row, text=WB_CH_LABELS[ch], width=1, bg="#484848",
+                     fg=WB_CH_COLORS[ch], font=("Courier", 8, "bold")
+                     ).pack(side=tk.LEFT, padx=(0, 3))
+            # showvalue off (the readout label shows the full live r,g,b triple)
+            # keeps the six sliders compact so the wheels stay large
+            s = tk.Scale(row, from_=nm.WB_RANGE[0], to=nm.WB_RANGE[1],
+                         resolution=0.001, orient=tk.HORIZONTAL, showvalue=False,
+                         width=self.scaled(9), sliderlength=self.scaled(16),
+                         bg="#484848", fg="#cccccc", troughcolor="#3a3a3a",
+                         activebackground="#6a6a6a", highlightthickness=0, bd=0,
+                         command=lambda v, n=name, c=ch: self._on_wb_slider(n, c, v))
+            s.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            sliders.append(s)
+        self.wb_sliders[name] = sliders
 
     def _resize_wheels(self, event):
-        if not getattr(self, "wheels", None):
+        """Grow the two wheels to fill the footer pane, but always leave room
+        for the chrome (title + per-wheel name/readout/entry rows) so the last
+        darktable-entry box can't be pushed off the bottom. The chrome height
+        is MEASURED live (not a hardcoded guess) so it stays correct under
+        hi-DPI font scaling."""
+        if getattr(self, "_resizing_wheels", False):
+            return                             # guard against re-entry below
+        wheels = getattr(self, "wheels", None)
+        if not wheels:
             return
-        per_h = (event.height - self._WHEEL_CHROME_H) / 2.0
-        size = int(min(event.width - 14, per_h))
-        size -= size % 2                       # even sizes: less resize churn
-        for wheel in self.wheels.values():
-            wheel.resize(size)
+        self._resizing_wheels = True
+        try:
+            wlist = list(wheels.values())
+            chrome = self._footer_chrome_h()
+            per_h = (event.height - chrome) / 2.0
+            size = int(min(event.width - self.scaled(14), per_h))
+            size = max(ColorWheel.MIN_SIZE, size)
+            size -= size % 2                   # even sizes: less resize churn
+            for wheel in wlist:
+                wheel.resize(size)
+        finally:
+            self._resizing_wheels = False
 
-    def build_feature_buttons(self, btn_frame, btn_cfg):
-        self.count_label = tk.Label(btn_frame, text="Corrected patches: 0/3",
-                                    bg="#484848", fg="#c0c0c0", font=("", 9))
-        self.count_label.pack(anchor="e", pady=(0, 4))
+    @staticmethod
+    def _pad_total(pady):
+        """Total vertical pixels a pack() pady adds (int, '2', '2 4', (2,4))."""
+        if isinstance(pady, (tuple, list)):
+            vals = [int(v) for v in pady]
+        else:
+            vals = [int(v) for v in str(pady).split()]
+        if not vals:
+            return 0
+        return 2 * vals[0] if len(vals) == 1 else vals[0] + vals[1]
 
-        self.view_btn = tk.Button(btn_frame, text="Show Negative  (V)",
-                                  command=self._toggle_view, **btn_cfg)
-        self.view_btn.pack(fill=tk.X, pady=1)
+    def _footer_chrome_h(self):
+        """Height of the footer chrome (title + per-wheel name/readout/entry
+        rows + their paddings) — everything EXCEPT the two wheel canvases.
+        Measured directly so the reserved space stays correct under hi-DPI font
+        scaling and the entry boxes are never pushed off the bottom."""
+        wheel_canvases = {w.canvas for w in self.wheels.values()}
+        wrap = self._wheel_wrap
+        total = 0
+        for child in wrap.winfo_children():
+            if child in wheel_canvases:
+                continue
+            info = child.pack_info()
+            total += (child.winfo_reqheight()
+                      + self._pad_total(info.get("pady", 0))
+                      + 2 * int(info.get("ipady", 0)))
+        # margin covers wrap padding + per-child border rounding (the explicit
+        # sum runs a touch under wrap.reqheight); keeps the entries fully visible
+        return total + self.scaled(30)
 
-        self.compare_btn = tk.Button(btn_frame, text="Show Default  (X)",
-                                     command=self._toggle_compare, **btn_cfg)
-        self.compare_btn.pack(fill=tk.X, pady=1)
+    # --- inline print-param slider (appears under the clicked item-table row) -
+    #
+    # A single floating tk.Scale is overlaid under the selected print-param row
+    # in the item table. Clicking a print row (or pressing 4/5/6/7) shows it;
+    # selecting anything else (or another frame) hides it. The slider edits in
+    # darktable's display units (percent / plain gamma / EV). FINE/COARSE: drag
+    # the handle = coarse (the wide range over a short track), scroll the slider
+    # = fine step, Shift+scroll = coarse step (the PRINT_STEP fine/big pair).
 
-        # spec 03: switch the render base between the analytical algorithm and
-        # the vision-LLM AI variant (only frames with params_ai have one)
-        self.variant_btn = tk.Button(btn_frame, text="Variant: Analytical  (A)",
-                                     command=self._toggle_variant, **btn_cfg)
-        self.variant_btn.pack(fill=tk.X, pady=1)
+    PRINT_SLIDER_RENDER_DELAY_MS = 80
+    PRINT_SLIDER_SETTLE_DELAY_MS = 200
 
-        # N: show the roll's vignette correction applied vs removed (before/after)
-        self.vignette_btn = tk.Button(btn_frame, text="Vignette: On  (N)",
-                                      command=self._toggle_vignette, **btn_cfg)
-        self.vignette_btn.pack(fill=tk.X, pady=1)
+    def _ensure_inline_slider(self):
+        if getattr(self, "_inline_slider_frame", None) is not None:
+            return
+        host = self.item_tree.master
+        f = tk.Frame(host, bg="#2d2d2d", highlightbackground="#7aa7d0",
+                     highlightthickness=1, bd=0)
+        top = tk.Frame(f, bg="#2d2d2d")
+        top.pack(fill=tk.X)
+        self._inline_slider_label = tk.Label(
+            top, text="", bg="#2d2d2d", fg="#cfe3f5", font=("", 8), anchor="w")
+        self._inline_slider_label.pack(side=tk.LEFT, padx=4)
+        self._inline_slider_value = tk.Label(
+            top, text="", bg="#2d2d2d", fg="#9fd0ff", font=("Courier", 8, "bold"),
+            anchor="e")
+        self._inline_slider_value.pack(side=tk.RIGHT, padx=4)
+        sc = tk.Scale(f, orient=tk.HORIZONTAL, showvalue=False, bg="#2d2d2d",
+                      fg="#cccccc", troughcolor="#454545",
+                      activebackground="#7aa7d0", highlightthickness=0, bd=0,
+                      sliderrelief=tk.FLAT, width=11, sliderlength=18,
+                      command=self._on_inline_slider)
+        sc.pack(fill=tk.X, padx=3, pady=(0, 3))
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            sc.bind(seq, self._on_inline_slider_wheel)
+        self._inline_slider = sc
+        self._inline_slider_frame = f
+        self._inline_slider_name = None
+        self._inline_slider_sync = False
 
-        # R: while reviewing a calibration session, flip fitted (session) vs
-        # live (current source-code) params/crop/vignette
-        self.review_btn = tk.Button(btn_frame, text="Source: — (R)",
-                                    command=self._toggle_review_source, **btn_cfg)
-        self.review_btn.pack(fill=tk.X, pady=1)
-        self._update_review_btn()
+    def _effective_print_value(self, name):
+        img_dict = self.images[self.current_idx]
+        ann = self.annotations[img_dict["stem"]]
+        return ann["print_overrides"].get(name, (img_dict.get("params") or {}).get(name))
 
-        self.mask_btn = tk.Button(btn_frame, text=MASK_VIEW_LABELS[0],
-                                  command=self._cycle_mask_view, **btn_cfg)
-        self.mask_btn.pack(fill=tk.X, pady=1)
+    def _show_inline_slider(self, name):
+        """Place the slider under the selected print-param row, configured for
+        `name` and positioned at this frame's effective value."""
+        self._ensure_inline_slider()
+        iid = self.selected_row_iid()
+        if not iid or not self.item_tree.exists(iid):
+            self._hide_inline_slider()
+            return
+        bbox = self.item_tree.bbox(iid)
+        if not bbox:                       # row scrolled out of view
+            self._hide_inline_slider()
+            return
+        x, y, w, h = bbox
+        val = self._effective_print_value(name)
+        if val is None:
+            self._hide_inline_slider()
+            return
+        lo, hi = self._print_display_range(name)
+        self._inline_slider_name = name
+        self._inline_slider_sync = True
+        try:
+            self._inline_slider.config(from_=lo, to=hi,
+                                       resolution=PRINT_SLIDER_RES[name])
+            self._inline_slider.set(self._print_to_display(name, float(val)))
+        finally:
+            self._inline_slider_sync = False
+        self._inline_slider_label.config(text=PRINT_LABEL[name])
+        self._inline_slider_value.config(text=self._fmt_print(name, val))
+        self._inline_slider_frame.place(in_=self.item_tree, x=0, y=y + h,
+                                        width=max(self.item_tree.winfo_width(), 1))
+        self._inline_slider_frame.lift()
 
-        self.clip_btn = tk.Button(btn_frame, text="Clip Overlay  (L)",
-                                   command=self._toggle_clipping, **btn_cfg)
-        self.clip_btn.pack(fill=tk.X, pady=1)
+    def _hide_inline_slider(self):
+        if getattr(self, "_inline_slider_frame", None) is not None:
+            self._inline_slider_name = None
+            self._inline_slider_frame.place_forget()
 
-        # brighter/darker: raise/lower paper black, then re-solve exposure to
-        # keep highlights just below clipping (the user's manual brighten move)
-        bright_row = tk.Frame(btn_frame, bg="#484848")
-        bright_row.pack(fill=tk.X, pady=1)
-        tk.Button(bright_row, text="Darker  ( [ )",
-                  command=lambda: self._brighten(True), **btn_cfg
-                  ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Button(bright_row, text="Brighter  ( ] )",
-                  command=lambda: self._brighten(False), **btn_cfg
-                  ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+    def _reposition_inline_slider(self):
+        """Show the slider under the selected print row, else hide it."""
+        if getattr(self, "selected_patch", None) in PRINT_PARAMS:
+            self._show_inline_slider(self.selected_patch)
+        else:
+            self._hide_inline_slider()
 
-        self.bad_btn = tk.Button(btn_frame, text="Bad Inversion  (G)",
-                                 command=self._toggle_bad_inversion, **btn_cfg)
-        self.bad_btn.pack(fill=tk.X, pady=1)
+    def _apply_print_value(self, name, val):
+        """Store a print override = clamped `val`, update the readout, and live-
+        render (debounced). Shared by the slider drag and the fine/coarse wheel."""
+        val = nm.clamp(float(val), self._print_range(name))
+        stem = self.images[self.current_idx]["stem"]
+        self.annotations[stem]["print_overrides"][name] = val
+        self.selected_patch = name
+        if getattr(self, "_inline_slider_value", None) is not None:
+            self._inline_slider_value.config(text=self._fmt_print(name, val))
+        self._schedule_live_render(delay_ms=self.PRINT_SLIDER_RENDER_DELAY_MS)
+        self._schedule_print_settle()
+        return val
 
-        tk.Button(btn_frame, text="Clear Correction  (C)",
-                  command=self._clear_correction, **btn_cfg).pack(fill=tk.X, pady=1)
+    def _on_inline_slider(self, v):
+        """tk.Scale drag callback (coarse): override = the slider's display value
+        mapped back to the param. Ignored during a programmatic Scale.set."""
+        if getattr(self, "_inline_slider_sync", False):
+            return
+        name = self._inline_slider_name
+        if name:
+            self._apply_print_value(name, self._print_from_display(name, float(v)))
+
+    def _on_inline_slider_wheel(self, event):
+        """Scroll on the slider = fine step; Shift+scroll = coarse step."""
+        name = getattr(self, "_inline_slider_name", None)
+        if not name:
+            return "break"
+        big = bool(getattr(event, "state", 0) & 0x1)      # Shift -> coarse
+        up = getattr(event, "delta", 0) > 0 or getattr(event, "num", 0) == 4
+        step = PRINT_STEP[name][1 if big else 0]
+        cur = self._effective_print_value(name)
+        if cur is None:
+            return "break"
+        new = self._apply_print_value(name, float(cur) + (step if up else -step))
+        self._inline_slider_sync = True
+        try:
+            self._inline_slider.set(self._print_to_display(name, new))
+        finally:
+            self._inline_slider_sync = False
+        return "break"
+
+    def _schedule_print_settle(self):
+        if self._print_settle_job is not None:
+            try:
+                self.root.after_cancel(self._print_settle_job)
+            except Exception:
+                pass
+        self._print_settle_job = self.root.after(
+            self.PRINT_SLIDER_SETTLE_DELAY_MS, self._print_settle)
+
+    def _print_settle(self):
+        """Heavy bookkeeping once a print-slider drag has come to rest."""
+        self._print_settle_job = None
+        stem = self.images[self.current_idx]["stem"]
+        self._auto_save(stem)
+        self._update_count_label()
+        self._populate_items_list()        # also repositions the inline slider
+        self._update_info_from_selection()
+
+    def _populate_items_list(self):
+        # rows are deleted/reinserted; realign the slider only if one is already
+        # shown (don't newly show/hide here — this runs inside the scroll/edit
+        # handlers, and touching the tree mid-handler re-enters its events).
+        super()._populate_items_list()
+        if getattr(self, "_inline_slider_name", None) in PRINT_PARAMS:
+            self._reposition_inline_slider()
 
     def bind_feature_keys(self):
         for key, patch in PATCH_KEYS.items():
@@ -1101,50 +1488,80 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<bracketleft>", lambda e: self._brighten(True))
 
     def image_status_text(self, img_dict):
+        """Compact glanceable summary for the left panel. The full per-frame
+        detail lives in the bottom 'Selected' panel (default_info_text) when
+        nothing is selected, so this stays short."""
         p = img_dict.get("params") or {}
         exif = img_dict.get("exif") or {}
         fb = img_dict.get("film_base") or {}
-        lines = [f"{img_dict['width']} × {img_dict['height']} px"]
+        lines = [f"{img_dict['width']}×{img_dict['height']} px"]
         if exif.get("exposure_s"):
-            lines.append(f"exif: {exif['exposure_s']:.4g}s f/{exif.get('aperture') or 0:.3g} "
+            lines.append(f"{exif['exposure_s']:.4g}s f/{exif.get('aperture') or 0:.3g} "
                          f"ISO{exif.get('iso') or 0:.0f}")
-        if fb.get("is_global_winner"):
-            lines.append("★ GLOBAL film-base winner")
-        elif fb.get("global_winner_stem"):
-            lines.append(f"global base: {fb['global_winner_stem']}")
         if p:
-            lines.append(f"Dmax={p['D_max']:.2f} blk={p['black']:.3f} "
-                         f"exp={p['exposure']:.3f} g={p.get('gamma', 0):.2f}")
-        # spec 03: vision-LLM scene reading + AI-variant divergence
-        sc = img_dict.get("scene")
-        if sc:
-            lines.append(f"scene (LLM): {sc.get('scene')}/{sc.get('mood')}/"
-                         f"{sc.get('warmth')}/{sc.get('contrast')}")
-            if sc.get("rationale"):
-                lines.append(f"  “{sc['rationale']}”")
+            lines.append(f"Dmax{p['D_max']:.2f} blk{self._fmt_print('black', p.get('black'))} "
+                         f"exp{self._fmt_print('exposure', p.get('exposure'))} "
+                         f"g{self._fmt_print('gamma', p.get('gamma'))}")
+        flags = []
+        if self.global_base_override:
+            flags.append("base*" if self.global_base_source == img_dict["stem"]
+                         else "base→ovr")
+        elif fb.get("is_global_winner"):
+            flags.append("★base")
         if img_dict.get("params_ai"):
-            mark = "→ AI variant ACTIVE (A)" if self.variant == "ai" else \
-                   "AI variant available (A)"
-            lines.append(mark)
-        elif self.variant == "ai":
-            lines.append("(no AI variant for this frame)")
-        v = img_dict.get("vignette")
-        if v:
-            lines.append(f"vignette: s={v['strength']:.2f} r={v['radius']:.2f} "
-                         f"st={v['steepness']:.2f}")
-        else:
-            lines.append("vignette: none")
-        t = img_dict.get("processing_time_s")
-        if t is not None:
-            lines.append(f"processed in {t:.2f}s")
-        if self.run_wall_time_s is not None:
-            lines.append(f"run total {self.run_wall_time_s:.1f}s")
+            flags.append("AI" + ("•" if self.variant == "ai" else ""))
+        flags.append("vig" if img_dict.get("vignette") else "no-vig")
+        if flags:
+            lines.append(" ".join(flags))
         return "\n".join(lines)
 
     def default_info_text(self):
-        return ("Nothing selected.\n"
-                "Click a patch rect or press 1/2/3 (film base/shadows/highlights)\n"
-                "or 4/5/6/7 (paper black/gamma/gloss/print exposure).")
+        hint = ("Nothing selected — click a patch or press 1/2/3 (base/shadows/"
+                "highlights), 4/5/6/7 (black/gamma/gloss/exposure), 8 (crop).")
+        imgs = getattr(self, "images", None)
+        if not imgs:
+            return hint
+        img_dict = imgs[self.current_idx]
+        p = img_dict.get("params") or {}
+        exif = img_dict.get("exif") or {}
+        fb = img_dict.get("film_base") or {}
+        d = [f"Frame {img_dict['stem']}   {img_dict['width']}×{img_dict['height']} px"]
+        if exif.get("exposure_s"):
+            d.append(f"exif: {exif['exposure_s']:.4g}s f/{exif.get('aperture') or 0:.3g} "
+                     f"ISO{exif.get('iso') or 0:.0f}   factor "
+                     f"{exif.get('exposure_factor') or 0:.4g}")
+        if self.global_base_override:
+            src = self.global_base_override["source_stem"]
+            d.append(f"global base OVERRIDE ← {src}"
+                     + ("  (this frame)" if src == img_dict["stem"] else ""))
+        elif fb.get("is_global_winner"):
+            d.append("★ GLOBAL film-base winner (auto)")
+        elif fb.get("global_winner_stem"):
+            d.append(f"auto global base from {fb['global_winner_stem']}")
+        if p:
+            d.append(f"Dmax={p['D_max']:.2f}  "
+                     f"black {self._fmt_print('black', p.get('black'))}  "
+                     f"gamma {self._fmt_print('gamma', p.get('gamma'))}  "
+                     f"gloss {self._fmt_print('soft_clip', p.get('soft_clip'))}  "
+                     f"exp {self._fmt_print('exposure', p.get('exposure'))}")
+        sc = img_dict.get("scene")
+        if sc:
+            d.append(f"scene (LLM): {sc.get('scene')}/{sc.get('mood')}/"
+                     f"{sc.get('warmth')}/{sc.get('contrast')}")
+            if sc.get("rationale"):
+                d.append(f"  “{sc['rationale']}”")
+        if img_dict.get("params_ai"):
+            d.append("→ AI variant ACTIVE (A)" if self.variant == "ai"
+                     else "AI variant available (A)")
+        v = img_dict.get("vignette")
+        d.append(f"vignette: s={v['strength']:.2f} r={v['radius']:.2f} "
+                 f"st={v['steepness']:.2f}" if v else "vignette: none")
+        t = img_dict.get("processing_time_s")
+        if t is not None:
+            d.append(f"processed in {t:.2f}s")
+        if self.run_wall_time_s is not None:
+            d.append(f"run total {self.run_wall_time_s:.1f}s")
+        return hint + "\n\n" + "\n".join(d)
 
     # ------------------------------------------------------------------
     # Note hooks
@@ -1166,13 +1583,11 @@ class NegadoctorDebugUI(DebugUIBase):
             ann["patch_notes"].pop(self.selected_patch, None)
 
     def _update_count_label(self):
-        ann = self.annotations[self.images[self.current_idx]["stem"]]
-        n = len(ann["patch_corrections"])
-        m = len(ann["print_overrides"])
-        w = len(ann["wb_overrides"])
-        crop = ", crop✓" if ann.get("crop_correction") else ""
-        self.count_label.config(
-            text=f"Corrected: {n}/3 patches, {w}/2 wb, {m}/4 print{crop}")
+        # The correction counts live in the item-panel header ("Patches:");
+        # refresh it live as corrections change (the old bottom-left count
+        # label + button column was removed — everything is on the menu bar).
+        if getattr(self, "item_list_header", None) is not None:
+            self.item_list_header.config(text=self.item_panel_header_text())
 
     # ------------------------------------------------------------------
     # View toggle (inverted preview <-> raw negative)
@@ -1204,14 +1619,110 @@ class NegadoctorDebugUI(DebugUIBase):
         self._update_view_btn()
 
     def _update_view_btn(self):
-        label = "Show Inverted  (V)" if self.view_negative else "Show Negative  (V)"
+        label = "Inverted" if self.view_negative else "Negative"
         self.view_btn.config(text=label,
                              fg="#ffff88" if self.view_negative else "white")
 
     def _has_corrections(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
         return bool(ann["patch_corrections"] or ann["print_overrides"]
-                    or ann["wb_overrides"] or ann.get("crop_correction"))
+                    or ann["wb_overrides"] or ann.get("crop_correction")
+                    or self.global_base_override)
+
+    # ------------------------------------------------------------------
+    # Roll-wide film-base override (take the global base from one frame)
+    # ------------------------------------------------------------------
+
+    def _frame_factor(self, img_dict):
+        """This frame's DSLR exposure factor (shutter·ISO/aperture²) from the
+        session EXIF, or None when it is missing/degenerate."""
+        try:
+            f = float((img_dict.get("exif") or {}).get("exposure_factor"))
+        except (TypeError, ValueError):
+            return None
+        return f if f > 0 else None
+
+    def _effective_film_base_rgb(self, img_dict):
+        """Negative-linear RGB of this frame's film base: the user's corrected
+        rect if present, else the detected local candidate."""
+        ann = self.annotations[img_dict["stem"]]
+        corr = ann["patch_corrections"].get("film_base")
+        if corr:
+            rgb = self._neg_rgb_at(img_dict, corr)
+            if rgb:
+                return rgb
+        local = (img_dict.get("film_base") or {}).get("local")
+        if local and local.get("rgb_linear"):
+            return list(local["rgb_linear"])
+        return None
+
+    def _global_base_dmin(self, img_dict):
+        """Dmin for this frame transferred from the override source frame's
+        base via the exposure-factor ratio, or None when no override is set."""
+        ovr = self.global_base_override
+        if not ovr:
+            return None
+        factor = self._frame_factor(img_dict)
+        if not factor:
+            return None
+        import auto_negadoctor as anp
+        return anp.dmin_for_frame(ovr["winner_rgb"], ovr["winner_factor"], factor)
+
+    def _after_global_base_change(self):
+        """Refresh the current frame after the roll-wide override changed (it
+        affects every frame's Dmin)."""
+        self._update_count_label()
+        self._populate_items_list()
+        self._redraw_markers()
+        self._schedule_live_render(delay_ms=10)
+
+    def _set_global_base_from_current(self):
+        """Adopt the CURRENT frame's film base as the roll-wide global base:
+        every frame's Dmin is transferred from it (exposure-factor scaled), the
+        same operation choose_global_base/dmin_for_frame do automatically."""
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        rgb = self._effective_film_base_rgb(img_dict)
+        factor = self._frame_factor(img_dict)
+        if not rgb:
+            self._set_info_text("No film base on this frame to use as the global "
+                                "base (place/correct the film-base patch first).")
+            return
+        if not factor:
+            self._set_info_text("This frame has no exposure factor (EXIF "
+                                "missing), so its film base can't be transferred "
+                                "across the roll.")
+            return
+        snap = {"winner_rgb": [float(v) for v in rgb], "winner_factor": float(factor)}
+        for s, a in self.annotations.items():
+            if s != stem and a.get("global_base"):
+                a["global_base"] = None
+                self._auto_save(s)
+        self.annotations[stem]["global_base"] = snap
+        self.global_base_source = stem
+        self.global_base_override = dict(snap, source_stem=stem)
+        self._auto_save(stem)
+        self._after_global_base_change()
+        self._set_info_text(
+            f"Global film base set from {stem}  (D min {self._fmt_dmin_pct(rgb)}, "
+            f"factor {factor:.4g}).\n"
+            "Every frame's Dmin is now transferred from this frame and the "
+            "inversion re-renders. Adjust → Clear global film-base override "
+            "to revert to the auto winner.")
+
+    def _clear_global_base_override(self):
+        if not (self.global_base_source or self.global_base_override):
+            self._set_info_text("No global film-base override is set.")
+            return
+        for s, a in self.annotations.items():
+            if a.get("global_base"):
+                a["global_base"] = None
+                self._auto_save(s)
+        self.global_base_source = None
+        self.global_base_override = None
+        self._after_global_base_change()
+        self._set_info_text("Global film-base override cleared — Dmin reverts to "
+                            "the auto-detected winner per frame.")
 
     # ------------------------------------------------------------------
     # Color-wheel shadows/highlights
@@ -1238,6 +1749,7 @@ class NegadoctorDebugUI(DebugUIBase):
             wheel.set_wb(wb)
             wheel.set_auto(params.get(WB_NAME_PARAM[name]))   # fixed auto pin
             self._update_wheel_readout(name, wb)
+            self._fill_wb_sliders(name, wb)
 
     def _update_wheel_readout(self, name, wb=None):
         if not getattr(self, "wheel_readouts", None):
@@ -1248,14 +1760,55 @@ class NegadoctorDebugUI(DebugUIBase):
         ann = self.annotations[img_dict["stem"]]
         tag = "OVR" if WB_NAME_OVR[name] in ann["wb_overrides"] else "auto"
         self.wheel_readouts[name].config(
-            text=f"{tag} ({wb[0]:.2f},{wb[1]:.2f},{wb[2]:.2f})",
+            text=f"{tag} ({wb[0]:.4f}, {wb[1]:.4f}, {wb[2]:.4f})",
             fg="#9fff9f" if tag == "OVR" else "#9fd0ff")
 
-    # Wheel-drag render cadence: a quick low-res preview while the user is
-    # moving the marker, then a crisp full-res render plus the (deferred) heavy
-    # bookkeeping once the drag settles.
-    WHEEL_PREVIEW_DELAY_MS = 30
-    WHEEL_SETTLE_DELAY_MS = 200
+    # --- per-channel wb sliders (exact 3-DOF darktable wb) ------------------
+
+    def _fill_wb_sliders(self, name, wb):
+        """Position a wheel's three R/G/B sliders to a wb (no callback churn)."""
+        sliders = getattr(self, "wb_sliders", {}).get(name)
+        if not sliders or not wb:
+            return
+        self._syncing_wb_sliders = True
+        try:
+            for ch, s in enumerate(sliders):
+                s.set(round(float(wb[ch]), 3))
+        finally:
+            self._syncing_wb_sliders = False
+
+    def _sync_wb_sliders(self):
+        if not getattr(self, "wb_sliders", None):
+            return
+        img_dict = self.images[self.current_idx]
+        for name in self.wb_sliders:
+            self._fill_wb_sliders(name, self._effective_wb(img_dict, name))
+
+    def _on_wb_slider(self, name, ch, value):
+        """One R/G/B slider moved: set that channel of wb_low/wb_high directly
+        (full 3-DOF, clamped to darktable's [0.25, 2.0] range), move the wheel
+        marker to the chroma direction and live-render. Heavy bookkeeping +
+        slider re-sync are debounced via _wheel_settle."""
+        if getattr(self, "_syncing_wb_sliders", False):
+            return                            # programmatic .set(), not a user drag
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        wb = [nm.clamp(float(v), nm.WB_RANGE)
+              for v in self._effective_wb(img_dict, name)]
+        wb[ch] = nm.clamp(float(value), nm.WB_RANGE)
+        self.annotations[stem]["wb_overrides"][WB_NAME_OVR[name]] = \
+            [float(v) for v in wb]
+        self.selected_patch = name
+        self.wheels[name].set_wb(wb)            # marker -> chroma direction
+        self._update_wheel_readout(name, wb)
+        self._schedule_live_render(delay_ms=self.WHEEL_RENDER_DELAY_MS)
+        self._schedule_wheel_settle()
+
+    # Wheel-drag cadence: a debounced full-res render gives live feedback while
+    # the marker moves; the heavy bookkeeping is debounced separately and only
+    # runs once the drag comes to rest.
+    WHEEL_RENDER_DELAY_MS = 90
+    WHEEL_SETTLE_DELAY_MS = 220
 
     def _on_wheel_change(self, name, wb):
         img_dict = self.images[self.current_idx]
@@ -1264,13 +1817,12 @@ class NegadoctorDebugUI(DebugUIBase):
             [float(v) for v in wb]
         self.selected_patch = name
         # Per motion event do only the cheap work: the wheel readout the user is
-        # watching + a fast low-res preview render. The disk write, item table,
-        # info panel, marker redraw and the crisp full-res render are heavy and
-        # only need to run when the drag SETTLES (running them every event made
-        # dragging stutter), so they are debounced together.
+        # watching + (debounced) the live render. The disk write, item table,
+        # info panel and marker redraw are heavy and only need to run once the
+        # drag SETTLES (running them every event made dragging stutter), so they
+        # are debounced into _wheel_settle.
         self._update_wheel_readout(name, wb)
-        self._schedule_live_render(delay_ms=self.WHEEL_PREVIEW_DELAY_MS,
-                                   preview=True)
+        self._schedule_live_render(delay_ms=self.WHEEL_RENDER_DELAY_MS)
         self._schedule_wheel_settle()
 
     def _schedule_wheel_settle(self):
@@ -1283,8 +1835,9 @@ class NegadoctorDebugUI(DebugUIBase):
                                                  self._wheel_settle)
 
     def _wheel_settle(self):
-        """Heavy bookkeeping + crisp full-res render, run once a wheel drag has
-        come to rest (debounced from _on_wheel_change)."""
+        """Heavy bookkeeping, run once a wheel drag has come to rest (debounced
+        from _on_wheel_change). The image itself is rendered by the debounced
+        live render."""
         self._wheel_settle_job = None
         stem = self.images[self.current_idx]["stem"]
         self._auto_save(stem)
@@ -1292,7 +1845,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self._populate_items_list()
         self._update_info_from_selection()
         self._redraw_markers()
-        self._schedule_live_render(delay_ms=0)   # full-res replaces the preview
+        self._sync_wb_sliders()
 
     # ------------------------------------------------------------------
     # Crop correction helpers
@@ -1430,7 +1983,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self._redraw()
 
     def _update_mask_btn(self):
-        self.mask_btn.config(text=MASK_VIEW_LABELS[self.mask_view],
+        self.mask_btn.config(text=MASK_BTN_LABELS[self.mask_view],
                              fg="#ffff88" if self.mask_view else "white")
 
     # ------------------------------------------------------------------
@@ -1577,8 +2130,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self._schedule_live_render(delay_ms=10)
 
     def _update_compare_btn(self):
-        label = ("Show Corrected  (X)" if self.compare_default
-                 else "Show Default  (X)")
+        label = "Corrected" if self.compare_default else "Default"
         self.compare_btn.config(text=label,
                                 fg="#ffff88" if self.compare_default else "white")
 
@@ -1630,7 +2182,7 @@ class NegadoctorDebugUI(DebugUIBase):
             return
         has_ai = self._frame_has_ai()
         is_ai = self.variant == "ai" and has_ai
-        label = f"Variant: {'AI (LLM)' if is_ai else 'Analytical'}  (A)"
+        label = "AI (LLM)" if is_ai else "Analytical"
         self.variant_btn.config(
             text=label,
             fg="#9fff9f" if is_ai else ("white" if has_ai else "#888888"))
@@ -1651,7 +2203,7 @@ class NegadoctorDebugUI(DebugUIBase):
             return
         on = self.vignette_on
         self.vignette_btn.config(
-            text=f"Vignette: {'On' if on else 'OFF'}  (N)",
+            text="Vignette ✓" if on else "Vignette ✗",
             fg="white" if on else "#ffb060")
 
     def _apply_review_source(self):
@@ -1701,16 +2253,24 @@ class NegadoctorDebugUI(DebugUIBase):
         if not hasattr(self, "review_btn"):
             return
         if not self.review_mode:
-            self.review_btn.config(text="Source: — (R)", fg="#888888")
+            self.review_btn.config(text="Source —", fg="#888888")
             return
         fitted = self.review_source == "fitted"
         self.review_btn.config(
-            text=f"Source: {'FITTED' if fitted else 'live (code)'}  (R)",
+            text="Src: FITTED" if fitted else "Src: live",
             fg="#9fd0ff" if fitted else "#ffd080")
 
     def _toggle_histogram(self):
         self.show_histogram = not self.show_histogram
+        self._update_hist_btn()
         self._redraw_markers()
+
+    def _update_hist_btn(self):
+        if not hasattr(self, "hist_btn"):
+            return
+        on = self.show_histogram
+        self.hist_btn.config(text="Histogram ✓" if on else "Histogram",
+                             fg="white" if on else "#aaaaaa")
 
     def _toggle_clipping(self):
         """L: toggle the on-image clip overlay (red highlights / blue shadows).
@@ -1725,7 +2285,7 @@ class NegadoctorDebugUI(DebugUIBase):
         if not hasattr(self, "clip_btn"):
             return
         on = self.show_clipping
-        self.clip_btn.config(text="Clip Overlay ✓ (L)" if on else "Clip Overlay  (L)",
+        self.clip_btn.config(text="Clip ✓" if on else "Clip",
                              fg="#ff6666" if on else "white")
 
     def _toggle_bad_inversion(self):
@@ -1733,14 +2293,8 @@ class NegadoctorDebugUI(DebugUIBase):
         ann = self.annotations[stem]
         ann["bad_inversion"] = not ann["bad_inversion"]
         self._auto_save(stem)
-        self._update_bad_btn()
-        self._redraw_markers()
-
-    def _update_bad_btn(self):
-        ann = self.annotations[self.images[self.current_idx]["stem"]]
-        bad = ann["bad_inversion"]
-        self.bad_btn.config(fg="#ff6666" if bad else "white",
-                            text="Bad Inversion ✓ (G)" if bad else "Bad Inversion  (G)")
+        self._redraw_markers()           # red frame border indicates the flag
+        self._update_canvas_status()     # + textual flag in the status strip
 
     # ------------------------------------------------------------------
     # Drawing
@@ -1794,52 +2348,70 @@ class NegadoctorDebugUI(DebugUIBase):
             self._draw_rect(self._auto_content_rect(img_dict), "#999999",
                             "patches", width=1, dash=(4, 4), label="auto")
 
-        # Global film base marker
+        # Global film base marker (gold box on the winning frame's local base).
+        # The cross-frame text badges all moved to the status bar (see
+        # _update_canvas_status) so they no longer sit on top of the image.
         if fb.get("is_global_winner") and fb.get("local"):
             r = fb["local"]["rect"]
             grown = [r[0] - 4, r[1] - 4, r[2] + 8, r[3] + 8]
             self._draw_rect(grown, "#ffd700", "patches", width=2, label="GLOBAL")
-        elif fb.get("global_winner_stem"):
-            self.canvas.create_text(
-                10, 10, anchor="nw", tags="badges",
-                text=f"global base from {fb['global_winner_stem']}",
-                fill="#ffd700", font=("Courier", 9, "bold"))
 
+        # bad-inversion frame border (the textual flag is in the status bar)
         if ann["bad_inversion"]:
             w, h = img_dict["width"], img_dict["height"]
             self._draw_rect([2, 2, w - 4, h - 4], "#ff4444", "badges", width=3)
-            self.canvas.create_text(
-                10, 28, anchor="nw", tags="badges", text="BAD INVERSION",
-                fill="#ff4444", font=("Courier", 10, "bold"))
-
-        if self.mask_view == 1:
-            self.canvas.create_text(
-                10, 64, anchor="nw", tags="badges",
-                text="ANALYSIS CROP: red = rejected (drag to correct the crop)",
-                fill="#ff8888", font=("Courier", 9, "bold"))
-        elif self.mask_view == 2:
-            self.canvas.create_text(
-                10, 64, anchor="nw", tags="badges",
-                text="REJECTED OUTSIDE-CROP AREA HIDDEN (drag to correct the crop)",
-                fill="#ff8888", font=("Courier", 9, "bold"))
 
         self._draw_histogram()
         self._draw_clip_meter()
+        self._update_canvas_status()
+
+    def _redraw(self):
+        # keep the off-image status strip fresh on every redraw, including when
+        # markers are hidden (then draw_overlays does not run)
+        super()._redraw()
+        self._update_canvas_status()
+
+    def _update_canvas_status(self):
+        """Compose the live view-state line shown in the toolbar status strip
+        (render mode, global-base, bad-inversion, analysis-crop view) — these
+        used to be drawn on top of the image."""
+        if not hasattr(self, "canvas_status"):
+            return
+        img_dict = self.images[self.current_idx]
+        ann = self.annotations[img_dict["stem"]]
+        fb = img_dict.get("film_base") or {}
+        parts = []   # (text, color)
 
         if self.view_negative:
-            self.canvas.create_text(
-                10, 46, anchor="nw", tags="badges", text="NEGATIVE VIEW",
-                fill="#88ccff", font=("Courier", 9, "bold"))
+            parts.append(("NEGATIVE VIEW", "#88ccff"))
         elif self.compare_default and self._has_corrections():
-            self.canvas.create_text(
-                10, 46, anchor="nw", tags="badges",
-                text="DEFAULT RENDER (X: show corrected)",
-                fill="#ffcc00", font=("Courier", 9, "bold"))
+            parts.append(("DEFAULT RENDER (X: corrected)", "#ffcc00"))
         elif self._live_rendered:
-            self.canvas.create_text(
-                10, 46, anchor="nw", tags="badges",
-                text="RE-RENDERED FROM CORRECTIONS (X: default)",
-                fill="#00ff88", font=("Courier", 9, "bold"))
+            parts.append(("RE-RENDERED FROM CORRECTIONS (X: default)", "#00ff88"))
+
+        ovr = self.global_base_override
+        if ovr and ovr["source_stem"] == img_dict["stem"]:
+            parts.append(("GLOBAL BASE SOURCE (this frame)", "#ffd700"))
+        elif ovr:
+            parts.append((f"global base ← {ovr['source_stem']} (override)", "#ffd700"))
+        elif fb.get("is_global_winner"):
+            parts.append(("★ global film-base winner", "#ffd700"))
+        elif fb.get("global_winner_stem"):
+            parts.append((f"global base from {fb['global_winner_stem']}", "#ffd700"))
+
+        if ann["bad_inversion"]:
+            parts.append(("BAD INVERSION", "#ff6060"))
+
+        if self.mask_view == 1:
+            parts.append(("ANALYSIS CROP: red = rejected (drag to correct)",
+                          "#ff8888"))
+        elif self.mask_view == 2:
+            parts.append(("REJECTED AREA HIDDEN (drag to correct the crop)",
+                          "#ff8888"))
+
+        text = "    ·    ".join(p[0] for p in parts) if parts else "—"
+        fg = parts[0][1] if len(parts) == 1 else "#dddddd"
+        self.canvas_status.config(text=text, fg=fg)
 
     # ------------------------------------------------------------------
     # Interaction hooks
@@ -1864,10 +2436,29 @@ class NegadoctorDebugUI(DebugUIBase):
                 best, best_dist = patch, d
         return best
 
+    def _patch_at(self, canvas_x, canvas_y, pad=2):
+        """Patch whose effective rect contains the cursor (smallest on overlap),
+        or None. Used to start a drag-move of that patch."""
+        img_dict = self.images[self.current_idx]
+        best, best_area = None, float("inf")
+        for patch in PATCHES:
+            rect = self._effective_rect(img_dict, patch)
+            if not rect:
+                continue
+            x, y, w, h = rect
+            x0, y0 = image_to_canvas(x, y, self.offset_x, self.offset_y, self.zoom)
+            x1, y1 = image_to_canvas(x + w, y + h, self.offset_x, self.offset_y, self.zoom)
+            if x0 - pad <= canvas_x <= x1 + pad and y0 - pad <= canvas_y <= y1 + pad:
+                area = max(1.0, (x1 - x0) * (y1 - y0))
+                if area < best_area:
+                    best, best_area = patch, area
+        return best
+
     def _select_patch(self, patch):
         self.selected_patch = patch
         self._update_info_from_selection()
         self._redraw_markers()
+        self._reposition_inline_slider()
 
     def on_click(self, canvas_x, canvas_y):
         patch = self._find_nearest_patch(canvas_x, canvas_y)
@@ -1986,7 +2577,7 @@ class NegadoctorDebugUI(DebugUIBase):
         ann["print_overrides"][name] = new_val
         self._auto_save(stem)
         self._update_count_label()
-        self._populate_items_list()
+        self._populate_items_list()        # repositions the inline slider
         self._update_info_from_selection()
         self._schedule_live_render()
         return True
@@ -2071,7 +2662,7 @@ class NegadoctorDebugUI(DebugUIBase):
         if new_black == cur_black:
             edge = "minimum" if darker else "maximum"
             self._set_info_text(f"Paper black already at its {edge} "
-                                f"({cur_black:+.2f}) — can't go "
+                                f"({self._fmt_print('black', cur_black)}) — can't go "
                                 f"{'darker' if darker else 'brighter'}.")
             return
         content = self._brighten_content_pixels(img_dict, lin)
@@ -2087,7 +2678,7 @@ class NegadoctorDebugUI(DebugUIBase):
             ann["print_overrides"]["exposure"] = new_exp
         self._auto_save(stem)
         self._update_count_label()
-        self._populate_items_list()
+        self._populate_items_list()        # repositions the inline slider
         self._redraw_markers()
         self._schedule_live_render()
 
@@ -2095,8 +2686,10 @@ class NegadoctorDebugUI(DebugUIBase):
         clip = self._clip_fraction(work, content)
         self._set_info_text(
             f"{'Darker' if darker else 'Brighter'}: paper black "
-            f"{cur_black:+.3f} → {new_black:+.3f} ({step:+.0%}),  exposure "
-            f"{cur_exp:.3f} → {new_exp:.3f}\n"
+            f"{self._fmt_print('black', cur_black)} → "
+            f"{self._fmt_print('black', new_black)},  print exposure "
+            f"{self._fmt_print('exposure', cur_exp)} → "
+            f"{self._fmt_print('exposure', new_exp)}\n"
             f"  highlights held at P{anp.PRINT_HI_PCT:g}≈{target:.3f}, hard-clip "
             f"{clip * 100:.2f}% (budget {anp.PRINT_CLIP_BUDGET * 100:.1f}%).  "
             f"Press ] / [ again to go further; select blk/pexp + C to clear.")
@@ -2129,25 +2722,56 @@ class NegadoctorDebugUI(DebugUIBase):
         return min(candidates, key=lambda c: c[1])[0]
 
     def handle_press_override(self, event):
-        """Grab a crop edge — works in ANY mode (no need to select crop
-        first): the grab needs precise proximity to the rect edge, so it
-        doesn't collide with patch clicks. Dragging moves just that edge;
-        rubber-band elsewhere (with crop selected or mask view on) still
-        draws a whole new rect."""
+        """Grab a crop edge OR a patch rectangle to drag it.
+
+        Crop-edge grab works in ANY mode (precise proximity to the rect edge,
+        so it doesn't collide with patch clicks). A NON-Ctrl press INSIDE a
+        film-base / shadows / highlights patch starts moving that patch (Ctrl
+        stays reserved for Ctrl+Click place / Ctrl+drag zoom-to-rect). Dragging
+        a detected patch records a correction at the moved spot; a press with no
+        movement is treated as a plain select (on release)."""
         edge = self._crop_edge_at(event.x, event.y)
-        if edge is None:
-            return False
-        img_dict = self.images[self.current_idx]
-        self._crop_drag_edge = edge
-        self._crop_drag_rect = list(self._crop_rect(img_dict)
-                                    or self._auto_content_rect(img_dict))
-        self.selected_patch = CROP_NAME
-        # the base class only routes B1-Motion to handle_drag_override when
-        # drag_start is set, and it skips setting it for consumed presses
-        self.drag_start = (event.x, event.y)
-        return True
+        if edge is not None:
+            img_dict = self.images[self.current_idx]
+            self._crop_drag_edge = edge
+            self._crop_drag_rect = list(self._crop_rect(img_dict)
+                                        or self._auto_content_rect(img_dict))
+            self.selected_patch = CROP_NAME
+            # the base class only routes B1-Motion to handle_drag_override when
+            # drag_start is set, and it skips setting it for consumed presses
+            self.drag_start = (event.x, event.y)
+            return True
+        if not (event.state & 0x4):
+            patch = self._patch_at(event.x, event.y)
+            if patch is not None:
+                img_dict = self.images[self.current_idx]
+                rect = self._effective_rect(img_dict, patch)
+                ix, iy = canvas_to_image(event.x, event.y,
+                                         self.offset_x, self.offset_y, self.zoom)
+                self.selected_patch = patch
+                self._patch_drag = {"patch": patch, "ox": ix - rect[0],
+                                    "oy": iy - rect[1], "w": int(rect[2]),
+                                    "h": int(rect[3]), "moved": False}
+                self.drag_start = (event.x, event.y)
+                self._update_info_from_selection()
+                self._redraw_markers()
+                return True
+        return False
 
     def handle_drag_override(self, event):
+        pd = getattr(self, "_patch_drag", None)
+        if pd:
+            img_dict = self.images[self.current_idx]
+            stem = img_dict["stem"]
+            ix, iy = canvas_to_image(event.x, event.y,
+                                     self.offset_x, self.offset_y, self.zoom)
+            w, h = pd["w"], pd["h"]
+            nx = max(0, min(img_dict["width"] - w, int(round(ix - pd["ox"]))))
+            ny = max(0, min(img_dict["height"] - h, int(round(iy - pd["oy"]))))
+            self.annotations[stem]["patch_corrections"][pd["patch"]] = [nx, ny, w, h]
+            pd["moved"] = True
+            self._redraw_markers()
+            return True
         if not getattr(self, "_crop_drag_edge", None):
             return False
         img_dict = self.images[self.current_idx]
@@ -2172,6 +2796,23 @@ class NegadoctorDebugUI(DebugUIBase):
         return True
 
     def handle_release_override(self, event):
+        pd = getattr(self, "_patch_drag", None)
+        if pd:
+            self._patch_drag = None
+            self.drag_start = None
+            self.is_dragging = False
+            if pd["moved"]:
+                stem = self.images[self.current_idx]["stem"]
+                self._auto_save(stem)
+                self._update_count_label()
+                self._populate_items_list()
+                self._update_info_from_selection()
+                self._schedule_live_render()
+            else:
+                # no movement: behaves like a plain click that selects the patch
+                self._update_info_from_selection()
+                self._sync_item_list_selection()
+            return True
         if not getattr(self, "_crop_drag_edge", None):
             return False
         self._crop_drag_edge = None
@@ -2234,6 +2875,7 @@ class NegadoctorDebugUI(DebugUIBase):
                     wb = self._effective_wb(self.images[self.current_idx], name)
                     self.wheels[name].set_wb(wb)
                     self._update_wheel_readout(name, wb)
+                    self._fill_wb_sliders(name, wb)
                 self._update_count_label()
                 self._populate_items_list()
                 self._schedule_live_render()
@@ -2246,7 +2888,7 @@ class NegadoctorDebugUI(DebugUIBase):
             self._auto_save(stem)
             self._redraw_markers()
             self._update_count_label()
-            self._populate_items_list()
+            self._populate_items_list()      # repositions/updates inline slider
             self._schedule_live_render()
         self._update_info_from_selection()
 
@@ -2258,6 +2900,15 @@ class NegadoctorDebugUI(DebugUIBase):
         if not rgb:
             return "n/a"
         return "(" + ", ".join(f"{v:.4f}" for v in rgb) + ")"
+
+    def _fmt_dmin_pct(self, rgb):
+        """Film base exactly as darktable's negadoctor 'D min' sliders: each
+        channel clamped to the param range and shown as a percent (the module
+        uses factor 100 + a '%' suffix on D min red/green/blue component)."""
+        if not rgb:
+            return "n/a"
+        dmin = (nm.clamp(float(v), nm.DMIN_RANGE) for v in rgb)
+        return ", ".join(f"{v * 100:.2f}%" for v in dmin)
 
     def _update_info_from_selection(self):
         if self.selected_patch is None:
@@ -2293,18 +2944,19 @@ class NegadoctorDebugUI(DebugUIBase):
             params = img_dict.get("params") or {}
             applied = params.get(patch)
             override = ann["print_overrides"].get(patch)
-            rng = self._print_range(patch)
+            lo, hi = self._print_range(patch)
+            rng = f"[{self._fmt_print(patch, lo)}, {self._fmt_print(patch, hi)}]"
             lines = [f"Print param: {PRINT_LABEL[patch]}",
-                     f"  applied: {applied:.4f}   range [{rng[0]}, {rng[1]}]"
+                     f"  applied: {self._fmt_print(patch, applied)}   range {rng}"
                      if applied is not None else "  applied: n/a"]
             if override is not None:
-                lines.append(f"  OVERRIDE: {override:.4f}  "
-                             f"(delta {override - applied:+.4f})")
-                lines.append("  Scroll adjusts (Shift=big step), C clears, "
-                             "X compares with default.")
+                lines.append(f"  OVERRIDE: {self._fmt_print(patch, override)}  "
+                             f"(was {self._fmt_print(patch, applied)})")
+                lines.append("  Drag the slider or scroll (Shift=big step), "
+                             "C clears, X compares with default.")
             else:
-                lines.append("  Scroll to adjust with live preview "
-                             "(Shift=big step).")
+                lines.append("  Drag the slider or scroll to adjust with live "
+                             "preview (Shift=big step).")
             self._set_info_text("\n".join(lines))
             self._sync_item_list_selection()
             return
@@ -2335,15 +2987,25 @@ class NegadoctorDebugUI(DebugUIBase):
             local = (img_dict.get("film_base") or {}).get("local")
             if local:
                 det_rgb = local.get("rgb_linear")
+            eff = self._effective_film_base_rgb(img_dict)
+            if eff:
+                lines.append(f"  D min (negadoctor): {self._fmt_dmin_pct(eff)}")
         else:
             p = (img_dict.get("patches") or {}).get(patch) or {}
             det_rgb = p.get("rgb_neg_linear")
             if p.get("used_fallback"):
                 lines.append("  WB FELL BACK to roll median (no usable patch found)")
 
+        # The film base is shown as darktable's D min (percent); other patches
+        # keep their negative-linear RGB.
+        if patch == "film_base":
+            val = lambda rgb: f"D min {self._fmt_dmin_pct(rgb)}"
+        else:
+            val = lambda rgb: f"neg RGB {self._fmt_rgb(rgb)}"
+
         if det:
             lines.append(f"  detected rect (x,y,w,h frac): "
-                         f"{self._fmt_rect(det, img_dict)}  neg RGB {self._fmt_rgb(det_rgb)}")
+                         f"{self._fmt_rect(det, img_dict)}  {val(det_rgb)}")
         else:
             lines.append("  not detected on this frame")
 
@@ -2351,17 +3013,16 @@ class NegadoctorDebugUI(DebugUIBase):
         if corr:
             corr_rgb = self._neg_rgb_at(img_dict, corr)
             lines.append(f"  CORRECTED rect: {self._fmt_rect(corr, img_dict)}"
-                         f"  neg RGB {self._fmt_rgb(corr_rgb)}")
+                         f"  {val(corr_rgb)}")
             wb = self._wb_for_patch(img_dict, patch, corr_rgb)
             if wb:
-                applied = (img_dict.get("params") or {}).get(
-                    "wb_low" if patch == "shadows" else "wb_high")
+                applied = (img_dict.get("params") or {}).get("wb_high")
                 lines.append(f"  -> would give wb {self._fmt_rgb(wb)}"
                              f"  (applied: {self._fmt_rgb(applied)})")
-            lines.append("  Scroll resizes, Ctrl+Click re-places, C clears.")
+            lines.append("  Drag to move, scroll resizes, Ctrl+Click re-places, C clears.")
         else:
-            lines.append("  Ctrl+Click at the correct position to mark this patch wrong;")
-            lines.append("  scroll then resizes it (seeds from the detected rect).")
+            lines.append("  Drag the patch to move it, or Ctrl+Click at the correct spot;")
+            lines.append("  scroll then resizes it (a move/resize seeds the correction).")
         self._set_info_text("\n".join(lines))
         self._sync_item_list_selection()
 
@@ -2376,9 +3037,10 @@ class NegadoctorDebugUI(DebugUIBase):
 
     def item_panel_header_text(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
-        return (f"{len(ann['patch_corrections'])}/3 patches, "
+        crop = ", crop✓" if ann.get("crop_correction") else ""
+        return (f"{len(ann['patch_corrections'])}/2 patches, "
                 f"{len(ann['wb_overrides'])}/2 wb, "
-                f"{len(ann['print_overrides'])}/4 print")
+                f"{len(ann['print_overrides'])}/4 print{crop}")
 
     def item_rows(self):
         img_dict = self.images[self.current_idx]
@@ -2393,8 +3055,19 @@ class NegadoctorDebugUI(DebugUIBase):
             has_note = bool(ann["patch_notes"].get(patch))
             fallback = (patch != "film_base"
                         and patches.get(patch, {}).get("used_fallback", False))
-            det_str = self._fmt_pos(det, img_dict)
-            corr_str = self._fmt_pos(corr, img_dict) if corr else ""
+            if patch == "film_base":
+                # Show the film base as darktable's negadoctor D min (percent) —
+                # the value the user compares against darktable, not the patch
+                # position (which still lives in the info panel).
+                base_rgb = ((img_dict.get("film_base") or {}).get("local")
+                            or {}).get("rgb_linear")
+                det_str = (self._fmt_dmin_pct(base_rgb) if base_rgb
+                           else self._fmt_pos(det, img_dict))
+                corr_str = (self._fmt_dmin_pct(self._neg_rgb_at(img_dict, corr))
+                            if corr else "")
+            else:
+                det_str = self._fmt_pos(det, img_dict)
+                corr_str = self._fmt_pos(corr, img_dict) if corr else ""
             tag = "corr" if corr else ("fallback" if fallback or not det else "det")
             rows.append({
                 "iid": f"patch_{patch}",
@@ -2415,9 +3088,10 @@ class NegadoctorDebugUI(DebugUIBase):
             rows.append({
                 "iid": f"print_{name}",
                 "values": (PRINT_SHORT[name],
-                           f"{applied:.3f}" if applied is not None else "—",
+                           self._fmt_print(name, applied),
                            "",
-                           f"{override:.3f}" if override is not None else "",
+                           self._fmt_print(name, override) if override is not None
+                           else "",
                            "✎" if has_note else ""),
                 "tag": "corr" if override is not None else "det",
                 "name": name,
@@ -2431,7 +3105,7 @@ class NegadoctorDebugUI(DebugUIBase):
             applied = params.get(WB_NAME_PARAM[name])
             override = ann["wb_overrides"].get(WB_NAME_OVR[name])
             has_note = bool(ann["patch_notes"].get(name))
-            fmt = lambda v: f"{v[0]:.2f},{v[1]:.2f},{v[2]:.2f}"
+            fmt = lambda v: f"{v[0]:.4f},{v[1]:.4f},{v[2]:.4f}"
             rows.append({
                 "iid": name,
                 "values": (WB_NAME_SHORT[name],
@@ -2533,16 +3207,17 @@ class NegadoctorDebugUI(DebugUIBase):
                 head += "  [GLOBAL BASE WINNER]"
             lines.append(head)
             if p:
-                lines.append(f"  Dmin=({p['Dmin'][0]:.4f},{p['Dmin'][1]:.4f},{p['Dmin'][2]:.4f})"
+                lines.append(f"  D min={self._fmt_dmin_pct(p['Dmin'])}"
                              f"  D_max={p['D_max']:.3f}  offset={p['offset']:.3f}")
-                lines.append(f"  wb_low=({p['wb_low'][0]:.3f},{p['wb_low'][1]:.3f},{p['wb_low'][2]:.3f})"
-                             f"  wb_high=({p['wb_high'][0]:.3f},{p['wb_high'][1]:.3f},{p['wb_high'][2]:.3f})")
-                lines.append(f"  black={p['black']:.4f}  gamma={p['gamma']:.2f}"
-                             f"  soft_clip={p['soft_clip']:.2f}  exposure={p['exposure']:.4f}")
-            for patch in ("shadows", "highlights"):
-                if patches.get(patch, {}).get("used_fallback"):
-                    fallback_count += 1
-                    lines.append(f"  NOTE: {patch} wb fell back to roll median")
+                lines.append(f"  wb_low=({p['wb_low'][0]:.4f},{p['wb_low'][1]:.4f},{p['wb_low'][2]:.4f})"
+                             f"  wb_high=({p['wb_high'][0]:.4f},{p['wb_high'][1]:.4f},{p['wb_high'][2]:.4f})")
+                lines.append(f"  paper black={self._fmt_print('black', p['black'])}"
+                             f"  paper grade(gamma)={self._fmt_print('gamma', p['gamma'])}"
+                             f"  paper gloss={self._fmt_print('soft_clip', p['soft_clip'])}"
+                             f"  print exposure={self._fmt_print('exposure', p['exposure'])}")
+            if patches.get("highlights", {}).get("used_fallback"):
+                fallback_count += 1
+                lines.append("  NOTE: highlights wb fell back to roll median")
 
             if ann["bad_inversion"]:
                 bad_count += 1
@@ -2582,7 +3257,9 @@ class NegadoctorDebugUI(DebugUIBase):
                             f"{self._fmt_rect(det, img_dict) if det else 'none'}"
                             f"  ->  corrected={self._fmt_rect(corr, img_dict)} (x,y,w,h frac)")
                     if corr_rgb:
-                        line += f"  neg RGB ({', '.join(f'{v:.4f}' for v in corr_rgb)})"
+                        line += (f"  D min {self._fmt_dmin_pct(corr_rgb)}"
+                                 if patch == "film_base"
+                                 else f"  neg RGB ({', '.join(f'{v:.4f}' for v in corr_rgb)})")
                     lines.append(line)
                     if det and (corr[2], corr[3]) != (det[2], det[3]):
                         W, H = img_dict["width"], img_dict["height"]
@@ -2590,10 +3267,10 @@ class NegadoctorDebugUI(DebugUIBase):
                                      f" -> {corr[2]/W:.3f}x{corr[3]/H:.3f} (frac)")
                     wb = self._wb_for_patch(img_dict, patch, corr_rgb)
                     if wb:
-                        applied = p.get("wb_low" if patch == "shadows" else "wb_high")
+                        applied = p.get("wb_high")
                         lines.append(f"      -> wb from corrected patch: "
-                                     f"({', '.join(f'{v:.3f}' for v in wb)})"
-                                     f"  vs applied ({', '.join(f'{v:.3f}' for v in applied)})")
+                                     f"({', '.join(f'{v:.4f}' for v in wb)})"
+                                     f"  vs applied ({', '.join(f'{v:.4f}' for v in applied)})")
 
             if overrides:
                 lines.append("")
@@ -2606,10 +3283,11 @@ class NegadoctorDebugUI(DebugUIBase):
                     val = overrides[name]
                     if applied is not None:
                         lines.append(f"    {PRINT_LABEL[name]:<38} "
-                                     f"{applied:.4f} -> {val:.4f} "
-                                     f"({val - applied:+.4f})")
+                                     f"{self._fmt_print(name, applied)} -> "
+                                     f"{self._fmt_print(name, val)}")
                     else:
-                        lines.append(f"    {PRINT_LABEL[name]:<38} -> {val:.4f}")
+                        lines.append(f"    {PRINT_LABEL[name]:<38} -> "
+                                     f"{self._fmt_print(name, val)}")
 
             if wb_overrides:
                 lines.append("")

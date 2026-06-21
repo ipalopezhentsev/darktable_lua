@@ -50,10 +50,6 @@
       "P_HIGH": 99.5,
       "DMAX_DEFAULT": 2.046,
       "OFFSET_DEFAULT": -0.05,
-      "SHADOW_BAND_PCT": [
-        5.0,
-        30.0
-      ],
       "HIGHLIGHT_BAND_PCT": [
         70.0,
         95.0

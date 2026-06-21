@@ -661,7 +661,7 @@ def make_inversion_evaluator(rolls, tolerances, fit_params=()):
     fast = set(fit_params) <= set(reg.PRINT_TUNE_PARAMS)
     if fast:
         return _make_inversion_fast(rolls, clip_budget)
-    return _make_inversion_full(rolls, clip_budget)
+    return _make_inversion_full(rolls, clip_budget, fit_params)
 
 
 def _make_inversion_fast(rolls, clip_budget):
@@ -737,18 +737,37 @@ def _make_inversion_fast(rolls, clip_budget):
     return evaluate, prep_secs
 
 
-def _make_inversion_full(rolls, clip_budget):
+def _make_inversion_full(rolls, clip_budget, fit_params=()):
     """Stage-B1 params (wb / pickers) reshape the analysis, so the pipeline is
     re-run per trial. Each GT frame's decoded buffer + FIXED GT render are cached
-    from the baseline so only process_roll (not load/GT-render) repeats."""
+    from the baseline so only process_roll (not load/GT-render) repeats.
+
+    The roll-wide vignette + film-base search + global base (process_roll's
+    trial-INVARIANT PREFIX) are UPSTREAM of the inversion look and NOT
+    inversion-fittable (the registry omits them), so they are computed ONCE per
+    roll here and reused on every trial via `process_roll(prep=...)`; only stage
+    B1/B2 (what the fitted wb/picker/print constants actually reshape) re-runs.
+    The vignette / global-base lines therefore print ONCE per session."""
+    # Defensive: the inversion registry must never expose a prefix constant. If
+    # one ever leaks back in, fail LOUD here rather than silently re-search the
+    # film base / re-estimate the vignette on every trial.
+    leaked = set(fit_params) & set(reg.BASE_PREFIX_PARAMS)
+    assert not leaked, (
+        f"inversion cannot fit the vignette/film-base PREFIX constants {sorted(leaked)} "
+        "— they are computed once per session, never calibrated by inversion")
     prepped, prep_secs = [], {}
     nrolls = len(rolls)
     for i, roll in enumerate(rolls, 1):
         t0 = time.perf_counter()
         print(f"[prep {i}/{nrolls}] roll {roll['id']} (full path): analysing "
               f"{len(roll['images'])} frame(s)…", flush=True)
+        # Compute the trial-invariant prefix ONCE; derive the baseline frames
+        # (for the FIXED GT render) from it and reuse it per trial.
+        prefix = an.process_roll_prefix(roll["images"], roll["exif"],
+                                        progress=_proc_cb(roll["id"]),
+                                        cfg=an.DEFAULT_TUNING)
         frames, _ = an.process_roll(roll["images"], roll["exif"],
-                                    progress=_proc_cb(roll["id"]))
+                                    cfg=an.DEFAULT_TUNING, prep=prefix)
         gt = rqt._load_ground_truth(roll["fixtures"])
         by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
         prep_items = [(stem, by_stem[stem], g) for stem, g in gt.items()
@@ -771,11 +790,12 @@ def _make_inversion_full(rolls, clip_budget):
         done = _map_frames_prep(roll["id"], "GT", _prep_one, prep_items)
         cache = {stem: c for stem, c in done}
         prepped.append({"id": roll["id"], "images": roll["images"],
-                        "exif": roll["exif"], "cache": cache})
+                        "exif": roll["exif"], "cache": cache, "prefix": prefix})
         prep_secs[roll["id"]] = round(time.perf_counter() - t0, 2)
         print(f"[prep {i}/{nrolls}] roll {roll['id']}: {len(cache)} GT frame(s) "
-              f"ready in {prep_secs[roll['id']]}s. NOTE: full path re-runs the "
-              "pipeline per trial — expect minutes/eval.", flush=True)
+              f"ready in {prep_secs[roll['id']]}s. NOTE: full path re-runs only "
+              "stage B1/B2 per trial — vignette + film base computed ONCE.",
+              flush=True)
 
     def _one(it):
         rid, stem, c, params = it
@@ -794,7 +814,10 @@ def _make_inversion_full(rolls, clip_budget):
         for roll in prepped:
             # process_roll already threads the per-frame analysis internally;
             # the render+EMD pass below is then threaded over the GT frames too.
-            frames, _ = an.process_roll(roll["images"], roll["exif"], cfg=cfg)
+            # `prep` reuses the trial-invariant vignette/film-base prefix (None
+            # when a fitted BASE_* forces a per-trial rebuild).
+            frames, _ = an.process_roll(roll["images"], roll["exif"], cfg=cfg,
+                                        prep=roll["prefix"])
             by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
             items = [(roll["id"], stem, c, by_stem[stem]["params"])
                      for stem, c in roll["cache"].items()

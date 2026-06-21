@@ -165,13 +165,13 @@ def check_frame_invariants(frames, roll):
             and all(abs(a - b) < 1e-6 for a, b in zip(d["Dmin"], p["Dmin"])),
             stem, "params_hex does not round-trip to params")
 
-        # patch rects inside frame bounds; shadows/highlights additionally
+        # patch rects inside frame bounds; the highlight patch additionally
         # inside the content crop (the film-base rect may legitimately sit in
         # the rejected ring — base lives in gaps/rebate, and the crop governs
         # LEVEL computations, not the base search)
         w, h = fr["width"], fr["height"]
         l, t, r, b = fr["border"]
-        for kind in ("base", "shadow_patch", "highlight_patch"):
+        for kind in ("base", "highlight_patch"):
             obj = fr.get(kind) if kind != "base" else fr.get("base")
             if not obj:
                 continue
@@ -217,7 +217,7 @@ def selftest_invariants():
         "border": (10, 10, 10, 10),
         "exif": {"missing_exif": False}, "exposure_factor": 1.0,
         "base": {"rect": [100, 100, 40, 40]},
-        "shadow_patch": None, "highlight_patch": None,
+        "highlight_patch": None,
     }
     params = {
         "Dmin": [0.7, 0.3, 0.15], "wb_high": [1.2, 1.1, 1.0],
@@ -234,7 +234,7 @@ def selftest_invariants():
                          Dmin=[0.15, 0.3, 0.7])                    # not orange
     broken = dict(base, params=broken_params,
                   params_hex=nm.encode_negadoctor_params(broken_params),
-                  shadow_patch={"rect": [2, 2, 40, 40]})           # outside crop
+                  highlight_patch={"rect": [2, 2, 40, 40]})        # outside crop
     violations = check_frame_invariants([broken], None)
     assert len(violations) >= 3, \
         f"invariant self-test: broken frame produced only {violations}"
@@ -296,10 +296,10 @@ def diff_frame_vs_baseline(fr, base):
             diffs.append(f"film-base moved {d:.0f}px "
                          f"({ours_local['rect']} vs {base_local['rect']})")
 
-    # shadows / highlights patches: presence, position AND size (sizes are
-    # user-tunable via the debug UI and must survive algorithm changes)
+    # highlight patch: presence, position AND size (sizes are user-tunable
+    # via the debug UI and must survive algorithm changes)
     base_patches = base.get("patches") or {}
-    for kind, key in (("shadows", "shadow_patch"), ("highlights", "highlight_patch")):
+    for kind, key in (("highlights", "highlight_patch"),):
         b_obj = base_patches.get(kind) or {}
         b_rect = b_obj.get("rect")
         o_obj = fr.get(key)
@@ -498,21 +498,20 @@ def report_annotated_frames(frames, fixtures):
             continue
         p = fr["params"]
         for kind, entry in (data.get("patch_corrections") or {}).items():
+            # the shadow patch was removed (wb_low is region-based); ignore any
+            # such corrections left in older annotation sessions
+            if kind == "shadows":
+                continue
             rect = entry.get("corrected")
             if not rect:
                 continue
             x, y, w, h = _rect_to_px(rect, fr["width"], fr["height"])
             rgb = [float(v) for v in lin[y:y + h, x:x + w].reshape(-1, 3).mean(axis=0)]
-            key = {"shadows": "shadow_patch", "highlights": "highlight_patch",
-                   "film_base": "base"}.get(kind)
+            key = {"highlights": "highlight_patch", "film_base": "base"}.get(kind)
             found = bool(fr.get(key)) if key else False
             line = f"    {kind}: detector {'FOUND a patch' if found else 'fell back'}"
             try:
-                if kind == "shadows":
-                    wb = nm.compute_wb_low(p["Dmin"], rgb, p["D_max"])
-                    line += (f"; user-rect wb_low ({', '.join(f'{v:.3f}' for v in wb)})"
-                             f" vs applied ({', '.join(f'{v:.3f}' for v in p['wb_low'])})")
-                elif kind == "highlights":
+                if kind == "highlights":
                     wb = nm.compute_wb_high(p["Dmin"], rgb, p["D_max"],
                                             p["offset"], p["wb_low"])
                     line += (f"; user-rect wb_high ({', '.join(f'{v:.3f}' for v in wb)})"

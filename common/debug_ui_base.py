@@ -87,6 +87,8 @@ class DebugUIBase:
     ITEM_HEADERS = {}         # col -> header text
     ITEM_WIDTHS = {}          # col -> px width
     ITEM_ANCHORS = {}         # col -> anchor (default "e")
+    ITEM_STRETCH = ()         # cols that absorb the panel's extra width
+                              # (stretch=True); others stay at their fixed width
     ITEM_PANEL_TITLE = "Items:"
     CENTER_BUTTON_TEXT = "Center on item"
     # When True, the right panel splits vertically (draggable sash): the item
@@ -94,13 +96,30 @@ class DebugUIBase:
     # footer pane opens at its requested height (fully visible) and the table
     # takes the remaining space.
     HAS_ITEM_PANEL_FOOTER = False
+    # Initial width (px) of the right-side item panel.
+    ITEM_PANEL_WIDTH = 230
+    # When True, on window resize the center (image) pane is shrunk to the width
+    # the height-fitted image actually needs, and the freed horizontal space is
+    # handed to the item panel (no wasted pillarbox black bars). Off by default;
+    # UIs with a rich right panel (color wheels) opt in.
+    REFLOW_TO_IMAGE = False
+    # Upper bound on the item panel's share of the window width when reflowing.
+    REFLOW_ITEM_MAX_FRAC = 0.45
+    # When False, the bottom-left button column (feature buttons + Clear
+    # Selection / Fit / Hide Markers) is omitted — for UIs whose actions all
+    # live on the menu bar + toolbar (it scales poorly and is redundant there).
+    SHOW_BOTTOM_BUTTONS = True
 
     def __init__(self, root, session_dir):
         self.root = root
         self.session_dir = session_dir
         self.export_dir = session_dir   # legacy alias used by feature code
         self.root.title(self.WINDOW_TITLE)
-        self.root.geometry(self.WINDOW_GEOMETRY)
+        # Hi-DPI: the window is DPI-aware (run_main), so pixel-literal sizes
+        # render at PHYSICAL pixels and look tiny on a 4K display. Scale the
+        # window and pixel-literal layout sizes by the screen DPI factor.
+        self.ui_scale = self._ui_scale()
+        self.root.geometry(self._scaled_geometry(self.WINDOW_GEOMETRY))
 
         images, constants = self.load_session(session_dir)
         if not images:
@@ -153,15 +172,54 @@ class DebugUIBase:
 
         self.item_list_data = {}      # iid -> row dict from item_rows()
         self._syncing_selection = False
+        self._reflow_after_id = None
+
+        # Keyboard-layout-independent letter shortcuts (see bind_key). Maps a
+        # Windows virtual-key code -> handler; dispatched from a single generic
+        # <KeyPress> binding so the physical key position triggers the shortcut
+        # regardless of the active input language (Latin/Cyrillic/...).
+        self._phys_keymap = {}
+        if sys.platform == "win32":
+            self.root.bind("<KeyPress>", self._on_physical_key)
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if self.REFLOW_TO_IMAGE:
+            self.root.bind("<Configure>", self._on_root_configure)
 
         # Defer all post-UI work so the window skeleton appears immediately.
         # after(0) fires on the first event-loop tick; after(150) fires later,
         # by which time lb_rows will already exist.
         self.root.after(0, self._populate_thumb_list)
         self.root.after(150, self._load_image_by_idx, 0)
+
+    # ------------------------------------------------------------------
+    # Hi-DPI pixel scaling
+    # ------------------------------------------------------------------
+
+    def _ui_scale(self):
+        """Physical-pixel scale factor: 1.0 at 96 dpi, ~2.0 at 192 dpi (a 4K
+        display at 200%). Pixel-literal widths/sizes are multiplied by this so
+        the DPI-aware window isn't physically tiny. Never below 1.0."""
+        try:
+            s = self.root.winfo_fpixels("1i") / 96.0
+        except Exception:
+            s = 1.0
+        return s if s and s > 1.0 else 1.0
+
+    def scaled(self, px):
+        """Scale a pixel-literal layout size by the hi-DPI factor."""
+        return int(round(px * self.ui_scale))
+
+    def _scaled_geometry(self, geom):
+        """Scale a 'WxH' / 'WxH+X+Y' geometry string's size by ui_scale."""
+        try:
+            size, plus, pos = geom.partition("+")
+            w, _, h = size.partition("x")
+            g = f"{self.scaled(int(w))}x{self.scaled(int(h))}"
+            return g + plus + pos
+        except Exception:
+            return geom
 
     # ------------------------------------------------------------------
     # Hooks: session / annotations  (subclass MUST implement)
@@ -213,6 +271,14 @@ class DebugUIBase:
     def build_item_panel_footer(self, parent):
         """Feature widgets in the bottom pane of the right panel, below the
         item table's draggable sash (only used when HAS_ITEM_PANEL_FOOTER)."""
+
+    def build_menus(self, menubar):
+        """Feature cascades for the window menu bar (optional). The menu bar is
+        only attached when at least one cascade is added here."""
+
+    def build_toolbar(self, parent):
+        """Feature buttons for a horizontal toolbar across the top of the
+        center panel (optional; only shown when widgets are added here)."""
 
     def bind_feature_keys(self):
         """Feature keyboard shortcuts (root.bind)."""
@@ -321,15 +387,23 @@ class DebugUIBase:
     # ------------------------------------------------------------------
 
     def _build_ui(self):
+        # Window menu bar (feature cascades; only attached if populated)
+        menubar = tk.Menu(self.root)
+        self.build_menus(menubar)
+        if menubar.index("end") is not None:
+            self.root.config(menu=menubar)
+
         # PanedWindow splits left panel from right
         paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
                                sashrelief=tk.RAISED, sashwidth=6)
         paned.pack(fill=tk.BOTH, expand=True)
+        self.paned = paned
 
         # ---- LEFT PANEL ----
         left = tk.Frame(paned, width=220, bg="#484848")
         left.pack_propagate(False)
         paned.add(left, minsize=160, stretch="never")
+        self.left_pane = left
 
         tk.Label(left, text="Images:", bg="#484848", fg="white",
                  font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
@@ -363,12 +437,21 @@ class DebugUIBase:
         # ---- CENTER PANEL (canvas) ----
         right = tk.Frame(paned, bg="#363636")
         paned.add(right, stretch="always")
+        self.center_pane = right
 
         # ---- ITEM LIST PANEL ----
-        item_pane = tk.Frame(paned, width=230, bg="#484848")
+        item_pane = tk.Frame(paned, width=self.scaled(self.ITEM_PANEL_WIDTH),
+                             bg="#484848")
         item_pane.pack_propagate(False)
-        paned.add(item_pane, minsize=140, stretch="never")
+        paned.add(item_pane, minsize=self.scaled(140), stretch="never")
+        self.item_pane = item_pane
         self._build_item_list_panel(item_pane)
+
+        # Optional feature toolbar across the top of the center panel
+        toolbar = tk.Frame(right, bg="#3f3f3f")
+        self.build_toolbar(toolbar)
+        if toolbar.winfo_children():
+            toolbar.pack(side=tk.TOP, fill=tk.X)
 
         # Canvas + scrollbars
         canvas_frame = tk.Frame(right, bg="#363636")
@@ -463,38 +546,83 @@ class DebugUIBase:
         self.note_entry.bind("<Return>", self._on_note_done)
         self.note_entry.bind("<Escape>", self._on_note_done)
 
-        # Buttons
-        btn_frame = tk.Frame(bottom, bg="#484848")
-        btn_frame.pack(side=tk.RIGHT, padx=8, pady=6)
+        # Buttons (optional: UIs with a full menu bar + toolbar omit them)
+        self.hide_btn = None
+        if self.SHOW_BOTTOM_BUTTONS:
+            btn_frame = tk.Frame(bottom, bg="#484848")
+            btn_frame.pack(side=tk.RIGHT, padx=8, pady=6)
 
-        btn_cfg = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
-                   "padx": 8, "pady": 4, "width": 20}
+            btn_cfg = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
+                       "padx": 8, "pady": 4, "width": 20}
 
-        self.build_feature_buttons(btn_frame, btn_cfg)
+            self.build_feature_buttons(btn_frame, btn_cfg)
 
-        tk.Button(btn_frame, text="Clear Selection",
-                  command=self._clear_selection, **btn_cfg).pack(fill=tk.X, pady=1)
+            tk.Button(btn_frame, text="Clear Selection",
+                      command=self._clear_selection, **btn_cfg).pack(fill=tk.X, pady=1)
 
-        tk.Button(btn_frame, text="Fit to Window  (F)",
-                  command=self._fit_to_window, **btn_cfg).pack(fill=tk.X, pady=(6, 1))
+            tk.Button(btn_frame, text="Fit to Window  (F)",
+                      command=self._fit_to_window, **btn_cfg).pack(fill=tk.X, pady=(6, 1))
 
-        self.hide_btn = tk.Button(btn_frame, text="Hide Markers  (H)",
-                                  command=self._toggle_hide_markers, **btn_cfg)
-        self.hide_btn.pack(fill=tk.X, pady=1)
+            self.hide_btn = tk.Button(btn_frame, text="Hide Markers  (H)",
+                                      command=self._toggle_hide_markers, **btn_cfg)
+            self.hide_btn.pack(fill=tk.X, pady=1)
 
     # ------------------------------------------------------------------
     # Key binding helper (focus-aware)
     # ------------------------------------------------------------------
 
+    def _is_text_focus(self):
+        w = self.root.focus_get()
+        return isinstance(w, (tk.Entry, tk.Text))
+
+    @staticmethod
+    def _letter_of_sequence(sequence):
+        """Return the single ASCII letter of a plain letter binding such as
+        ``<f>`` / ``<F>`` / ``<Key-a>``, else None. Modifier combos, digits and
+        named keys (``<Left>``, ``<space>``, ``<bracketleft>``, ...) return None
+        and stay on the keysym path."""
+        if not (sequence.startswith("<") and sequence.endswith(">")):
+            return None
+        body = sequence[1:-1]
+        if body.startswith("Key-"):
+            body = body[4:]
+        if len(body) == 1 and body.isascii() and body.isalpha():
+            return body
+        return None
+
     def bind_key(self, sequence, fn):
         """root.bind that ignores the key while a text-input widget has focus,
-        so typing in the note entry doesn't trigger shortcuts."""
+        so typing in the note entry doesn't trigger shortcuts.
+
+        Plain *letter* shortcuts (``<f>``, ``<Key-a>``, ...) are routed through
+        a physical-keycode dispatcher on Windows so they fire on the key's
+        position regardless of the keyboard layout (the user switches input
+        languages; a Cyrillic 'ф' on the F key must still mean F). Everything
+        else — digits, arrows, brackets, modifier combos — keeps the normal
+        keysym binding (those positions don't move with the language)."""
+        letter = self._letter_of_sequence(sequence)
+        if letter is not None and sys.platform == "win32":
+            # Windows reports event.keycode as the virtual-key code, which for
+            # letters equals the uppercase ASCII code on every layout.
+            self._phys_keymap[ord(letter.upper())] = fn
+            return
+
         def handler(event):
-            w = self.root.focus_get()
-            if isinstance(w, (tk.Entry, tk.Text)):
+            if self._is_text_focus():
                 return
             fn(event)
         self.root.bind(sequence, handler)
+
+    def _on_physical_key(self, event):
+        """Dispatch a layout-independent letter shortcut by physical key.
+
+        Fires only for keys with no more-specific keysym binding (Tk prefers
+        the specific one), so it never double-triggers arrows/brackets/etc."""
+        if self._is_text_focus():
+            return
+        fn = self._phys_keymap.get(event.keycode)
+        if fn is not None:
+            fn(event)
 
     # ------------------------------------------------------------------
     # Note entry (per-object user annotation)
@@ -644,6 +772,10 @@ class DebugUIBase:
 
         # Highlight selected row and scroll to it
         self._highlight_lb_row(idx)
+
+        # Different frames have different aspect ratios; reclaim pillarbox width.
+        if self.REFLOW_TO_IMAGE:
+            self.root.after(60, self._reflow_panes)
 
     # ------------------------------------------------------------------
     # Drawing
@@ -845,9 +977,10 @@ class DebugUIBase:
     def _toggle_hide_markers(self):
         """Toggle visibility of all markers (H key)."""
         self.hide_markers = not self.hide_markers
-        label = "Show Markers  (H)" if self.hide_markers else "Hide Markers  (H)"
-        self.hide_btn.config(text=label,
-                             fg="#ffff88" if self.hide_markers else "white")
+        if self.hide_btn is not None:
+            label = "Show Markers  (H)" if self.hide_markers else "Hide Markers  (H)"
+            self.hide_btn.config(text=label,
+                                 fg="#ffff88" if self.hide_markers else "white")
         self._redraw_markers()
 
     def _fit_to_window(self):
@@ -871,6 +1004,58 @@ class DebugUIBase:
         if self.at_fit_zoom and self.pil_image is not None:
             # Use after() to let the resize settle before measuring
             self.root.after(50, self._fit_to_window)
+
+    def _on_root_configure(self, event):
+        """Window resized/maximized: debounce, then reflow panes + re-fit."""
+        if event.widget is not self.root:
+            return
+        if self._reflow_after_id is not None:
+            self.root.after_cancel(self._reflow_after_id)
+        self._reflow_after_id = self.root.after(120, self._reflow_panes)
+
+    def _reflow_panes(self):
+        """Hand the right panel the horizontal space the image can't use.
+
+        The image is fit to the canvas HEIGHT, so a frame whose aspect is
+        taller than the center pane would otherwise sit in a too-wide canvas
+        with black pillarbox bars on its sides. Instead shrink the center pane
+        to the width the image actually needs and give the slack to the item /
+        color-wheel panel. Only acts at fit zoom (when zoomed in the image
+        fills the canvas, so there's no slack to reclaim)."""
+        self._reflow_after_id = None
+        if not (self.REFLOW_TO_IMAGE and self.at_fit_zoom
+                and self.pil_image is not None):
+            return
+        img = self.images[self.current_idx]
+        iw, ih = img["width"], img["height"]
+        if iw <= 0 or ih <= 0:
+            return
+        try:
+            total = self.paned.winfo_width()
+            ch = self.canvas.winfo_height()
+            left_w = self.left_pane.winfo_width()
+        except tk.TclError:
+            return                       # window torn down; nothing to do
+        if total <= 1 or ch <= 1:
+            return
+        try:
+            sash = int(self.paned.cget("sashwidth"))
+        except Exception:
+            sash = 6
+        sashes = 2 * sash
+        item_min = self.scaled(self.ITEM_PANEL_WIDTH)
+        item_max = max(item_min, int(total * self.REFLOW_ITEM_MAX_FRAC))
+        avail = total - left_w - sashes
+        if avail <= item_min:
+            return
+        # width the image occupies fit to the available height (+ scrollbar pad)
+        fit_w = iw * (ch / ih) + self.scaled(28)
+        item_w = avail - fit_w
+        item_w = int(max(item_min, min(item_max, item_w)))
+        if abs(item_w - self.item_pane.winfo_width()) < self.scaled(8):
+            return                       # already about right; avoid churn
+        self.paned.paneconfigure(self.item_pane, width=item_w)
+        # the center pane changed size -> canvas <Configure> re-fits the image
 
     def _center_canvas_on(self, ix, iy):
         """Pan canvas so image coordinates (ix, iy) appear at the canvas center."""
@@ -1005,7 +1190,7 @@ class DebugUIBase:
         style.configure("Item.Treeview",
                         background="#363636", foreground="#cccccc",
                         fieldbackground="#363636", borderwidth=1,
-                        font=("Courier", 8), rowheight=20)
+                        font=("Courier", 8), rowheight=self.scaled(20))
         style.configure("Item.Treeview.Heading",
                         background="#484848", foreground="#c0c0c0",
                         font=("", 8, "bold"), relief="groove")
@@ -1014,8 +1199,10 @@ class DebugUIBase:
                   foreground=[("selected", "white")])
 
         # Optional vertical split: item table on top, feature footer below a
-        # draggable sash. The footer opens at its requested (fully-visible)
-        # height; the table pane stretches into the remaining space.
+        # draggable sash. The table pane sits at its (compact) requested height
+        # and the FOOTER stretches into the remaining space, so the feature
+        # footer (e.g. the color wheels) expands rather than leaving a big empty
+        # gap under a short table.
         if self.HAS_ITEM_PANEL_FOOTER:
             vpaned = tk.PanedWindow(parent, orient=tk.VERTICAL,
                                     sashrelief=tk.RAISED, sashwidth=6,
@@ -1023,8 +1210,8 @@ class DebugUIBase:
             vpaned.pack(fill=tk.BOTH, expand=True)
             table_host = tk.Frame(vpaned, bg="#484848")
             footer_host = tk.Frame(vpaned, bg="#484848")
-            vpaned.add(table_host, stretch="always", minsize=120)
-            vpaned.add(footer_host, stretch="never")
+            vpaned.add(table_host, stretch="never", minsize=self.scaled(90))
+            vpaned.add(footer_host, stretch="always", minsize=self.scaled(160))
             table_parent = table_host
         else:
             table_parent = parent
@@ -1048,9 +1235,10 @@ class DebugUIBase:
         for col in self.ITEM_COLS:
             self.item_tree.heading(col, text=self.ITEM_HEADERS[col],
                                    command=lambda c=col: self._sort_column(c))
-            self.item_tree.column(col, width=self.ITEM_WIDTHS[col],
+            self.item_tree.column(col, width=self.scaled(self.ITEM_WIDTHS[col]),
                                   anchor=self.ITEM_ANCHORS.get(col, "e"),
-                                  stretch=False, minwidth=18)
+                                  stretch=(col in self.ITEM_STRETCH),
+                                  minwidth=self.scaled(18))
 
         self.item_tree.tag_configure("even", background="#414141")
         # "odd" rows keep the default fieldbackground (#363636)
@@ -1085,11 +1273,18 @@ class DebugUIBase:
 
         self.item_list_header.config(text=self.item_panel_header_text())
 
+        n_rows = 0
         for row_num, row in enumerate(self.item_rows()):
             parity = "even" if row_num % 2 == 0 else "odd"
             self.item_tree.insert("", tk.END, iid=row["iid"], values=row["values"],
                                   tags=(row["tag"], parity))
             self.item_list_data[row["iid"]] = row
+            n_rows = row_num + 1
+        # Keep the table just tall enough for its rows. With a feature footer
+        # the table pane is non-stretch, so this lets the footer (color wheels)
+        # claim the remaining vertical space instead of a big empty gap.
+        if self.HAS_ITEM_PANEL_FOOTER and n_rows:
+            self.item_tree.configure(height=n_rows)
 
     def _sort_column(self, col):
         """Sort the treeview by the clicked column header; toggle asc/desc."""
@@ -1218,6 +1413,43 @@ class DebugUIBase:
     # Entry point helper
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _enable_windows_dpi_awareness():
+        """Tell Windows this process renders at native resolution, so it does
+        NOT bitmap-stretch the window on a high-DPI (4K) display — that stretch
+        is what makes the menus/text look blurry. Must run BEFORE the first
+        Tk() call. No-op off Windows / when ctypes is unavailable."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            # Per-Monitor-v2 (crisp when dragged between monitors of different
+            # DPI); fall back to per-monitor, then system-aware on older Windows.
+            try:
+                # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4, passed as a
+                # pointer-sized handle (a bare negative int fails on 64-bit).
+                ctypes.windll.user32.SetProcessDpiAwarenessContext(
+                    ctypes.c_void_p(-4))
+            except Exception:
+                try:
+                    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                except Exception:
+                    ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _apply_dpi_scaling(root):
+        """Now that the window is DPI-aware (crisp but laid out in physical
+        pixels, hence tiny on 4K), scale Tk's point->pixel factor to the real
+        screen DPI so fonts/widgets keep a sane size. Tk's reference is 72 dpi."""
+        try:
+            dpi = root.winfo_fpixels("1i")
+            if dpi and dpi > 0:
+                root.tk.call("tk", "scaling", dpi / 72.0)
+        except Exception:
+            pass
+
     @classmethod
     def run_main(cls, usage="Usage: debug_ui.py <session_dir>"):
         if len(sys.argv) < 2:
@@ -1229,6 +1461,8 @@ class DebugUIBase:
             print(f"Error: directory not found: {session_dir}")
             sys.exit(1)
 
+        cls._enable_windows_dpi_awareness()
         root = tk.Tk()
+        cls._apply_dpi_scaling(root)
         app = cls(root, session_dir)
         root.mainloop()

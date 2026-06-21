@@ -105,40 +105,65 @@ def main():
             step("click_base", lambda: (app._on_left_press(ev(cx, cy)),
                                         app._on_left_release(ev(cx, cy))))
 
-        # Ctrl+Click relocate the shadows patch to image center
+        # Ctrl+Click relocate the highlights patch to image center
         def relocate():
-            app._select_patch("shadows")
+            app._select_patch("highlights")
             ccx, ccy = to_canvas(img["width"] // 2, img["height"] // 2)
             app._on_left_press(ev(ccx, ccy, state=0x4))
             app._on_left_release(ev(ccx, ccy, state=0x4))
-            assert "shadows" in app.annotations[stem]["patch_corrections"], \
-                "no shadows correction recorded"
+            assert "highlights" in app.annotations[stem]["patch_corrections"], \
+                "no highlights correction recorded"
         step("ctrl_click_relocate", relocate)
 
         # Scroll-RESIZE the corrected patch (center kept, size persisted)
         def resize():
-            before = list(app.annotations[stem]["patch_corrections"]["shadows"])
+            before = list(app.annotations[stem]["patch_corrections"]["highlights"])
             app._on_mousewheel(ev(100, 100, delta=120))
             app._on_mousewheel(ev(100, 100, delta=120))
-            after = app.annotations[stem]["patch_corrections"]["shadows"]
+            after = app.annotations[stem]["patch_corrections"]["highlights"]
             assert after[2] == before[2] + 4 and after[3] == before[3] + 4, \
                 f"scroll resize wrong: {before} -> {after}"
             app._on_mousewheel(ev(100, 100, delta=-120, state=0x1))  # Shift
-            after2 = app.annotations[stem]["patch_corrections"]["shadows"]
+            after2 = app.annotations[stem]["patch_corrections"]["highlights"]
             assert after2[2] == after[2] - 10, f"shift resize wrong: {after2}"
         step("scroll_resize", resize)
 
-        # Resize a DETECTED patch (no prior correction): seeds one
+        # Resize a DETECTED patch (no prior correction): seeds one. Uses the
+        # film-base patch (highlights already has a correction from above).
         def resize_detected():
-            det = app._detected_rect(img, "highlights")
+            det = app._detected_rect(img, "film_base")
             if det is None:
                 return
-            app._select_patch("highlights")
+            app._select_patch("film_base")
             app._on_mousewheel(ev(100, 100, delta=120))
-            corr = app.annotations[stem]["patch_corrections"].get("highlights")
+            corr = app.annotations[stem]["patch_corrections"].get("film_base")
             assert corr and corr[2] == det[2] + 2, \
                 f"detected-patch resize did not seed correction: {corr} from {det}"
         step("resize_detected", resize_detected)
+
+        # Drag a patch to move it (real press/drag/release event path). The
+        # film-base patch has a correction by now; grabbing inside its rect and
+        # dragging moves it (size unchanged), no movement would just select.
+        def drag_patch():
+            rect = app._effective_rect(img, "film_base")
+            if not rect:
+                return
+            cxr, cyr = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+            px, py = to_canvas(cxr, cyr)
+            app._on_left_press(ev(px, py))
+            assert app._patch_drag and app._patch_drag["patch"] == "film_base", \
+                "patch grab failed"
+            tx, ty = to_canvas(cxr + 30, cyr + 20)
+            app._on_left_drag(ev(tx, ty))
+            app._on_left_release(ev(tx, ty))
+            corr = app.annotations[stem]["patch_corrections"]["film_base"]
+            assert abs(corr[0] - (rect[0] + 30)) <= 2 \
+                and abs(corr[1] - (rect[1] + 20)) <= 2, \
+                f"patch drag wrong: {corr} from {rect}"
+            assert corr[2] == rect[2] and corr[3] == rect[3], \
+                "patch size changed during move"
+            assert app._patch_drag is None, "patch drag not cleared on release"
+        step("drag_patch", drag_patch)
 
         # Live re-render from corrections
         def live_render():
@@ -172,6 +197,52 @@ def main():
             assert "black" in app.annotations[stem]["print_overrides"]
         step("print_override", print_override)
 
+        # Inline print slider: darktable-unit display + the slider (under the
+        # clicked item row) edits the override, with fine/coarse wheel steps.
+        def print_sliders():
+            # darktable display formatting (percent / EV / plain)
+            assert app._fmt_print("black", 0.0755) == "+7.55%"
+            assert app._fmt_print("soft_clip", 0.75) == "75.00%"
+            assert app._fmt_print("gamma", 3.91) == "3.91"
+            assert app._fmt_print("exposure", 2.0 ** 0.55) == "+0.55 EV"
+            # param <-> display round-trips (incl. the EV log2/pow conversion)
+            for name, val in (("black", 0.12), ("gamma", 4.2),
+                              ("soft_clip", 0.6), ("exposure", 1.3)):
+                disp = app._print_to_display(name, val)
+                assert abs(app._print_from_display(name, disp) - val) < 1e-9, \
+                    f"{name} display round-trip failed"
+            # selecting a print param targets the inline slider (placement itself
+            # is headless-dependent, so drive the handlers directly below)
+            app._ensure_inline_slider()
+            app._select_patch("exposure")
+            app._inline_slider_name = "exposure"
+            # slider drag (coarse): override = display value mapped EV -> linear
+            app._on_inline_slider("0.5")
+            ov = app.annotations[stem]["print_overrides"].get("exposure")
+            assert ov is not None and abs(ov - 2.0 ** 0.5) < 1e-6, \
+                f"slider drag override wrong: {ov}"
+            assert abs(app._corrected_params(img)["exposure"] - ov) < 1e-9, \
+                "slider override not in corrected params"
+            # wheel = fine step; Shift+wheel = coarse step (the PRINT_STEP pair)
+            before = app._effective_print_value("exposure")
+            app._on_inline_slider_wheel(ev(delta=120))
+            fine = app._effective_print_value("exposure")
+            assert abs((fine - before) - dbg.PRINT_STEP["exposure"][0]) < 1e-6, \
+                f"fine wheel step wrong: {before}->{fine}"
+            app._on_inline_slider_wheel(ev(delta=120, state=0x1))
+            coarse = app._effective_print_value("exposure")
+            assert abs((coarse - fine) - dbg.PRINT_STEP["exposure"][1]) < 1e-6, \
+                f"coarse wheel step wrong: {fine}->{coarse}"
+            # selecting a non-print item hides the slider
+            app._select_patch("film_base")
+            assert app._inline_slider_name is None, \
+                "inline slider not hidden off a print row"
+            # clear the override for later steps
+            app._select_patch("exposure")
+            app._clear_correction()
+            assert "exposure" not in app.annotations[stem]["print_overrides"]
+        step("print_sliders", print_sliders)
+
         # Color wheels: dragging sets wb_low/wb_high directly (real event
         # path), the override lands in corrected params, C reverts to auto
         def wheel_override():
@@ -200,6 +271,39 @@ def main():
                 "C did not clear the highlights wheel override"
         step("wheel_override", wheel_override)
 
+        # per-channel wb sliders: moving R/G/B sets that channel of wb_low/
+        # wb_high directly (full 3-DOF incl. magnitude, unlike the normalized
+        # wheel) so the render matches darktable's numbers exactly.
+        def wb_sliders():
+            name = "wb_shadows"
+            sliders = app.wb_sliders[name]
+            sliders[0].set(0.94)
+            app._on_wb_slider(name, 0, 0.94)
+            sliders[1].set(0.88)
+            app._on_wb_slider(name, 1, 0.88)
+            sliders[2].set(0.73)
+            app._on_wb_slider(name, 2, 0.73)
+            ovr = app.annotations[stem]["wb_overrides"].get("shadows")
+            assert ovr and [round(v, 4) for v in ovr] == [0.94, 0.88, 0.73], \
+                f"slider wb not stored verbatim: {ovr}"
+            assert abs(max(ovr) - 1.0) > 1e-6, \
+                "slider wb must keep darktable magnitude (not normalized to 1)"
+            params = app._corrected_params(img)
+            assert params is not None and \
+                [round(v, 4) for v in params["wb_low"]] == [0.94, 0.88, 0.73], \
+                "slider wb override not applied verbatim in corrected params"
+            # values are clamped to darktable's [0.25, 2.0] range
+            app._on_wb_slider("wb_highlights", 0, 3.0)
+            app._on_wb_slider("wb_highlights", 1, 0.1)
+            hi = app.annotations[stem]["wb_overrides"]["highlights"]
+            assert hi[0] == 2.0 and hi[1] == 0.25, f"wb not clamped: {hi}"
+            # programmatic .set() during sync must NOT register as a user edit
+            del app.annotations[stem]["wb_overrides"]["shadows"]
+            app._sync_wb_sliders()
+            assert "shadows" not in app.annotations[stem]["wb_overrides"], \
+                "_sync_wb_sliders must not create an override via the callback"
+        step("wb_sliders", wb_sliders)
+
         # Wheels resize to fill the panel and keep the marker at the same wb
         def wheel_resize():
             wheel = app.wheels["wb_shadows"]
@@ -211,24 +315,6 @@ def main():
                 abs(wheel._marker_pos[1] - exp[1]) < 1.0, \
                 "marker not re-placed after resize"
         step("wheel_resize", wheel_resize)
-
-        # Fast live preview: a wheel drag renders the negative downscaled for
-        # speed, then upscales back so the display stays in full-frame coords
-        # (zoom/markers keep working); a full-res render follows on settle.
-        def wheel_preview():
-            full = app._neg_lin(img)
-            if full is None:
-                return                       # JPEG-only fallback w/o a negative
-            prev = app._neg_lin_preview(img)
-            fl = max(full.shape[:2])
-            pl = max(prev.shape[:2])
-            assert pl == min(fl, app._PREVIEW_RENDER_MAX), \
-                f"preview not downscaled to the cap: {pl} (full {fl})"
-            app._live_preview = True
-            app._apply_live_render()         # render the low-res preview now
-            assert app.pil_image.size == (img["width"], img["height"]), \
-                f"preview not upscaled to full dims: {app.pil_image.size}"
-        step("wheel_preview", wheel_preview)
 
         # X: compare corrected vs default render
         def compare_toggle():
@@ -454,20 +540,84 @@ def main():
 
         # Live wb feedback for the corrected patch
         def live_wb():
-            corr = app.annotations[stem]["patch_corrections"]["shadows"]
+            corr = app.annotations[stem]["patch_corrections"]["highlights"]
             rgb = app._neg_rgb_at(img, corr)
             assert rgb and len(rgb) == 3, "no negative-space RGB for corrected rect"
-            wb = app._wb_for_patch(img, "shadows", rgb)
+            wb = app._wb_for_patch(img, "highlights", rgb)
             assert wb and len(wb) == 3, "no live wb computed"
         step("live_wb", live_wb)
 
+        # Global film-base override: take the roll-wide base from the current
+        # frame; every other frame's Dmin is transferred via the exposure-factor
+        # ratio, the snapshot persists in the source annotation, and clearing
+        # reverts it.
+        def global_base_override():
+            src = app.images[app.current_idx]
+            rgb = app._effective_film_base_rgb(src)
+            fac = app._frame_factor(src)
+            if not rgb or not fac:
+                return   # frame without a usable base/EXIF — nothing to test
+            app._set_global_base_from_current()
+            assert app.global_base_override and \
+                app.global_base_override["source_stem"] == src["stem"], \
+                "global base not set"
+            assert app.annotations[src["stem"]]["global_base"], "snapshot not stored"
+            other = next((im for im in app.images
+                          if im["stem"] != src["stem"]), None)
+            if other is not None and app._frame_factor(other):
+                exp = an.dmin_for_frame(rgb, fac, app._frame_factor(other))
+                dmin = app._global_base_dmin(other)
+                assert dmin and all(abs(a - b) < 1e-9 for a, b in zip(dmin, exp)), \
+                    f"transfer wrong: {dmin} vs {exp}"
+                params = app._corrected_params(other)
+                assert params is not None and \
+                    all(abs(a - b) < 1e-9 for a, b in zip(params["Dmin"], exp)), \
+                    "override Dmin not in corrected params"
+            app._clear_global_base_override()
+            assert app.global_base_override is None, "override not cleared"
+            assert not app.annotations[src["stem"]]["global_base"], \
+                "snapshot not cleared"
+        step("global_base_override", global_base_override)
+
         # Note on the selected patch
         def note():
-            app._select_patch("shadows")
+            app._select_patch("highlights")
             app.set_selected_note("smoke note")
             app._auto_save(stem)
-            assert app.annotations[stem]["patch_notes"].get("shadows") == "smoke note"
+            assert app.annotations[stem]["patch_notes"].get("highlights") == "smoke note"
         step("note", note)
+
+        # Color-wheel footer sizing: the wheels must grow to fill the footer
+        # pane WITHOUT pushing the darktable-entry boxes off the bottom (the
+        # chrome height is reserved live, not hardcoded). Drive a resize and
+        # assert both wheels + chrome fit inside the pane.
+        def wheel_resize():
+            app.root.update_idletasks()
+            app._resize_wheels(SimpleNamespace(width=app.scaled(360),
+                                               height=app.scaled(560)))
+            sizes = [w.size for w in app.wheels.values()]
+            assert all(s >= dbg.ColorWheel.MIN_SIZE for s in sizes), sizes
+            # entries fit: 2 wheels + measured chrome stay within the pane
+            new_chrome = (app._wheel_wrap.winfo_reqheight()
+                          - sum(w.canvas.winfo_reqheight()
+                                for w in app.wheels.values()))
+            assert sum(sizes) + new_chrome <= app.scaled(560) + 2, \
+                f"wheels+chrome overflow: {sizes} + {new_chrome} > {app.scaled(560)}"
+        step("wheel_resize", wheel_resize)
+
+        # Pane reflow: on a wide window the height-fit image leaves horizontal
+        # slack; reflow must hand it to the item panel (not leave pillarbox).
+        def pane_reflow():
+            app.root.geometry("2200x760")
+            app.root.update_idletasks()
+            app._reflow_panes()
+            app.root.update_idletasks()
+            iw = app.item_pane.winfo_width()
+            item_min = app.scaled(app.ITEM_PANEL_WIDTH)
+            item_max = int(app.paned.winfo_width() * app.REFLOW_ITEM_MAX_FRAC)
+            assert item_min - 2 <= iw <= item_max + 2, \
+                f"item pane width {iw} outside [{item_min}, {item_max}]"
+        step("pane_reflow", pane_reflow)
 
         # View + bad-inversion toggles
         step("view_negative", lambda: app._toggle_view())
@@ -477,7 +627,7 @@ def main():
             assert app.annotations[stem]["bad_inversion"] is True
         step("bad_inversion", bad)
 
-        # Clear correction for film_base (placed first), keep shadows
+        # Clear correction for film_base, keep the highlights correction
         def clear():
             app._select_patch("film_base")
             ccx, ccy = to_canvas(img["width"] // 3, img["height"] // 3)
@@ -496,8 +646,8 @@ def main():
             ann_path = session / f"{stem}_annotations.json"
             assert ann_path.exists(), "annotations json missing"
             data = json.loads(ann_path.read_text())
-            assert data["patch_corrections"]["shadows"]["corrected"], "no corrected rect"
-            assert data["patch_notes"].get("shadows") == "smoke note"
+            assert data["patch_corrections"]["highlights"]["corrected"], "no corrected rect"
+            assert data["patch_notes"].get("highlights") == "smoke note"
             assert data["bad_inversion"] is True
             assert "black" in data["print_overrides"], "print override not saved"
             assert data["print_overrides"]["black"]["applied"] is not None

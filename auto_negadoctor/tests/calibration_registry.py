@@ -44,6 +44,15 @@ _MODULES = {"auto_negadoctor": an, "nega_model": nm}
 # Inversion constants that affect ONLY tune_print_params (fast path eligible).
 PRINT_TUNE_PARAMS = ("PRINT_GAMMA", "PRINT_HI_CEIL", "PRINT_HI_PCT",
                      "PRINT_CLIP_BUDGET", "PRINT_TUNE_ITERS")
+# The film-base search constants read by process_roll's trial-INVARIANT PREFIX
+# (stage A → the global base / Dmin). They are UPSTREAM of the inversion look and
+# are NOT in the inversion REGISTRY (see the inversion block) — the prefix is
+# computed ONCE per session and reused across trials. This tuple is the guard
+# `_make_inversion_full` asserts the fit never touches, so the invariant fails
+# loud if one ever leaks back into the registry.
+BASE_PREFIX_PARAMS = ("BASE_WIN_FRAC", "MIN_WIN_FRAC", "BASE_STRIDE_DIV",
+                      "CLIP_FRAC_MAX", "BASE_MIN_LUMA", "BASE_UNIFORMITY_MAX",
+                      "BASE_MIN_RG_RATIO", "BASE_GB_TOL")
 # Vignette constants that affect ONLY fit_vignette_profile (envelope-fixture
 # fast path; the rest reshape the envelope and need estimate_vignette on TIFFs).
 VIG_FIT_PARAMS = ("VIG_MIN_STRENGTH", "VIG_PEAK_CENTER_FRAC", "VIG_TAIL_CUT_REL")
@@ -86,20 +95,18 @@ REGISTRY = {
     },
 
     # ====================== INVERSION (the picture) =========================
+    # The roll-wide VIGNETTE and the FILM-BASE search (→ the global base / Dmin)
+    # are UPSTREAM of the inversion look: process_roll computes them ONCE per
+    # session (its trial-invariant PREFIX) and they are NOT calibrated by an
+    # inversion session. They are therefore DELIBERATELY ABSENT here — the
+    # film-base constants (BASE_*/CLIP_FRAC_MAX/MIN_WIN_FRAC) and the vignette
+    # constants (VIG_*/BORDER_*) live under their own concerns (vignette is its
+    # own kind; tune crop + vignette FIRST, then inversion). Fitting them here
+    # would move the Dmin/global base out from under every render AND force the
+    # prefix — vignette included — to recompute on every trial. (BORDER_* are not
+    # inversion params at all: BORDER_DARK_THR / BORDER_PAD_FRAC only feed the
+    # vignette mask, BORDER_MAX_FRAC is a crop param.)
     "inversion": {
-        # ---- film base -> Dmin (LUMA + COLOR) ----
-        "BASE_WIN_FRAC":        P(0.02, 0.08, 0.01),
-        "MIN_WIN_FRAC":         P(0.008, 0.03, 0.002),
-        "BASE_STRIDE_DIV":      P(1, 4, 1, integer=True),
-        "CLIP_FRAC_MAX":        P(0.005, 0.05, 0.005),
-        "BASE_MIN_LUMA":        P(0.01, 0.10, 0.005),
-        "BASE_UNIFORMITY_MAX":  P(0.05, 0.20, 0.01),
-        "BASE_MIN_RG_RATIO":    P(1.05, 1.5, 0.05),
-        "BASE_GB_TOL":          P(1.0, 1.2, 0.01),
-        # NB: the film base is searched on the FULL UNCROPPED frame, so NO
-        # BORDER_* constant gates it — BORDER_DARK_THR / BORDER_PAD_FRAC are NOT
-        # inversion params (they only feed detect_dark_border's vignette mask;
-        # see the vignette kind). BORDER_MAX_FRAC is a crop param.
         # ---- density-range pickers / defaults ----
         "P_LOW":                P(0.5, 5.0, 0.5),
         "P_HIGH":               P(98.0, 99.9, 0.1),
@@ -108,8 +115,6 @@ REGISTRY = {
         # ---- neutral-patch search (wb_high source) ----
         "PATCH_WIN_FRAC":         P(0.02, 0.08, 0.01),
         "PATCH_STRIDE_DIV":       P(1, 4, 1, integer=True),
-        "SHADOW_BAND_PCT[0]":     P(0.0, 20.0, 1.0),
-        "SHADOW_BAND_PCT[1]":     P(20.0, 50.0, 2.0),
         "HIGHLIGHT_BAND_PCT[0]":  P(50.0, 80.0, 2.0),
         "HIGHLIGHT_BAND_PCT[1]":  P(85.0, 99.0, 1.0),
         "SHADOW_MIN_LUMA":        P(0.001, 0.02, 0.001),

@@ -419,8 +419,9 @@ emits only `{stem}_debug_nega.json`, and the UI renders the inversion and the
 analysis-crop mask on the fly, so what you see is always the honest output of
 the current algorithm. Markers: local
 film base (orange), GLOBAL winner (gold, double box; other frames carry a
-badge naming the winner), shadows patch (cyan), highlights patch (white),
-corrections (dashed green). **Crop correction (key 8)**: drag a rubber-band
+badge naming the winner), highlights patch (white),
+corrections (dashed green). (There is NO shadows patch — wb_low is region-
+based; the shadows color wheel is its manual control.) **Crop correction (key 8)**: drag a rubber-band
 rectangle around the TRUE photo content when crop detection got it wrong,
 or **grab an individual edge** of the rect (within ~10px, works in ANY mode
 without selecting crop first) and drag just it;
@@ -451,7 +452,11 @@ histogram (content-only in hide-rejected mode); the overlay masks are captured
 from the true render BEFORE mask-blanking so a blanked holder can't read as
 shadow clipping. Driven by `_clip_stats` (in `_refresh_histogram`),
 `_draw_clip_meter`, the clip branch of `_decorate`; smoke-tested
-(`clipping` step). Keys: 1/2/3 select patch kind, Ctrl+Click
+(`clipping` step). Keys: 1/3 select patch kind (film base / highlights — no
+shadows patch), **drag a patch rect to MOVE it** (`_patch_at` +
+handle_press/drag/release; non-Ctrl press inside a patch — film base / shadows /
+highlights — seeds a correction at the moved spot, a press with no movement just
+selects; smoke-tested `drag_patch`), Ctrl+Click
 re-places the selected patch, **scroll resizes it** (first scroll on a
 detected patch seeds a correction from the detected rect, so adjusted sizes
 land in the annotations), C clears, V toggles inverted/negative view, G
@@ -503,6 +508,30 @@ re-renders the disk and re-places marker+pin from the remembered wb). The wb↔w
 projection). Corrections auto-save to
 `{stem}_annotations.json`; closing writes `debug_report.txt` (patch size
 changes + print overrides + wb wheel overrides included) for tuning.
+
+**UI chrome (2026-06-20):** actions live on a **window menu bar** (View /
+Select / Adjust / Navigate / Help, with the key shown as each item's
+accelerator) plus a **top toolbar** of view/navigation toggles; the lower-left
+panel no longer carries the big always-on key list (it's in Help → Shortcuts…).
+The transient on-image text badges (NEGATIVE/DEFAULT/RE-RENDERED, global-base,
+BAD INVERSION, analysis-crop hints) moved OFF the image into a **status strip**
+under the toolbar (`_update_canvas_status`); the gold GLOBAL box + bad-inversion
+red border stay on the image. The per-frame detail (exif/factor, Dmax/blk/exp/g,
+scene, vignette, timings) moved from the cramped left status label into the
+bottom "Selected" panel (shown via `default_info_text` when nothing is selected);
+the left label is now a 3-4 line glance. The base (`common/debug_ui_base.py`)
+gained optional `build_menus`/`build_toolbar` hooks (no-op for crop/dust) and an
+`ITEM_PANEL_WIDTH` knob (negadoctor 360, for bigger color wheels).
+**Global film-base OVERRIDE (Adjust → "Set global film base from this
+frame"):** the auto winner (`choose_global_base`) can be overridden — the
+CURRENT frame's effective film base becomes the roll-wide base and every frame's
+Dmin is transferred from it via `dmin_for_frame` (exposure-factor ratio, the
+same math the pipeline uses). Stored as a snapshot `{winner_rgb, winner_factor}`
+in the SOURCE frame's annotation (`global_base`; one source at a time);
+`_corrected_params` applies the transferred Dmin to every frame (a per-frame
+film-base rect correction still wins locally) and re-derives wb, so it flows
+into the live render AND `applied_results.txt`. Clear via Adjust → "Clear global
+film-base override". Smoke-tested (`global_base_override` step).
 
 ### Testing approach
 
@@ -851,12 +880,15 @@ correction on/off in the preview (before/after). `_review_payload` /
 - [ ] Live darktable re-verify after the bpp=32 switch: Debug mode, then
       InPlace KeepTemp, check darkroom result, Remove, re-run; confirm
       history doesn't grow on re-apply.
-- [ ] DSC_0002-class indoor frames: shadows patch falls back; the user's
-      second-session shadow rect IS valid ((1.0, 0.748→) wb_low works) — the
-      roll-median fallback (B-suppressing) disagrees with it noticeably.
-      Tuning direction from fixtures/annotations: user prefers stronger R in
-      wb_high (DSC_0001: 1.72 vs applied 1.34) and milder B suppression in
-      wb_low. Revisit patch scoring/fallback with the next annotation batch.
+- [ ] DSC_0002-class indoor frames: wb_low's region estimate can fall back to
+      the roll-median (B-suppressing), which disagrees noticeably with the
+      user's manual pick — the second-session shadow rect ((1.0, 0.748→) wb_low)
+      worked. (The shadows PATCH was removed 2026-06-20 — wb_low is region-based
+      / shadows-wheel-driven; this is now about the region estimate + roll-median
+      fallback, not patch scoring.) Tuning direction from fixtures/annotations:
+      user prefers stronger R in wb_high (DSC_0001: 1.72 vs applied 1.34) and
+      milder B suppression in wb_low. Revisit region-wb scoring/fallback with the
+      next annotation batch.
 - [x] Float export confirmed live (8MB .tif, Dmin R 1.0367 unclipped) after
       a darktable restart; guards remain for regressions (Lua reads back
       format.bpp and warns; Python warns on 16-bit TIFF input and records
