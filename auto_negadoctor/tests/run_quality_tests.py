@@ -810,14 +810,23 @@ def _render_crop_rows(lin, border, params, frac=None):
     """Render params over the subsampled content crop -> (N,3) FLOAT sRGB rows
     in [0,1] (NOT 8-bit — full precision so the histogram metric resolves fine
     highlight structure). `frac` is the stride fraction (default the metric's
-    HIST_SUBSAMPLE_FRAC, denser than the tuner). None if empty."""
+    HIST_SUBSAMPLE_FRAC, denser than the tuner). None if empty.
+
+    The render goes through `working_to_srgb` (darktable's colorout: linear
+    Rec2020 working profile -> display sRGB), so the picture-match loss is
+    measured in the SAME space the user evaluated and darktable EXPORTS — proper
+    sRGB. Using the bare sRGB OETF on the Rec2020 values (the old bug) skewed the
+    luma/chroma terms toward yellow, i.e. tuned the 'look' against colors neither
+    the user nor darktable ever saw. sRGB (device-independent) is the right
+    canonical space — NOT the monitor profile, which would tie tuning to one
+    display."""
     l, t, r, b = border
     h, w = lin.shape[:2]
     s = max(1, int(round(w * (HIST_SUBSAMPLE_FRAC if frac is None else frac))))
     region = lin[t:h - b:s, l:w - r:s].reshape(-1, 3)
     if region.size == 0:
         return None
-    return nm.linear_to_srgb(nm.render_negadoctor(region, params))
+    return nm.working_to_srgb(nm.render_negadoctor(region, params))
 
 
 HIST_TERMS = ("total", "luma", "color", "hi999", "hi9999",

@@ -417,7 +417,35 @@ the `_load_display_pil`/`_load_thumb_pil` hooks instead of opening a file).
 There are **no baked preview/mask/overlay images** — `write_debug_sessions`
 emits only `{stem}_debug_nega.json`, and the UI renders the inversion and the
 analysis-crop mask on the fly, so what you see is always the honest output of
-the current algorithm. Markers: local
+the current algorithm. **DISPLAY COLOR (critical — 2026-06-21):** `render_negadoctor`
+emits in the WORKING profile (linear Rec2020), exactly like darktable's
+negadoctor. The display path MUST then run darktable's colorout —
+`nega_model.working_to_srgb` = Rec2020→sRGB primaries matrix (`REC2020_TO_SRGB`)
++ display-gamut clip + sRGB OETF — used by `render_negadoctor_srgb8`, the
+negative-view, and the LLM preview (`render_preview_srgb`). Feeding Rec2020
+straight into `linear_to_srgb` (the old bug) desaturates saturated oranges/reds
+toward YELLOW — the "leaves look yellow in the debug UI but orange in darktable"
+mismatch (user-reported; was R −8/B +8 vs a real darktable sRGB export, now
+<0.3/255 per channel). This is SEPARATE from the earlier sRGB-as-linear INPUT
+saga (Data Flow §2). The histogram/clip-meter read the displayed pixels so they
+follow automatically; `tune_print_params`/`_high_pct`/`_clip_fraction` and the
+spec-04 histogram gate stay in working space ON PURPOSE (negadoctor clips at 1.0
+there; the gate is a relative algo-vs-GT match, same transform both sides).
+**MONITOR COLOR MANAGEMENT (also 2026-06-21):** with values now matching the
+sRGB export to <0.3/255, a residual "debug UI looks MORE saturated than
+darktable" remained — it was the DISPLAY, not the pixels. darktable color-manages
+its darkroom view to the monitor ICC profile; Tkinter blits raw sRGB bytes, which
+OVER-saturate on a wide-gamut panel (the user's monitor is Display P3). The base
+UI (`common/debug_ui_base.py`) now transforms the displayed bitmap sRGB→monitor
+profile at blit time (`_color_manage` in `_redraw` + thumbnails;
+`detect_display_icc` via GetICMProfile on Windows, `build_srgb_to_display_transform`
+= PIL ImageCms relative-colorimetric+BPC). Applied to the DISPLAYED bitmap ONLY —
+analysis/histogram stay on true sRGB (= the export). Override/disable via
+`NEGA_DISPLAY_ICC=<path>|off`; toggle in-app with **P** (View menu). This
+composes correctly because the user's ground truth IS the sRGB export
+(working→sRGB→monitor = a color-managed viewer showing that export). Benefits the
+crop/dust debug UIs too (same wide-gamut over-saturation).
+Markers: local
 film base (orange), GLOBAL winner (gold, double box; other frames carry a
 badge naming the winner), highlights patch (white),
 corrections (dashed green). (There is NO shadows patch — wb_low is region-
@@ -607,7 +635,20 @@ behavior (and self-test non-trivial checkers).
   Inert until the baseline exists (regenerate when bins/subsample change — the
   baseline records both). This is the param-INVARIANT picture-match signal that
   drove the spec-04 PRINT_GAMMA + PRINT_HI_CEIL retunes; the strict
-  per-frame match stays the red-by-design `check_ground_truth`) + baseline diff vs
+  per-frame match stays the red-by-design `check_ground_truth`. **COLOR SPACE OF
+  THE LOSS (2026-06-21):** `_render_crop_rows` renders through
+  `nega_model.working_to_srgb` (linear Rec2020 working profile → display sRGB),
+  so the picture-match EMD is measured in the SAME proper-sRGB space the user
+  evaluated and darktable EXPORTS — NOT the old bare-OETF-on-Rec2020 space (the
+  display-bug colorspace), which skewed the luma/chroma terms toward yellow and
+  tuned the 'look' against colors no one ever saw. sRGB (device-independent) is
+  deliberate — the monitor ICC profile (the debug-UI display CM) is a per-display
+  detail kept OUT of the loss so calibration stays reproducible. The GT itself is
+  stored as PARAMS (colorspace-free), so what the user saw is captured regardless;
+  this fix only aligns the algorithm-tuning loss with it. PRINT_GAMMA/
+  PRINT_HI_CEIL were derived under the OLD metric — re-derive via
+  `calibrate_histogram_match.py` before arming a `histogram_baseline.json`) +
+  baseline diff vs
   `tests/baseline_session/<roll_id>/` (per-roll; params, film-base location,
   shadows/highlights patch positions AND sizes).
 - `tests/generate_baseline.py` — regenerate baseline ONLY after the user

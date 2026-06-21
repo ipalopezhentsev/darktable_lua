@@ -978,8 +978,11 @@ def make_params(dmin, d_max, offset, wb_low, wb_high, picked_min, picked_max,
 
 
 def render_preview_srgb(lin, params):
+    # working-profile linear Rec2020 -> display sRGB (darktable's colorout), so
+    # the preview the vision-LLM sees matches what darktable renders. See
+    # nega_model.working_to_srgb.
     out = nm.render_negadoctor(lin, params)
-    return (nm.linear_to_srgb(out) * 255.0 + 0.5).astype(np.uint8)
+    return (nm.working_to_srgb(out) * 255.0 + 0.5).astype(np.uint8)
 
 
 def tune_print_params(lin, params, border, dmin, hi_ceil=None,

@@ -28,6 +28,8 @@ import sys
 import os
 import json
 import math
+import os
+import sys
 import datetime
 import threading
 import queue
@@ -37,6 +39,69 @@ import tkinter.ttk as ttk
 from tkinter import messagebox
 
 from PIL import Image, ImageTk
+
+
+# ---------------------------------------------------------------------------
+# Display color management (match darktable's color-managed darkroom view)
+#
+# All preview pixels here are sRGB (the analysis space). darktable renders its
+# darkroom/export THROUGH the monitor's ICC profile; on a wide-gamut panel
+# (e.g. Display P3) un-managed sRGB bytes look OVER-saturated (reds/oranges most
+# of all), so the debug UI must do the same sRGB -> monitor-profile transform on
+# what it blits — otherwise the user tunes WB/exposure against colors darktable
+# will never show. The transform is applied to the DISPLAYED bitmap only; the
+# histogram / clip analysis stay on the true sRGB values (which match the
+# darktable EXPORT). Override the detected profile with NEGA_DISPLAY_ICC=<path>;
+# set NEGA_DISPLAY_ICC=off to disable color management entirely.
+# ---------------------------------------------------------------------------
+
+def detect_display_icc():
+    """Path to the active monitor's ICC profile, or None. Honors the
+    NEGA_DISPLAY_ICC override ('off' disables); Windows-native detection via
+    GetICMProfile, otherwise None (un-managed, same as before)."""
+    env = os.environ.get("NEGA_DISPLAY_ICC")
+    if env:
+        if env.lower() == "off":
+            return None
+        return env if os.path.exists(env) else None
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+            hdc = user32.GetDC(0)
+            try:
+                size = wintypes.DWORD(0)
+                gdi32.GetICMProfileW(hdc, ctypes.byref(size), None)
+                buf = ctypes.create_unicode_buffer(size.value or 260)
+                if gdi32.GetICMProfileW(hdc, ctypes.byref(size), buf):
+                    return buf.value
+            finally:
+                user32.ReleaseDC(0, hdc)
+        except Exception:
+            return None
+    return None
+
+
+def build_srgb_to_display_transform():
+    """A PIL ImageCms transform sRGB -> the monitor profile (relative
+    colorimetric, BPC), or None when no profile / not applicable / PIL lacks
+    littleCMS. Relative-colorimetric is darktable's default display intent and
+    is what matters here (sRGB sits inside wide-gamut panels, so it's a faithful
+    primaries remap with no perceptual gamut compression to disagree about)."""
+    path = detect_display_icc()
+    if not path:
+        return None
+    try:
+        from PIL import ImageCms
+        dst = ImageCms.getOpenProfile(path)
+        src = ImageCms.createProfile("sRGB")
+        return ImageCms.buildTransform(
+            src, dst, "RGB", "RGB",
+            renderingIntent=ImageCms.Intent.RELATIVE_COLORIMETRIC,
+            flags=ImageCms.Flags.BLACKPOINTCOMPENSATION)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +222,10 @@ class DebugUIBase:
 
         # Visibility
         self.hide_markers = False
+
+        # Display color management (sRGB -> monitor profile, like darktable).
+        # On by default; the transform itself is built lazily/cached on first use.
+        self.color_manage = True
 
         # Rubber-band drag
         self.drag_start: "tuple | None" = None
@@ -803,6 +872,7 @@ class DebugUIBase:
             dw = max(1, int((vis_x2 - vis_x1) * self.zoom))
             dh = max(1, int((vis_y2 - vis_y1) * self.zoom))
             resized = crop.resize((dw, dh), resample)
+            resized = self._color_manage(resized)
             self.photo_image = ImageTk.PhotoImage(resized)
             draw_x = self.offset_x + vis_x1 * self.zoom
             draw_y = self.offset_y + vis_y1 * self.zoom
@@ -810,6 +880,29 @@ class DebugUIBase:
                                      image=self.photo_image, tags="bg")
 
         self._redraw_markers()
+
+    def _color_manage(self, pil):
+        """sRGB preview bitmap -> monitor profile (matches darktable's
+        color-managed view). No-op when color management is off or unavailable.
+        The transform is built once and cached (None caches the unavailable
+        case so detection runs at most once)."""
+        if not getattr(self, "color_manage", True):
+            return pil
+        if not hasattr(self, "_cms_xform"):
+            self._cms_xform = build_srgb_to_display_transform()
+        if self._cms_xform is None:
+            return pil
+        try:
+            from PIL import ImageCms
+            return ImageCms.applyTransform(pil.convert("RGB"), self._cms_xform)
+        except Exception:
+            return pil
+
+    def color_management_available(self):
+        """True when a monitor ICC transform is in effect (drives the toggle UI)."""
+        if not hasattr(self, "_cms_xform"):
+            self._cms_xform = build_srgb_to_display_transform()
+        return self._cms_xform is not None
 
     def _redraw_markers(self):
         self.canvas.delete(*self.overlay_tags(), "rubberband")
@@ -1126,7 +1219,7 @@ class DebugUIBase:
             while True:
                 i, pil_img = self._thumb_queue.get_nowait()
                 if pil_img is not None:
-                    photo = ImageTk.PhotoImage(pil_img)
+                    photo = ImageTk.PhotoImage(self._color_manage(pil_img))
                     self.lb_photos[i] = photo
                     self.lb_img_labels[i].config(image=photo, text="", width=0, height=0)
         except queue.Empty:

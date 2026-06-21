@@ -1038,6 +1038,8 @@ class NegadoctorDebugUI(DebugUIBase):
         "  M           cycle analysis-crop view (tint / hide rejected)\n"
         "  T           histogram on / off\n"
         "  L           on-image clip overlay (red=blown, blue=crushed)\n"
+        "  P           display color management on / off (sRGB->monitor;\n"
+        "              ON matches darktable's color-managed view)\n"
         "  G           toggle the bad-inversion flag\n"
         "  H           hide / show markers\n"
         "  F           fit to window;  + / -  zoom;  arrows pan\n\n"
@@ -1075,6 +1077,8 @@ class NegadoctorDebugUI(DebugUIBase):
                          command=self._toggle_histogram)
         view.add_command(label="Clip overlay on / off", accelerator="L",
                          command=self._toggle_clipping)
+        view.add_command(label="Display color management on / off",
+                         accelerator="P", command=self._toggle_color_manage)
         view.add_command(label="Hide / show markers", accelerator="H",
                          command=self._toggle_hide_markers)
         view.add_separator()
@@ -1485,6 +1489,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<T>", lambda e: self._toggle_histogram())
         self.bind_key("<l>", lambda e: self._toggle_clipping())
         self.bind_key("<L>", lambda e: self._toggle_clipping())
+        self.bind_key("<p>", lambda e: self._toggle_color_manage())
+        self.bind_key("<P>", lambda e: self._toggle_color_manage())
         # ] brighter / [ darker: black + exposure in unison (see _brighten)
         self.bind_key("<bracketright>", lambda e: self._brighten(False))
         self.bind_key("<bracketleft>", lambda e: self._brighten(True))
@@ -1606,8 +1612,10 @@ class NegadoctorDebugUI(DebugUIBase):
             # show the linearized negative through the pipeline loader
             lin = self._neg_lin(img_dict)
             if lin is not None:
-                arr = (nm.linear_to_srgb(np.clip(lin, 0.0, 1.0)) * 255.0
-                       + 0.5).astype(np.uint8)
+                # working-profile (linear Rec2020) -> display sRGB, same
+                # colorout the inverted preview uses, so the negative view is
+                # color-faithful to darktable too.
+                arr = (nm.working_to_srgb(lin) * 255.0 + 0.5).astype(np.uint8)
                 self._set_display_image(Image.fromarray(arr))
             else:
                 self._set_display_image(Image.open(neg_path))
@@ -2266,6 +2274,19 @@ class NegadoctorDebugUI(DebugUIBase):
         self.show_histogram = not self.show_histogram
         self._update_hist_btn()
         self._redraw_markers()
+
+    def _toggle_color_manage(self):
+        """P: toggle sRGB->monitor-profile display color management. ON matches
+        darktable's color-managed view; OFF shows raw sRGB bytes (over-saturated
+        on a wide-gamut panel). No effect if no monitor profile was detected."""
+        if not self.color_management_available():
+            messagebox.showinfo(
+                "Display color management",
+                "No monitor ICC profile detected — display is already raw sRGB.\n"
+                "Set NEGA_DISPLAY_ICC=<path> to force one.")
+            return
+        self.color_manage = not self.color_manage
+        self._redraw()
 
     def _update_hist_btn(self):
         if not hasattr(self, "hist_btn"):
