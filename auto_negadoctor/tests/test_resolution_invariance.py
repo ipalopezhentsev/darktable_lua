@@ -86,6 +86,39 @@ def main():
     print("detect_content_crop scales 2x:")
     _check("crop", c1, c2, results)
 
+    # film-base candidate: the rebate strip is the base rectangle. Its rect must
+    # scale ~2x and its area FRACTION must stay constant across resolution.
+    enc = np.zeros_like(lin)        # float-TIFF semantics: no clip flag
+    enc2 = np.zeros_like(lin2)
+    win1 = max(int(480 * an.DEFAULT_TUNING.BASE_WIN_FRAC),
+               int(round(480 * an.DEFAULT_TUNING.MIN_WIN_FRAC)))
+    win2 = max(int(960 * an.DEFAULT_TUNING.BASE_WIN_FRAC),
+               int(round(960 * an.DEFAULT_TUNING.MIN_WIN_FRAC)))
+    fb1 = an.find_film_base_candidate(lin, enc, win1)
+    fb2 = an.find_film_base_candidate(lin2, enc2, win2)
+    found = bool(fb1) and bool(fb2)
+    results.append(found)
+    print(f"\n  [{'PASS' if found else 'FAIL'}] film-base rectangle found at both "
+          f"resolutions")
+    if found:
+        # The rectangle is located on a COARSE grid (cell = BASE_SCAN_STRIDE_FRAC
+        # of width), so each edge can shift by up to ~one coarse cell (~4px at 2x)
+        # — a quantization, not a resolution-tied constant (an absolute constant
+        # would not scale at all). area_frac below is the strong invariance proof.
+        base_tol = 2 * max(int(round(960 * an.DEFAULT_TUNING.BASE_SCAN_STRIDE_FRAC)), 1)
+        print(f"find_film_base_candidate rect scales 2x (+/-{base_tol}px coarse-grid):")
+        for i, edge in enumerate(("x", "y", "w", "h")):
+            expected = fb1["rect"][i] * 2
+            ok = abs(fb2["rect"][i] - expected) <= base_tol
+            results.append(ok)
+            print(f"  [{'PASS' if ok else 'FAIL'}] base {edge}: {fb1['rect'][i]} -> "
+                  f"{fb2['rect'][i]} (expect ~{expected})")
+        af_ok = abs(fb1["area_frac"] - fb2["area_frac"]) <= 0.01
+        results.append(af_ok)
+        print(f"  [{'PASS' if af_ok else 'FAIL'}] base area_frac stable: "
+              f"{fb1['area_frac']:.4f} -> {fb2['area_frac']:.4f} (frame fraction, "
+              f"must not change with resolution)")
+
     print()
     if all(results):
         print("ALL CHECKS PASSED")

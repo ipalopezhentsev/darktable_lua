@@ -620,28 +620,64 @@ def _rect_from_center(cx, cy, win):
 # Film base detection (negative space)
 # ---------------------------------------------------------------------------
 
+def _largest_true_rectangle(mask):
+    """Largest axis-aligned all-True rectangle in a boolean 2D array.
+
+    Classic histogram/stack method, O(H*W): row by row, `heights[c]` counts
+    consecutive True cells ending at this row, then the maximal rectangle under
+    that histogram is found with a monotonic stack. Returns (x, y, w, h, area)
+    in mask coordinates; area 0 (and a degenerate rect) if the mask is all-False.
+    The per-row stack runs in Python, so callers pass a COARSE mask (see
+    find_film_base_candidate) to keep it cheap.
+    """
+    H, W = mask.shape
+    heights = np.zeros(W, dtype=np.int32)
+    best = (0, 0, 0, 0, 0)
+    for row in range(H):
+        heights = np.where(mask[row], heights + 1, 0)
+        hl = heights.tolist()
+        stack = []                       # indices of non-decreasing-height bars
+        c = 0
+        while c <= W:
+            cur = hl[c] if c < W else 0
+            if not stack or cur >= hl[stack[-1]]:
+                stack.append(c)
+                c += 1
+            else:
+                top = stack.pop()
+                ht = hl[top]
+                left = stack[-1] + 1 if stack else 0
+                area = ht * (c - left)
+                if area > best[4]:
+                    best = (left, row - ht + 1, c - left, ht, area)
+    return best
+
+
 def find_film_base_candidate(lin, enc_f, win, cfg=DEFAULT_TUNING):
-    """Find the lightest uniform orange window = local film-base candidate.
+    """Find the LARGEST uniform-orange RECTANGLE = local film-base candidate.
 
     lin: (H,W,3) float32 linear RGB; enc_f: (H,W,3) float32 stored-encoding
     values in [0,1] (sRGB for JPEG, linear for TIFF — used for clipping
-    detection); win: window px.
+    detection); win: uniformity-window px.
 
-    The search spans the FULL UNCROPPED frame — the film base is the lightest
-    uniform ORANGE window ANYWHERE (the unexposed rebate is usually it, and it
-    sits OUTSIDE the content crop), so the search is deliberately NOT confined
-    to any crop/border. The filters below are what exclude non-base regions:
-    the holder is dark/neutral (rejected by BASE_MIN_LUMA + the orange ratio),
-    and WHITE clipping (all three channels at ceiling = stray backlight through
-    holes) is rejected too; a JPEG export clips the orange base's R channel
-    alone, and such windows are still the best Dmin estimate available there.
+    The search spans the FULL UNCROPPED frame — the film base is uniform ORANGE
+    ANYWHERE (the unexposed rebate / the divider strip between two frames in the
+    holder, both OUTSIDE the content crop), so it is deliberately NOT confined to
+    any crop/border. We build a per-pixel "base-like" mask (orange + bright +
+    locally uniform + not white-clipped — same guards that excluded the
+    dark/neutral holder and stray backlight before) and take the LARGEST
+    inscribed rectangle of it. A truly UNEXPOSED region forms a big solid
+    rectangle; an incidental bright-orange scrap (the old fixed-window search
+    would happily pick it as the "lightest orange window") forms only a tiny one.
+    `area_frac` (rect area / frame area) is that confidence and is what
+    choose_global_base weighs when picking the roll-wide base.
 
-    Returns dict {rect:[x,y,w,h], rgb_linear:[r,g,b], score, clipped_r} or None.
+    Returns dict {rect:[x,y,w,h], rgb_linear:[r,g,b], score, clipped_r,
+    area_frac} or None.
     """
     h, w = lin.shape[:2]
-    stride = max(win // cfg.BASE_STRIDE_DIV, 1)
 
-    mean_rgb = _box_mean(lin, win)                       # (H,W,3)
+    mean_rgb = _box_mean(lin, win)                       # (H,W,3) local average
     luma = lin.mean(axis=2)
     mean_luma = _box_mean(luma, win)
     mean_luma_sq = _box_mean(luma * luma, win)
@@ -652,53 +688,92 @@ def find_film_base_candidate(lin, enc_f, win, cfg=DEFAULT_TUNING):
     any_clipped = (enc_f >= CLIP_SRGB_THR).any(axis=2).astype(np.float32)
     any_clip_frac = _box_mean(any_clipped, win)
 
-    ys, xs = _grid_centers(h, w, (0, 0, 0, 0), win, stride)   # FULL frame
-    if len(ys) == 0 or len(xs) == 0:
-        return None
-    grid = np.ix_(ys, xs)
-
-    m = mean_rgb[grid]                                   # (ny,nx,3)
-    ok = (
-        (white_clip_frac[grid] < cfg.CLIP_FRAC_MAX)
-        & (mean_luma[grid] >= cfg.BASE_MIN_LUMA)
-        & (rel_std[grid] <= cfg.BASE_UNIFORMITY_MAX)
-        & (m[..., 0] >= cfg.BASE_MIN_RG_RATIO * m[..., 1])   # strongly orange
-        & (m[..., 1] * cfg.BASE_GB_TOL >= m[..., 2])
+    base_like = (
+        (white_clip_frac < cfg.CLIP_FRAC_MAX)
+        & (mean_luma >= cfg.BASE_MIN_LUMA)
+        & (rel_std <= cfg.BASE_UNIFORMITY_MAX)
+        & (mean_rgb[..., 0] >= cfg.BASE_MIN_RG_RATIO * mean_rgb[..., 1])  # orange
+        & (mean_rgb[..., 1] * cfg.BASE_GB_TOL >= mean_rgb[..., 2])
     )
-    if not ok.any():
+    if not base_like.any():
         return None
 
-    score = np.where(ok, mean_luma[grid], -1.0)
-    iy, ix = np.unravel_index(int(np.argmax(score)), score.shape)
-    cy, cx = int(ys[iy]), int(xs[ix])
+    # Find the maximal rectangle on a COARSE grid (the per-row stack is Python).
+    # A coarse cell counts as base when >= BASE_MASK_SOLID_FRAC of its pixels are
+    # base-like; the cell size is a fraction of width, so this is resolution-
+    # invariant and the area is reported as a frame-area FRACTION.
+    stride = max(int(round(w * cfg.BASE_SCAN_STRIDE_FRAC)), 1)
+    cw, ch = max(w // stride, 1), max(h // stride, 1)
+    coarse = cv2.resize(base_like.astype(np.float32), (cw, ch),
+                        interpolation=cv2.INTER_AREA)
+    solid = coarse >= cfg.BASE_MASK_SOLID_FRAC
+    cx, cy, crw, crh, carea = _largest_true_rectangle(solid)
+    if carea == 0:
+        return None
+
+    # Map the coarse rectangle back to full-res pixels.
+    sx, sy = w / cw, h / ch
+    px = int(round(cx * sx))
+    py = int(round(cy * sy))
+    pw = max(int(round(crw * sx)), 1)
+    ph = max(int(round(crh * sy)), 1)
+    px = max(0, min(px, w - 1))
+    py = max(0, min(py, h - 1))
+    pw = min(pw, w - px)
+    ph = min(ph, h - py)
+
+    # Sample the base color over the base-like pixels INSIDE the rectangle (the
+    # coarse cells were only >= SOLID_FRAC base, so a few stragglers are excluded).
+    region = lin[py:py + ph, px:px + pw]
+    rmask = base_like[py:py + ph, px:px + pw]
+    if rmask.any():
+        rgb = region[rmask].mean(axis=0)
+        mlum = float(luma[py:py + ph, px:px + pw][rmask].mean())
+    else:
+        rgb = region.reshape(-1, 3).mean(axis=0)
+        mlum = float(luma[py:py + ph, px:px + pw].mean())
+
     return {
-        "rect": _rect_from_center(cx, cy, win),
-        "rgb_linear": [float(v) for v in mean_rgb[cy, cx]],
-        "score": float(mean_luma[cy, cx]),
-        "clipped_r": float(any_clip_frac[cy, cx]) > cfg.CLIP_FRAC_MAX,
+        "rect": [px, py, pw, ph],
+        "rgb_linear": [float(v) for v in rgb],
+        "score": mlum,
+        "clipped_r": float(any_clip_frac[py:py + ph, px:px + pw].mean()) > cfg.CLIP_FRAC_MAX,
+        "area_frac": float(carea) / float(cw * ch),
     }
 
 
-def choose_global_base(frames):
-    """Pick the physically lightest film-base candidate across the roll.
+def choose_global_base(frames, cfg=DEFAULT_TUNING):
+    """Pick the roll-wide film base = the BRIGHTEST exposure-compensated base
+    among frames that have a sizable uniform base region.
 
-    frames: list of per-frame dicts with "stem", "base" (or None) and
-    "exposure_factor". Physical lightness = mean(rgb_linear) / factor: the
-    same registered value under more light means a darker physical patch.
+    Dmin is the film's MINIMUM density — the BRIGHTEST point on the negative
+    (truly unexposed base). So BRIGHTNESS decides, never area: a larger but
+    DARKER uniform region is more-exposed film, NOT the base, and forcing it onto
+    the roll as Dmin wrecks every frame's inversion (the cross-frame "one frame
+    goes dark blue when run with another" bug — a big dark region out-scored a
+    small bright true base). Area is only a CONFIDENCE GATE (BASE_AREA_MIN_FRAC)
+    so a tiny bright fleck can't win; if no frame clears it, all candidates are
+    considered. Picking off non-base bright scraps is prevented UPSTREAM by the
+    uniform-orange base_like mask (find_film_base_candidate), not here.
+
+    frames: per-frame dicts with "stem", "base" (or None), "exposure_factor".
+    Physical lightness = mean(rgb_linear)/factor (the same registered value under
+    more light = a darker physical patch). area_frac = the base rectangle's frame
+    fraction (see find_film_base_candidate).
 
     Returns (winner_stem or None, winner_rgb, winner_factor).
     """
-    best = None
-    for fr in frames:
-        if not fr["base"]:
-            continue
-        phys = float(np.mean(fr["base"]["rgb_linear"])) / fr["exposure_factor"]
-        if best is None or phys > best[0]:
-            best = (phys, fr)
-    if best is None:
+    cands = [fr for fr in frames if fr.get("base")]
+    if not cands:
         return None, None, None
-    fr = best[1]
-    return fr["stem"], fr["base"]["rgb_linear"], fr["exposure_factor"]
+
+    def phys(fr):
+        return float(np.mean(fr["base"]["rgb_linear"])) / fr["exposure_factor"]
+
+    qualifying = [fr for fr in cands
+                  if float(fr["base"].get("area_frac", 0.0)) >= cfg.BASE_AREA_MIN_FRAC]
+    winner = max(qualifying or cands, key=phys)
+    return winner["stem"], winner["base"]["rgb_linear"], winner["exposure_factor"]
 
 
 def dmin_for_frame(winner_rgb, winner_factor, frame_factor):
@@ -1478,9 +1553,18 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
             fr["exposure_factor"] = factor
             # Film base is searched on the FULL UNCROPPED frame (no border): it
             # is the lightest uniform orange patch anywhere — typically the
-            # unexposed rebate, which sits OUTSIDE the eventual content crop.
-            # The content crop (fr["border"]) is computed later, in stage B1.
-            win = max(int(w * cfg.BASE_WIN_FRAC), int(round(w * cfg.MIN_WIN_FRAC)))
+            # unexposed rebate / the divider strip between two frames, which sit
+            # OUTSIDE the eventual content crop. The content crop (fr["border"])
+            # is computed later, in stage B1.
+            #
+            # The uniformity window is sized by BASE_WIN_FRAC ALONE — NOT floored
+            # by the neutral-patch MIN_WIN_FRAC. A window wider than the base
+            # strip straddles its edges into the scene, so a thin lifeless strip
+            # reads as textured and is missed (the bug behind "it picked dark
+            # trees instead of my black divider strip"): the window must be able
+            # to fit INSIDE a thin strip. The 3px floor only keeps the box filter
+            # valid; it never binds at real export widths.
+            win = max(int(round(w * cfg.BASE_WIN_FRAC)), 3)
             fr["base_win"] = win
             fr["base"] = find_film_base_candidate(lin, enc_f, win, cfg)
             # picker percentiles need the frame's Dmin (content masking) and
@@ -1500,7 +1584,7 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
               f"clamped at 1.0 and the film base's R channel is clipped. "
               f"Reload auto_negadoctor.lua in darktable so exports use "
               f"32-bit float TIFF.")
-    winner_stem, winner_rgb, winner_factor = choose_global_base(good)
+    winner_stem, winner_rgb, winner_factor = choose_global_base(good, cfg)
     winner_rect = (next(f["base"]["rect"] for f in good if f["stem"] == winner_stem)
                    if winner_stem is not None else None)
     if winner_stem is not None:

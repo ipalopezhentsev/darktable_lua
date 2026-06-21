@@ -1019,6 +1019,8 @@ class NegadoctorDebugUI(DebugUIBase):
         "KEYS\n"
         "  Space / B   next / previous image\n"
         "  1 / 3       film base / highlights patch\n"
+        "              (film base sel'd: drag a RECTANGLE around the true\n"
+        "               unexposed strip; scroll grows/shrinks, C clears)\n"
         "  4 / 5 / 6 / 7   paper black / gamma / gloss / print exposure\n"
         "              (drag the print-properties sliders, or scroll the\n"
         "               selected param; Shift = big step. Shown in darktable\n"
@@ -2541,6 +2543,26 @@ class NegadoctorDebugUI(DebugUIBase):
         if rect is None:
             return True   # nothing placed yet: Ctrl+Click first
         x, y, w, h = [int(v) for v in rect]
+
+        if self.selected_patch == "film_base":
+            # grow/shrink ALL sides, keeping the (possibly non-square) rectangle
+            # the user drew — collapsing it to a square would undo the rubber-band
+            d = delta * step
+            x, y = x - d, y - d
+            w, h = w + 2 * d, h + 2 * d
+            x = max(0, x)
+            y = max(0, y)
+            w = max(6, min(img_dict["width"] - x, w))
+            h = max(6, min(img_dict["height"] - y, h))
+            self.annotations[stem]["patch_corrections"]["film_base"] = [x, y, w, h]
+            self._auto_save(stem)
+            self._redraw_markers()
+            self._update_count_label()
+            self._populate_items_list()
+            self._update_info_from_selection()
+            self._schedule_live_render()
+            return True
+
         min_sz = 10
         max_sz = int(min(img_dict["width"], img_dict["height"]) * 0.4)
         new_sz = max(min_sz, min(max_sz, w + delta * step))
@@ -2827,19 +2849,36 @@ class NegadoctorDebugUI(DebugUIBase):
         return True
 
     def on_rubber_band(self, ix1, iy1, ix2, iy2, additive):
-        """A rubber-band drag defines the true photo-content rectangle when
-        "crop" is selected — or whenever the analysis-crop view (M) is
-        active, where drawing the crop is the natural intent (a drag there
-        used to be silently discarded unless crop was also selected)."""
+        """A rubber-band drag defines a rectangle. When the FILM-BASE patch is
+        selected (key 1) it draws the film-base SAMPLE rect — an arbitrary
+        rectangle, not a square — so the user can mark the true unexposed strip
+        (the algorithm's window/square can't follow a thin rebate or divider).
+        Otherwise it defines the photo-content crop rect when "crop" is selected
+        or the analysis-crop view (M) is active (a drag there used to be silently
+        discarded unless crop was also selected)."""
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        x0 = max(0, int(round(min(ix1, ix2))))
+        y0 = max(0, int(round(min(iy1, iy2))))
+        x1 = min(img_dict["width"], int(round(max(ix1, ix2))))
+        y1 = min(img_dict["height"], int(round(max(iy1, iy2))))
+
+        if self.selected_patch == "film_base":
+            if x1 - x0 < 6 or y1 - y0 < 6:   # base strips are thin; small floor
+                return
+            self.annotations[stem]["patch_corrections"]["film_base"] = \
+                [x0, y0, x1 - x0, y1 - y0]
+            self._auto_save(stem)
+            self._redraw_markers()
+            self._update_count_label()
+            self._populate_items_list()
+            self._update_info_from_selection()
+            self._schedule_live_render()
+            return
+
         if self.selected_patch != CROP_NAME and self.mask_view == 0:
             return
         self.selected_patch = CROP_NAME
-        img_dict = self.images[self.current_idx]
-        stem = img_dict["stem"]
-        x0 = max(0, int(round(ix1)))
-        y0 = max(0, int(round(iy1)))
-        x1 = min(img_dict["width"], int(round(ix2)))
-        y1 = min(img_dict["height"], int(round(iy2)))
         if x1 - x0 < 40 or y1 - y0 < 40:
             return
         self.annotations[stem]["crop_correction"] = [x0, y0, x1 - x0, y1 - y0]

@@ -110,14 +110,24 @@ FIELDS = collections.OrderedDict([
     ("CROP_SHADOW_CORE_FRAC", _F("when the depressed band continues past the shadow max, its core depth (frac)")),
     ("CROP_GAP_TOL_FRAC", _F("junk must form an EDGE-ANCHORED run; tolerate gaps up to this (frac)")),
 
-    # --- film-base window search (on the negative) ---------------------------
+    # --- film-base rectangle search (on the negative) ------------------------
     ("BASE_GB_TOL", _F("film base is orange: require G*tol >= B")),
     ("BASE_MIN_LUMA", _F("linear; reject base windows darker than this")),
     ("BASE_MIN_RG_RATIO", _F("film base is strongly orange: R >= ratio*G")),
-    ("BASE_STRIDE_DIV", _F("search stride = window / this", kind="int")),
-    ("BASE_UNIFORMITY_MAX", _F("luma std/mean above this = textured, reject")),
-    ("BASE_WIN_FRAC", _F("base search window side as fraction of image width")),
+    ("BASE_UNIFORMITY_MAX", _F("luma std/mean above this = textured (e.g. foliage), reject; the lifeless unexposed base is far below it")),
+    ("BASE_WIN_FRAC", _F("base uniformity window side as fraction of image width; sized ALONE (NOT floored by MIN_WIN_FRAC) so it can fit inside a thin base strip")),
     ("CLIP_FRAC_MAX", _F("max fraction of white-clipped px in a base window")),
+    ("BASE_SCAN_STRIDE_FRAC", _F(
+        "coarse-grid cell side (frac of width) for the largest-base-rectangle "
+        "search; a cell counts as base when >= BASE_MASK_SOLID_FRAC of its "
+        "pixels are base-like")),
+    ("BASE_MASK_SOLID_FRAC", _F(
+        "fraction of a coarse cell's pixels that must be base-like for the cell "
+        "to count toward the rectangle")),
+    ("BASE_AREA_MIN_FRAC", _F(
+        "min base-rectangle area (frac of frame area) for a frame to QUALIFY as "
+        "the roll-base source; among qualifiers the BRIGHTEST wins (area is a "
+        "confidence gate, never outranks brightness). If none qualify, all do.")),
 
     # --- neutral-patch search (on the rendered inverted preview) -------------
     ("MIN_PATCH_DENSITY", _F("patch must be >= this much denser (log10 D) than film base, else the wb formulas degenerate")),
@@ -227,8 +237,9 @@ GROUPS = collections.OrderedDict([
     ])),
     ("inversion", collections.OrderedDict([
         ("film_base", ["BASE_GB_TOL", "BASE_MIN_LUMA", "BASE_MIN_RG_RATIO",
-                       "BASE_STRIDE_DIV", "BASE_UNIFORMITY_MAX", "BASE_WIN_FRAC",
-                       "CLIP_FRAC_MAX"]),
+                       "BASE_UNIFORMITY_MAX", "BASE_WIN_FRAC", "CLIP_FRAC_MAX",
+                       "BASE_SCAN_STRIDE_FRAC", "BASE_MASK_SOLID_FRAC",
+                       "BASE_AREA_MIN_FRAC"]),
         ("neutral_patch", ["MIN_PATCH_DENSITY", "PATCH_CHROMA_FLOOR", "PATCH_CHROMA_MAX",
                            "PATCH_LUMA_FLOOR", "PATCH_STRIDE_DIV", "PATCH_UNIFORMITY_MAX",
                            "PATCH_WIN_FRAC", "HIGHLIGHT_CLIP_FRAC_MAX", "SHADOW_MIN_LUMA",

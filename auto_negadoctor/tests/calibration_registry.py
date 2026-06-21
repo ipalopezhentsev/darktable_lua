@@ -50,9 +50,10 @@ PRINT_TUNE_PARAMS = ("PRINT_GAMMA", "PRINT_HI_CEIL", "PRINT_HI_PCT",
 # computed ONCE per session and reused across trials. This tuple is the guard
 # `_make_inversion_full` asserts the fit never touches, so the invariant fails
 # loud if one ever leaks back into the registry.
-BASE_PREFIX_PARAMS = ("BASE_WIN_FRAC", "MIN_WIN_FRAC", "BASE_STRIDE_DIV",
-                      "CLIP_FRAC_MAX", "BASE_MIN_LUMA", "BASE_UNIFORMITY_MAX",
-                      "BASE_MIN_RG_RATIO", "BASE_GB_TOL")
+BASE_PREFIX_PARAMS = ("BASE_WIN_FRAC", "MIN_WIN_FRAC", "BASE_SCAN_STRIDE_FRAC",
+                      "BASE_MASK_SOLID_FRAC", "BASE_AREA_MIN_FRAC",
+                      "CLIP_FRAC_MAX", "BASE_MIN_LUMA",
+                      "BASE_UNIFORMITY_MAX", "BASE_MIN_RG_RATIO", "BASE_GB_TOL")
 # Vignette constants that affect ONLY fit_vignette_profile (envelope-fixture
 # fast path; the rest reshape the envelope and need estimate_vignette on TIFFs).
 VIG_FIT_PARAMS = ("VIG_MIN_STRENGTH", "VIG_PEAK_CENTER_FRAC", "VIG_TAIL_CUT_REL")

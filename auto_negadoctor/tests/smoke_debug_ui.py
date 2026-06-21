@@ -129,17 +129,31 @@ def main():
         step("scroll_resize", resize)
 
         # Resize a DETECTED patch (no prior correction): seeds one. Uses the
-        # film-base patch (highlights already has a correction from above).
+        # film-base patch (highlights already has a correction from above). The
+        # film base grows on ALL sides (keeping its rectangle), not square-style.
         def resize_detected():
             det = app._detected_rect(img, "film_base")
             if det is None:
                 return
             app._select_patch("film_base")
-            app._on_mousewheel(ev(100, 100, delta=120))
+            app._on_mousewheel(ev(100, 100, delta=120))   # one step (=2 px) out
             corr = app.annotations[stem]["patch_corrections"].get("film_base")
-            assert corr and corr[2] == det[2] + 2, \
-                f"detected-patch resize did not seed correction: {corr} from {det}"
+            assert (corr and corr[0] == det[0] - 2 and corr[1] == det[1] - 2
+                    and corr[2] == det[2] + 4 and corr[3] == det[3] + 4), \
+                f"detected film-base resize (all sides) wrong: {corr} from {det}"
         step("resize_detected", resize_detected)
+
+        # Draw a free RECTANGLE for the film base (rubber-band while film-base is
+        # selected): the true unexposed strip is often thin/non-square, which the
+        # old square-only patch could not capture.
+        def draw_base_rect():
+            app._select_patch("film_base")
+            app.on_rubber_band(100, 200, 460, 260, False)
+            corr = app.annotations[stem]["patch_corrections"]["film_base"]
+            assert corr == [100, 200, 360, 60], \
+                f"rubber-band film-base rect wrong: {corr}"
+            assert corr[2] != corr[3], "film-base rect must not be forced square"
+        step("draw_base_rect", draw_base_rect)
 
         # Drag a patch to move it (real press/drag/release event path). The
         # film-base patch has a correction by now; grabbing inside its rect and
