@@ -1,0 +1,39 @@
+{
+  "stem": "DSC_0019",
+  "patch_corrections": {},
+  "print_overrides": {
+    "exposure": {
+      "applied": 1.0553341832998289,
+      "corrected": 1.0
+    }
+  },
+  "wb_overrides": {
+    "highlights": {
+      "applied": [
+        1.5953242975995419,
+        1.2363012689589052,
+        1.0
+      ],
+      "corrected": [
+        1.673,
+        1.346,
+        1.0
+      ]
+    },
+    "shadows": {
+      "applied": [
+        0.29913609676799086,
+        0.25,
+        1.0
+      ],
+      "corrected": [
+        0.954,
+        0.992,
+        1.0
+      ]
+    }
+  },
+  "patch_notes": {},
+  "bad_inversion": false,
+  "bad_inversion_note": ""
+}
