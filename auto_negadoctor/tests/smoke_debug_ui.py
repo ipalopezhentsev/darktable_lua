@@ -601,6 +601,82 @@ def main():
             assert app.annotations[stem]["patch_notes"].get("highlights") == "smoke note"
         step("note", note)
 
+        # Copy params (Ctrl+C) from this frame, paste (Ctrl+V) onto another.
+        # The ANNOTATED value is what gets copied, not the auto one; pasting
+        # lands as print/wb overrides on the target. Restores both frames so
+        # later assertions see untouched state.
+        def copy_paste_params():
+            if len(app.images) < 2:
+                return
+            src_idx = app.current_idx
+            src_stem = app.images[src_idx]["stem"]
+            sann = app.annotations[src_stem]
+            saved_p = dict(sann["print_overrides"])
+            saved_w = {k: list(v) for k, v in sann["wb_overrides"].items()}
+            sann["print_overrides"]["gamma"] = 4.321          # annotated value
+            sann["wb_overrides"]["shadows"] = [1.0, 0.9, 0.8]
+            app._copy_params()
+            clip = app.params_clipboard
+            assert clip and clip["source_stem"] == src_stem, "clipboard not set"
+            assert abs(clip["print"]["gamma"] - 4.321) < 1e-9, \
+                "copy took the auto gamma, not the annotated value"
+            assert clip["wb"]["shadows"] == [1.0, 0.9, 0.8], \
+                "copy took the auto wb, not the annotated value"
+            assert set(clip["print"]) == set(dbg.PRINT_PARAMS), \
+                "not all print params captured"
+            assert set(clip["wb"]) == set(dbg.WB_NAME_OVR.values()), \
+                "not both wb wheels captured"
+            tgt_idx = next(i for i in range(len(app.images)) if i != src_idx)
+            app._nav_image(tgt_idx - src_idx)
+            tgt = app.images[app.current_idx]
+            tann = app.annotations[tgt["stem"]]
+            saved_tp = dict(tann["print_overrides"])
+            saved_tw = {k: list(v) for k, v in tann["wb_overrides"].items()}
+            app._paste_params()
+            assert abs(tann["print_overrides"]["gamma"] - 4.321) < 1e-9, \
+                "paste did not set the gamma override on the target"
+            assert tann["wb_overrides"]["shadows"] == [1.0, 0.9, 0.8], \
+                "paste did not set the wb override on the target"
+            params = app._corrected_params(tgt)
+            assert params is not None and abs(params["gamma"] - 4.321) < 1e-9, \
+                "pasted override not reflected in the target's corrected params"
+            tann["print_overrides"].clear(); tann["print_overrides"].update(saved_tp)
+            tann["wb_overrides"].clear(); tann["wb_overrides"].update(saved_tw)
+            app._nav_image(src_idx - app.current_idx)
+            sann["print_overrides"].clear(); sann["print_overrides"].update(saved_p)
+            sann["wb_overrides"].clear(); sann["wb_overrides"].update(saved_w)
+        step("copy_paste_params", copy_paste_params)
+
+        # Ctrl+C must COPY (not clear) regardless of keyboard layout. The
+        # physical-key dispatcher fires by key POSITION (keycode), so a non-Latin
+        # layout — where <Control-c>'s keysym never matches — must still copy and
+        # NOT fall through to the plain-c "clear correction". Drive _on_physical_key
+        # directly with Ctrl held (state bit 0x4) on the C/V key codes.
+        def ctrl_layout_independent():
+            if sys.platform != "win32":
+                return
+            assert ord("C") in app._phys_ctrl_keymap \
+                and ord("V") in app._phys_ctrl_keymap, \
+                "Ctrl+C/V not routed through the physical-key dispatcher"
+            saved = dict(app.annotations[stem]["print_overrides"])
+            saved_clip = app.params_clipboard
+            app.canvas.focus_set()                 # not a text widget: shortcuts live
+            app._select_patch("gamma")
+            app.annotations[stem]["print_overrides"]["gamma"] = 4.2
+            app.params_clipboard = None
+            app._on_physical_key(SimpleNamespace(state=0x4, keycode=ord("C")))
+            assert app.params_clipboard is not None, "Ctrl+C did not copy"
+            assert "gamma" in app.annotations[stem]["print_overrides"], \
+                "Ctrl+C fell through to clear correction (the layout bug)"
+            # plain C (no Ctrl) still clears the selected correction
+            app._on_physical_key(SimpleNamespace(state=0x0, keycode=ord("C")))
+            assert "gamma" not in app.annotations[stem]["print_overrides"], \
+                "plain C no longer clears the correction"
+            app.annotations[stem]["print_overrides"].clear()
+            app.annotations[stem]["print_overrides"].update(saved)
+            app.params_clipboard = saved_clip
+        step("ctrl_layout_independent", ctrl_layout_independent)
+
         # Color-wheel footer sizing: the wheels must grow to fill the footer
         # pane WITHOUT pushing the darktable-entry boxes off the bottom (the
         # chrome height is reserved live, not hardcoded). Drive a resize and

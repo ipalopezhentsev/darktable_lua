@@ -56,32 +56,45 @@ PATCH_SHORT = {"film_base": "base", "highlights": "high"}
 # Print-page params (negadoctor "print properties" tab), adjustable in the
 # UI with live preview: select with 4/5/6/7, scroll to adjust (Shift = big
 # step), C clears the override.
-PRINT_PARAMS = ("black", "gamma", "soft_clip", "exposure")
-PRINT_KEYS = {"4": "black", "5": "gamma", "6": "soft_clip", "7": "exposure"}
-PRINT_LABEL = {"black": "paper black (density correction)",
+# "D_max" (dynamic range) and "offset" (scan exposure bias) are darktable's
+# FILM-properties params, but they're exposed here in the same adjustable/
+# annotatable table as the print params: offset is the only lever for the shadows
+# cast (offset_c = wb_high*offset*wb_low; its sign also drives the shadows wheel —
+# see ColorWheel.invert / OFFSET_DEFAULT in tuning.py), and D_max divides every
+# downstream picker, so the user wants to hand-tune AND annotate both.
+PRINT_PARAMS = ("D_max", "offset", "black", "gamma", "soft_clip", "exposure")
+PRINT_KEYS = {"0": "D_max", "9": "offset", "4": "black", "5": "gamma",
+              "6": "soft_clip", "7": "exposure"}
+PRINT_LABEL = {"D_max": "D max (dynamic range)",
+               "offset": "scan exposure bias",
+               "black": "paper black (density correction)",
                "gamma": "paper grade (gamma)",
                "soft_clip": "paper gloss (specular highlights)",
                "exposure": "print exposure adjustment"}
-PRINT_SHORT = {"black": "blk", "gamma": "gamma", "soft_clip": "gloss",
-               "exposure": "pexp"}
-PRINT_STEP = {"black": (0.005, 0.02), "gamma": (0.05, 0.25),
+PRINT_SHORT = {"D_max": "dmax", "offset": "bias", "black": "blk",
+               "gamma": "gamma", "soft_clip": "gloss", "exposure": "pexp"}
+PRINT_STEP = {"D_max": (0.01, 0.05), "offset": (0.005, 0.02),
+              "black": (0.005, 0.02), "gamma": (0.05, 0.25),
               "soft_clip": (0.01, 0.05), "exposure": (0.01, 0.05)}
-# How darktable's negadoctor "print properties" sliders DISPLAY each param
-# (mirrors negadoctor.c set_factor/set_format and its EV powf/log2 conversion):
-#   paper black / paper gloss -> percent (factor 100, "%")
+# How darktable's negadoctor sliders DISPLAY each param (mirrors negadoctor.c
+# set_factor/set_format and its EV powf/log2 conversion):
+#   scan exposure bias / paper black / paper gloss -> percent (factor 100, "%")
+#   D max (dynamic range)     -> plain density number
 #   paper grade (gamma)       -> plain number
 #   print exposure adjustment -> EV (= log2 of the linear exposure multiplier)
-# black & exposure show a sign (their ranges cross zero). "ev" stores the param
-# as a linear multiplier but shows/edits it in EV; others scale by "factor".
+# offset, black & exposure show a sign (their ranges cross zero). "ev" stores the
+# param as a linear multiplier but shows/edits it in EV; others scale by "factor".
 PRINT_DISPLAY = {
+    "D_max":     {"factor": 1.0,   "suffix": "",    "sign": False, "ev": False},
+    "offset":    {"factor": 100.0, "suffix": "%",   "sign": True,  "ev": False},
     "black":     {"factor": 100.0, "suffix": "%",   "sign": True,  "ev": False},
     "gamma":     {"factor": 1.0,   "suffix": "",    "sign": False, "ev": False},
     "soft_clip": {"factor": 100.0, "suffix": "%",   "sign": False, "ev": False},
     "exposure":  {"factor": 1.0,   "suffix": " EV", "sign": True,  "ev": True},
 }
 # tk.Scale step (in DISPLAY units) for each print slider.
-PRINT_SLIDER_RES = {"black": 0.05, "gamma": 0.01, "soft_clip": 0.1,
-                    "exposure": 0.01}
+PRINT_SLIDER_RES = {"D_max": 0.01, "offset": 0.05, "black": 0.05, "gamma": 0.01,
+                    "soft_clip": 0.1, "exposure": 0.01}
 
 # "Brighter"/"darker" one-key combo (] / [): the user's repeated manual trick is
 # to raise paper black (which lifts midtones but clips highlights) and then lower
@@ -756,7 +769,8 @@ class NegadoctorDebugUI(DebugUIBase):
 
     @staticmethod
     def _print_range(name):
-        return {"black": nm.BLACK_RANGE, "gamma": nm.GAMMA_RANGE,
+        return {"D_max": nm.DMAX_RANGE, "offset": nm.OFFSET_RANGE,
+                "black": nm.BLACK_RANGE, "gamma": nm.GAMMA_RANGE,
                 "soft_clip": nm.SOFT_CLIP_RANGE,
                 "exposure": nm.EXPOSURE_RANGE}[name]
 
@@ -907,6 +921,12 @@ class NegadoctorDebugUI(DebugUIBase):
         # annotation; restored below. Set via Adjust → "Set global film base".
         self.global_base_source = None      # stem of the chosen source frame
         self.global_base_override = None     # {source_stem, winner_rgb, winner_factor}
+        # Params clipboard: copy the EFFECTIVE tunable look (print params + wb
+        # wheels) of one frame and paste it onto another (Ctrl+C / Ctrl+V). Holds
+        # the annotated value where the source frame had one, else the auto value
+        # ({source_stem, print:{name:val}, wb:{shadows/highlights:[r,g,b]}}).
+        # Session-scoped (not persisted); None until something is copied.
+        self.params_clipboard = None
         self.view_negative = False
         self.compare_default = False
         self.variant = "analytical"  # "analytical" | "ai"; PERSISTS across frames
@@ -1046,6 +1066,8 @@ class NegadoctorDebugUI(DebugUIBase):
         "              (film base sel'd: drag a RECTANGLE around the true\n"
         "               unexposed strip; scroll grows/shrinks, C clears)\n"
         "  4 / 5 / 6 / 7   paper black / gamma / gloss / print exposure\n"
+        "  9           scan exposure bias (offset)\n"
+        "  0           D max (dynamic range)\n"
         "              (drag the print-properties sliders, or scroll the\n"
         "               selected param; Shift = big step. Shown in darktable\n"
         "               units: % / gamma / EV)\n"
@@ -1053,6 +1075,9 @@ class NegadoctorDebugUI(DebugUIBase):
         "              (scroll grows/shrinks, C clears)\n"
         "  ] / [       brighter / darker (raises/lowers paper black,\n"
         "              then re-solves exposure to hold the highlights)\n"
+        "  Ctrl+C / Ctrl+V  copy this frame's params (print + wb wheels),\n"
+        "              paste them onto another frame (annotated values\n"
+        "              are copied where present, else the auto ones)\n"
         "  C           clear the selected correction\n"
         "  V           inverted preview / raw negative\n"
         "  X           corrected render / algorithm default\n"
@@ -1120,6 +1145,10 @@ class NegadoctorDebugUI(DebugUIBase):
         sel.add_command(label="Highlights patch", accelerator="3",
                         command=lambda: self._select_patch("highlights"))
         sel.add_separator()
+        sel.add_command(label="D max (dynamic range)", accelerator="0",
+                        command=lambda: self._select_patch("D_max"))
+        sel.add_command(label="Scan exposure bias", accelerator="9",
+                        command=lambda: self._select_patch("offset"))
         sel.add_command(label="Paper black", accelerator="4",
                         command=lambda: self._select_patch("black"))
         sel.add_command(label="Paper grade (gamma)", accelerator="5",
@@ -1147,6 +1176,11 @@ class NegadoctorDebugUI(DebugUIBase):
                         command=self._set_global_base_from_current)
         adj.add_command(label="Clear global film-base override",
                         command=self._clear_global_base_override)
+        adj.add_separator()
+        adj.add_command(label="Copy params from this frame", accelerator="Ctrl+C",
+                        command=self._copy_params)
+        adj.add_command(label="Paste params onto this frame", accelerator="Ctrl+V",
+                        command=self._paste_params)
         adj.add_separator()
         adj.add_command(label="Toggle bad-inversion flag", accelerator="G",
                         command=self._toggle_bad_inversion)
@@ -1518,6 +1552,13 @@ class NegadoctorDebugUI(DebugUIBase):
         # ] brighter / [ darker: black + exposure in unison (see _brighten)
         self.bind_key("<bracketright>", lambda e: self._brighten(False))
         self.bind_key("<bracketleft>", lambda e: self._brighten(True))
+        # Ctrl+C / Ctrl+V: copy the frame's params, paste onto another frame.
+        # These modifier combos beat the plain <c> (clear) binding in Tk's
+        # most-specific-wins dispatch, so Ctrl+C never also clears a correction.
+        self.bind_key("<Control-c>", lambda e: self._copy_params())
+        self.bind_key("<Control-C>", lambda e: self._copy_params())
+        self.bind_key("<Control-v>", lambda e: self._paste_params())
+        self.bind_key("<Control-V>", lambda e: self._paste_params())
 
     def image_status_text(self, img_dict):
         """Compact glanceable summary for the left panel. The full per-frame
@@ -1757,6 +1798,77 @@ class NegadoctorDebugUI(DebugUIBase):
         self._after_global_base_change()
         self._set_info_text("Global film-base override cleared — Dmin reverts to "
                             "the auto-detected winner per frame.")
+
+    # ------------------------------------------------------------------
+    # Params clipboard (copy the look of one frame, paste onto another)
+    # ------------------------------------------------------------------
+
+    def _copy_params(self):
+        """Capture the current frame's EFFECTIVE tunable params — the print page
+        (PRINT_PARAMS) and the two wb wheels — into the session clipboard. For
+        each param the source frame's ANNOTATED (corrected) value is taken when
+        present, else the algorithm's auto value (so an annotated frame copies its
+        hand-tuned look, not the auto one). The film base/Dmin and crop are
+        deliberately NOT copied: Dmin is exposure-compensated per frame (use the
+        global film-base override for that) and the crop is frame geometry."""
+        img_dict = self.images[self.current_idx]
+        prints, wb = {}, {}
+        for name in PRINT_PARAMS:
+            val = self._effective_print_value(name)
+            if val is not None:
+                prints[name] = float(val)
+        for name in WB_NAMES:
+            eff = self._effective_wb(img_dict, name)
+            if eff:
+                wb[WB_NAME_OVR[name]] = [float(v) for v in eff]
+        if not prints and not wb:
+            self._set_info_text("Nothing to copy — this frame has no params yet.")
+            return
+        self.params_clipboard = {"source_stem": img_dict["stem"],
+                                 "print": prints, "wb": wb}
+        self._set_info_text(
+            f"Copied params from {img_dict['stem']} "
+            f"({len(prints)} print + {len(wb)} wb). Go to another frame and "
+            "paste (Ctrl+V / Adjust → Paste params).")
+
+    def _paste_params(self):
+        """Apply the clipboard's params onto the current frame as print/wb
+        overrides (the same annotation slots the sliders/wheels write), so they
+        flow into the live re-render and applied_results. C clears a selected one,
+        X compares with the algorithm default."""
+        clip = getattr(self, "params_clipboard", None)
+        if not clip:
+            self._set_info_text("No params copied yet — select a frame and use "
+                                "Copy params (Ctrl+C / Adjust menu) first.")
+            return
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        ann = self.annotations[stem]
+        n_print = n_wb = 0
+        for name, val in clip.get("print", {}).items():
+            if name in PRINT_PARAMS:
+                ann["print_overrides"][name] = nm.clamp(
+                    float(val), self._print_range(name))
+                n_print += 1
+        for ovr_key, eff in clip.get("wb", {}).items():
+            if ovr_key in WB_NAME_OVR.values() and eff and len(eff) == 3:
+                ann["wb_overrides"][ovr_key] = [float(v) for v in eff]
+                n_wb += 1
+        if not n_print and not n_wb:
+            self._set_info_text("Clipboard held no usable params.")
+            return
+        self._auto_save(stem)
+        self._sync_wheels()
+        self._update_count_label()
+        self._populate_items_list()
+        self._reposition_inline_slider()
+        self._redraw_markers()
+        self._schedule_live_render(delay_ms=10)
+        src = clip.get("source_stem", "?")
+        self._set_info_text(
+            f"Pasted params from {src} onto {stem} "
+            f"({n_print} print + {n_wb} wb). C clears a selected one, "
+            "X compares with the algorithm default.")
 
     # ------------------------------------------------------------------
     # Color-wheel shadows/highlights
@@ -3130,7 +3242,7 @@ class NegadoctorDebugUI(DebugUIBase):
         crop = ", crop✓" if ann.get("crop_correction") else ""
         return (f"{len(ann['patch_corrections'])}/2 patches, "
                 f"{len(ann['wb_overrides'])}/2 wb, "
-                f"{len(ann['print_overrides'])}/4 print{crop}")
+                f"{len(ann['print_overrides'])}/{len(PRINT_PARAMS)} print{crop}")
 
     def item_rows(self):
         img_dict = self.images[self.current_idx]

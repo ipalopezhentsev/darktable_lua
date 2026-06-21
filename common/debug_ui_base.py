@@ -248,6 +248,7 @@ class DebugUIBase:
         # <KeyPress> binding so the physical key position triggers the shortcut
         # regardless of the active input language (Latin/Cyrillic/...).
         self._phys_keymap = {}
+        self._phys_ctrl_keymap = {}     # Ctrl+<letter> shortcuts, by keycode
         if sys.platform == "win32":
             self.root.bind("<KeyPress>", self._on_physical_key)
 
@@ -644,36 +645,59 @@ class DebugUIBase:
         w = self.root.focus_get()
         return isinstance(w, (tk.Entry, tk.Text))
 
-    @staticmethod
-    def _letter_of_sequence(sequence):
-        """Return the single ASCII letter of a plain letter binding such as
-        ``<f>`` / ``<F>`` / ``<Key-a>``, else None. Modifier combos, digits and
-        named keys (``<Left>``, ``<space>``, ``<bracketleft>``, ...) return None
-        and stay on the keysym path."""
+    # Windows virtual-key codes for punctuation whose *keysym* changes under a
+    # non-Latin layout (the physical key emits e.g. Cyrillic_ha instead of
+    # bracketleft, so a keysym binding never fires). The VK code is positional,
+    # so dispatching on it keeps the key working on every layout.
+    _PUNCT_VK = {
+        "bracketleft": 0xDB,   # VK_OEM_4  '['
+        "bracketright": 0xDD,  # VK_OEM_6  ']'
+    }
+
+    @classmethod
+    def _phys_keycode_of_sequence(cls, sequence):
+        """Return (virtual-key code, ctrl) for a layout-dependent shortcut
+        (``<f>`` / ``<Key-a>`` / ``<bracketleft>`` / ``<Control-c>`` ...), else
+        ``(None, False)``. A ``Control-`` prefix routes the shortcut through the
+        physical-key dispatcher too, so Ctrl+letter combos fire by key POSITION
+        regardless of the active layout (a keysym ``<Control-c>`` binding never
+        matches when the C key emits e.g. Cyrillic_es). Digits and layout-stable
+        named keys (``<Left>``, ``<space>``, ...) return ``(None, False)`` and
+        stay on the keysym path."""
         if not (sequence.startswith("<") and sequence.endswith(">")):
-            return None
+            return None, False
         body = sequence[1:-1]
+        ctrl = False
+        if body.startswith("Control-"):
+            ctrl = True
+            body = body[len("Control-"):]
         if body.startswith("Key-"):
             body = body[4:]
         if len(body) == 1 and body.isascii() and body.isalpha():
-            return body
-        return None
+            # Windows reports event.keycode as the virtual-key code, which for
+            # letters equals the uppercase ASCII code on every layout.
+            return ord(body.upper()), ctrl
+        return cls._PUNCT_VK.get(body), ctrl
 
     def bind_key(self, sequence, fn):
         """root.bind that ignores the key while a text-input widget has focus,
         so typing in the note entry doesn't trigger shortcuts.
 
-        Plain *letter* shortcuts (``<f>``, ``<Key-a>``, ...) are routed through
+        Shortcuts whose key position carries a *layout-dependent* keysym (plain
+        letters like ``<f>``, and the ``[`` / ``]`` brackets) are routed through
         a physical-keycode dispatcher on Windows so they fire on the key's
-        position regardless of the keyboard layout (the user switches input
-        languages; a Cyrillic 'ф' on the F key must still mean F). Everything
-        else — digits, arrows, brackets, modifier combos — keeps the normal
-        keysym binding (those positions don't move with the language)."""
-        letter = self._letter_of_sequence(sequence)
-        if letter is not None and sys.platform == "win32":
-            # Windows reports event.keycode as the virtual-key code, which for
-            # letters equals the uppercase ASCII code on every layout.
-            self._phys_keymap[ord(letter.upper())] = fn
+        position regardless of the active input language (the user switches
+        languages; a Cyrillic 'ф' on the F key, or 'х' on the '[' key, must
+        still mean F / ``[``). Everything else — digits, arrows, modifier
+        combos — keeps the normal keysym binding (those positions are stable).
+
+        A ``Control-<letter>`` combo is ALSO routed through the physical-key
+        dispatcher (its own keycode map), so it fires by key position on any
+        layout — a plain keysym ``<Control-c>`` never matches once the C key
+        emits a non-Latin keysym."""
+        keycode, ctrl = self._phys_keycode_of_sequence(sequence)
+        if keycode is not None and sys.platform == "win32":
+            (self._phys_ctrl_keymap if ctrl else self._phys_keymap)[keycode] = fn
             return
 
         def handler(event):
@@ -686,9 +710,17 @@ class DebugUIBase:
         """Dispatch a layout-independent letter shortcut by physical key.
 
         Fires only for keys with no more-specific keysym binding (Tk prefers
-        the specific one), so it never double-triggers arrows/brackets/etc."""
+        the specific one), so it never double-triggers arrows/digits/etc.
+        Modifier-aware: when Ctrl is held it dispatches ONLY from the Ctrl
+        keymap (so e.g. Ctrl+C never falls through to the plain-C shortcut —
+        the bug where a non-Latin layout cleared a correction on Ctrl+C)."""
         if self._is_text_focus():
             return
+        if event.state & 0x4:                  # Control held
+            fn = self._phys_ctrl_keymap.get(event.keycode)
+            if fn is not None:
+                fn(event)
+            return                             # don't fall through to plain shortcut
         fn = self._phys_keymap.get(event.keycode)
         if fn is not None:
             fn(event)

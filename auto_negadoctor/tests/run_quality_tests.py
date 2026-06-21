@@ -81,6 +81,8 @@ CROP_CONTAINMENT_ROUND_TOL = 1  # px slack for cross-resolution crop denorm
 # gate is expected to FAIL until the wb finder + print tune (+ PRINT_GAMMA) are
 # tuned to match. Loosen ONLY with the user's sign-off.
 TOL_GT_WB = 0.05         # abs delta per wb_low/wb_high component
+TOL_GT_DMAX = 0.10
+TOL_GT_OFFSET = 0.03
 TOL_GT_BLACK = 0.03
 TOL_GT_EXPOSURE = 0.05
 TOL_GT_GAMMA = 0.10
@@ -564,7 +566,7 @@ def _load_ground_truth(fixtures):
             if corrected:
                 gt[key] = [float(v) for v in corrected]
                 touched = True
-        for name in ("black", "exposure", "gamma"):
+        for name in ("D_max", "offset", "black", "exposure", "gamma"):
             entry = (data.get("print_overrides") or {}).get(name) or {}
             corrected = entry.get("corrected")
             if corrected is not None:
@@ -596,7 +598,9 @@ def _ground_truth_violations(stem, params, gt):
         if target and applied:
             for c in range(3):
                 note(f"{key}[{c}]", applied[c], target[c], TOL_GT_WB)
-    for name, tol in (("black", TOL_GT_BLACK),
+    for name, tol in (("D_max", TOL_GT_DMAX),
+                      ("offset", TOL_GT_OFFSET),
+                      ("black", TOL_GT_BLACK),
                       ("exposure", TOL_GT_EXPOSURE),
                       ("gamma", TOL_GT_GAMMA)):
         target = gt.get(name)
@@ -705,6 +709,7 @@ def check_ai_variant(frames, fixtures, roll):
         return []
     by_stem = {fr["stem"]: fr for fr in frames}
     fields = [("wb_low", TOL_GT_WB), ("wb_high", TOL_GT_WB),
+              ("D_max", TOL_GT_DMAX), ("offset", TOL_GT_OFFSET),
               ("black", TOL_GT_BLACK), ("exposure", TOL_GT_EXPOSURE),
               ("gamma", TOL_GT_GAMMA)]
     agg = {f: {"ana": [], "ai": []} for f, _ in fields}
@@ -793,14 +798,14 @@ def gt_params_for_frame(fr, gt):
     the production params with ONLY the annotated fields overridden. Annotations
     are PARTIAL (some frames carry wb only), so a wb-only frame's GT picture is
     the production tone with the user's wb — never production replaced by
-    defaults. Dmin/D_max/offset/soft_clip stay = production (not annotated). Pure
-    copy; does not mutate fr['params']."""
+    defaults. Dmin/soft_clip stay = production (not annotated; offset and D_max
+    ARE annotatable now). Pure copy; does not mutate fr['params']."""
     p = dict(fr["params"])
     if gt.get("wb_low"):
         p["wb_low"] = [float(v) for v in gt["wb_low"]]
     if gt.get("wb_high"):
         p["wb_high"] = [float(v) for v in gt["wb_high"]]
-    for k in ("black", "exposure", "gamma"):
+    for k in ("D_max", "offset", "black", "exposure", "gamma"):
         if gt.get(k) is not None:
             p[k] = float(gt[k])
     return p

@@ -279,16 +279,17 @@ TIFFs are these sRGB exports, so the analysis now decodes them — old
 baselines/GT were captured on the un-color-managed (sRGB-as-linear) data and
 must be regenerated.
 
-### D_max is FIXED at the darktable default (not derived)
+### D_max is a preset constant (not per-frame auto-derived)
 
-`DMAX_DEFAULT = 2.046` (darktable negadoctor `init()` default) — the user leaves
-D_max at the default in practice and never picks it. We previously auto-derived
+`DMAX_DEFAULT` (darktable negadoctor `init()` default 2.046; this roll's
+calibrated value 1.7218) — not auto-derived per frame. We previously auto-derived
 it via `apply_auto_Dmax`'s formula but fed it the P_LOW percentile over the whole
 content crop (vs darktable's picker, which takes the MIN of the small densest
 region you drag over), producing a fabricated ~0.7 that skewed everything
 downstream (all of offset/wb/black/exposure divide by D_max). It's a preset
-constant now (not auto-derived per frame; like `OFFSET_DEFAULT` it can be a
-calibration target). `compute_dmax` is retained for the forward-model tests only.
+constant now, a legitimate calibration target (like `OFFSET_DEFAULT`), AND
+hand-adjustable/annotatable per frame in the debug UI (key 0, in `PRINT_PARAMS`).
+`compute_dmax` is retained for the forward-model tests only.
 
 ### negadoctor params blob (modversion 2, 76 bytes LE, plain hex)
 
@@ -498,9 +499,18 @@ on/off** (before/after; reloads the negative via the `_neg_cache_key`), **R
 flips the calibration-review source fitted↔live** (only in a `--review`
 session). **Print-page params are adjustable
 too**: 4/5/6/7 select paper black / paper grade (gamma) / paper gloss
-(soft_clip) / print exposure, scroll adjusts the value (Shift = big step)
-with live preview, stored as `print_overrides` in the annotations and the
-report. **Brighter/darker combo (keys ] / [, or the buttons)** automate the
+(soft_clip) / print exposure, **9 selects scan exposure bias (offset)** and **0
+selects D max (dynamic range)** — offset and D_max are darktable's FILM-properties
+params, surfaced in the same adjustable/annotatable `PRINT_PARAMS` table because
+offset is the sole lever for the shadows cast (see the shadows-wheel offset note)
+and D_max divides every downstream picker. Scroll adjusts the value (Shift = big
+step) with live preview, stored as `print_overrides` in the annotations and the
+report; all these overrides flow into `_corrected_params`/`applied_results` and
+into the calibration ground truth (`gt_params_for_frame` / `_load_ground_truth` /
+`check_ground_truth` now carry offset + D_max, `TOL_GT_OFFSET` / `TOL_GT_DMAX`).
+All params display in **darktable units** (`PRINT_DISPLAY`): offset/black/gloss as
+signed/unsigned percent, D_max + gamma plain, print exposure in EV (offset =
+signed %, e.g. +0.62%; D_max = plain density, e.g. 1.72). **Brighter/darker combo (keys ] / [, or the buttons)** automate the
 user's repeated manual move — raise paper black to lift midtones (which clips
 the highlights), then drop print exposure until the highlights stop clipping.
 `_brighten()` nudges black by `BRIGHTEN_BLACK_STEP` (0.05 on the [-0.5, 0.5]
@@ -513,7 +523,18 @@ darker returns BOTH params exactly (the highlight level is the op's invariant;
 this fixed the original "exposure stays new" non-reversibility), and dark scenes
 aren't over-brightened to the clip ceiling. Both land as black + exposure
 `print_overrides`, so X compares with default and C clears. Smoke step `brighten`
-asserts the highlight hold AND the round-trip reversibility. Any correction/override **live re-renders the inversion**
+asserts the highlight hold AND the round-trip reversibility. **Copy/paste params
+(Ctrl+C / Ctrl+V, or Adjust menu)** — `_copy_params` captures the current frame's
+EFFECTIVE tunable look (the 6 `PRINT_PARAMS` + the two wb wheels) into a
+session clipboard `params_clipboard`, taking the ANNOTATED (corrected) value
+where the source frame has one, else the auto value; `_paste_params` applies them
+onto another frame as `print_overrides`/`wb_overrides` (so they flow through the
+same live re-render + `applied_results`). The film base/Dmin (exposure-compensated
+per frame — that's the global film-base override) and crop (geometry) are NOT
+copied. The Ctrl combos beat the plain `<c>`/`<v>` bindings in Tk's
+most-specific-wins dispatch, so Ctrl+C never also clears a correction. Smoke step
+`copy_paste_params` asserts the annotated-not-auto copy and the cross-frame paste.
+Any correction/override **live re-renders the inversion**
 (debounced): corrected film base re-derives Dmin/D_max, corrected
 shadows/highlights re-derive wb_low/wb_high, print overrides replace their
 values (otherwise black/exposure keep their tuned values); **X toggles
