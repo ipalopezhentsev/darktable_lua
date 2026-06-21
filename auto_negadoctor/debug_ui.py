@@ -1460,6 +1460,10 @@ class NegadoctorDebugUI(DebugUIBase):
         self.selected_patch = name
         if getattr(self, "_inline_slider_value", None) is not None:
             self._inline_slider_value.config(text=self._fmt_print(name, val))
+        if name == "offset":
+            # sign(offset) drives the shadows-wheel orientation — re-sync so the
+            # wheel adapts when the slider crosses zero.
+            self._sync_wheels()
         self._schedule_live_render(delay_ms=self.PRINT_SLIDER_RENDER_DELAY_MS)
         self._schedule_print_settle()
         return val
@@ -1894,7 +1898,9 @@ class NegadoctorDebugUI(DebugUIBase):
         # offset inverts the shadows wheel's image cast — flip the wheel mapping
         # so dragging toward a hue still moves the shadows toward it. wb_high is
         # unaffected (it also drives the main gain term), so highlights never flip.
-        offset = float(params.get("offset", 0.0))
+        # Use the EFFECTIVE offset (a print override wins): the user can edit
+        # offset to either sign in the UI, and the wheel must track its sign.
+        offset = float(self._effective_print_value("offset") or 0.0)
         for name, wheel in self.wheels.items():
             wheel.set_invert(WB_NAME_KIND[name] == "low" and offset > 0.0)
             wb = self._effective_wb(img_dict, name)
@@ -2763,6 +2769,10 @@ class NegadoctorDebugUI(DebugUIBase):
         self._auto_save(stem)
         self._update_count_label()
         self._populate_items_list()        # repositions the inline slider
+        if name == "offset":
+            # sign(offset) drives the shadows-wheel orientation — re-sync so the
+            # wheel adapts when the user edits offset across zero.
+            self._sync_wheels()
         self._update_info_from_selection()
         self._schedule_live_render()
         return True

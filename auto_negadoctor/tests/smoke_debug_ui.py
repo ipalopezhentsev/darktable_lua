@@ -211,6 +211,28 @@ def main():
             assert "black" in app.annotations[stem]["print_overrides"]
         step("print_override", print_override)
 
+        # The shadows wheel's invert flag tracks the EFFECTIVE offset sign: a
+        # positive offset flips its image cast (offset_c = wb_high*offset*wb_low),
+        # so editing offset across zero in the UI must re-orient the wheel.
+        def offset_flips_shadows_wheel():
+            sw = app.wheels["wb_shadows"]
+            hw = app.wheels["wb_highlights"]
+            ann = app.annotations[stem]
+            ann["print_overrides"]["offset"] = 0.01      # positive
+            app._sync_wheels()
+            assert sw.invert and not hw.invert, \
+                "positive offset must invert ONLY the shadows wheel"
+            ann["print_overrides"]["offset"] = -0.01     # negative
+            app._sync_wheels()
+            assert not sw.invert and not hw.invert, \
+                "negative offset must un-invert the shadows wheel"
+            # the slider/scroll path must re-sync too (crossing zero)
+            app._apply_print_value("offset", 0.01)
+            assert sw.invert, "slider edit to positive offset did not flip wheel"
+            del ann["print_overrides"]["offset"]
+            app._sync_wheels()
+        step("offset_flips_shadows_wheel", offset_flips_shadows_wheel)
+
         # Inline print slider: darktable-unit display + the slider (under the
         # clicked item row) edits the override, with fine/coarse wheel steps.
         def print_sliders():

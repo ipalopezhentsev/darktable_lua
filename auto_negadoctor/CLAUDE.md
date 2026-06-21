@@ -566,11 +566,18 @@ strength). With a POSITIVE `OFFSET_DEFAULT` (the roll's calibrated value can be
 either sign — darktable allows it; this roll's is +0.006) the wheel inverted —
 dragging toward magenta greened the shadows. Fix: `ColorWheel.invert` rotates the
 wheel angle 180° vs the wb vector, set per frame in `_sync_wheels` from
-`sign(params.offset)` (only the `low`/shadows wheel; `wb_high` also drives the
+`sign(offset)` (only the `low`/shadows wheel; `wb_high` also drives the
 main gain term so highlights never flip). The STORED `wb_low` is always the true
 negadoctor vector — only the UI interaction direction flips, so annotations/GT
 are unchanged. NOTE: near offset≈0 the shadows wheel is correct-direction but
-weak (wb_low authority ∝ |offset|). Corrections auto-save to
+weak (wb_low authority ∝ |offset|). **`offset` is EDITABLE in the UI (key 9 /
+slider) to EITHER sign**, so `_sync_wheels` reads the EFFECTIVE offset
+(`_effective_print_value("offset")` — a `print_overrides` value wins over the
+auto `params.offset`), and editing offset across zero re-syncs the wheel live
+(`_adjust_print_param` + `_apply_print_value` call `_sync_wheels` for `offset`).
+Originally the flag was read from `params.offset` only and never re-synced on
+edit, so a user-set NEGATIVE offset left the wheel stuck inverted (user-reported,
+2026-06-22). Guarded by `smoke_debug_ui` step `offset_flips_shadows_wheel`. Corrections auto-save to
 `{stem}_annotations.json`; closing writes `debug_report.txt` (patch size
 changes + print overrides + wb wheel overrides included) for tuning.
 
