@@ -154,9 +154,19 @@ FIELDS = collections.OrderedDict([
         "fabricated a D_max that exists nowhere in the real workflow and, since "
         "everything downstream divides by it, skewed offset/wb/black/exposure.")),
     ("OFFSET_DEFAULT", _F(
-        "Scan exposure bias: darktable's default, kept fixed. The auto formula "
-        "needs the lightest PHOTO content, but on uncropped scans the lightest "
-        "area is the film base itself, which degenerates the formula to ~0.")),
+        "Scan exposure bias. A preset constant (not per-frame auto: the auto "
+        "formula needs the lightest PHOTO content, but on uncropped scans the "
+        "lightest area is the film base itself, degenerating it to ~0) — but a "
+        "legitimate CALIBRATION target, and either sign is valid (darktable "
+        "allows positive and negative). IMPORTANT — it is the ONLY route the "
+        "shadows white balance reaches the image: wb_low acts solely via "
+        "offset_c = wb_high*offset*wb_low. So sign(offset) is the DIRECTION of "
+        "the shadows cast and |offset| its STRENGTH: at offset~0 the shadows wb "
+        "(auto AND the debug-UI shadows wheel) is nearly inert, and a positive "
+        "offset reverses its cast — the debug-UI shadows wheel auto-compensates "
+        "for that sign (ColorWheel.invert) so dragging toward a hue always pushes "
+        "the shadows toward it. wb_high is unaffected (it also drives the main "
+        "gain term).")),
     ("HIGHLIGHT_BAND_PCT", _F("preview-luma percentile band for the highlight patch", kind="tuple")),
 
     # --- white balance (the colors the user picks on the wheels) -------------

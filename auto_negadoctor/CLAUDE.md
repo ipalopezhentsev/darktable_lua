@@ -175,10 +175,15 @@
      (crop-correction fixtures, dormant until that roll's TIFFs are repopulated
      into its folder).
    - per frame: picker percentiles over everything inside the crop (P_LOW=2.0
-     keeps the dense anchor robust to junk slivers), D_max from them, offset
-     FIXED at -0.05 (darktable default; auto-offset degenerates on
-     uncropped scans and the user's manual rolls never change it); render
-     ONE preview with the prior wb (close to the final rendition, so the
+     keeps the dense anchor robust to junk slivers), D_max from them, offset =
+     `OFFSET_DEFAULT` (a preset constant, NOT per-frame auto — the auto formula
+     degenerates to ~0 on uncropped scans where the lightest area is the film
+     base; but a legitimate CALIBRATION target, either sign). NOTE: offset is the
+     ONLY route wb_low (shadows) reaches the image
+     (`offset_c = wb_high·offset·wb_low`), so sign(offset) = the shadows cast
+     direction and |offset| its strength — see the shadows-wheel offset-sign flip
+     in the Debug UI section and the `OFFSET_DEFAULT` doc in `tuning.py`. Then
+     render ONE preview with the prior wb (close to the final rendition, so the
      print-luma bands fall on real shadows/highlights).
    - per frame **wb — region-cast + gentle neutralization** (2026-06-13 GT
      tuning; replaced the old taste-prior blend): the user's wheel picks are a
@@ -281,9 +286,9 @@ D_max at the default in practice and never picks it. We previously auto-derived
 it via `apply_auto_Dmax`'s formula but fed it the P_LOW percentile over the whole
 content crop (vs darktable's picker, which takes the MIN of the small densest
 region you drag over), producing a fabricated ~0.7 that skewed everything
-downstream (all of offset/wb/black/exposure divide by D_max). Like
-`OFFSET_DEFAULT`, it's just the default now. `compute_dmax` is retained for the
-forward-model tests only.
+downstream (all of offset/wb/black/exposure divide by D_max). It's a preset
+constant now (not auto-derived per frame; like `OFFSET_DEFAULT` it can be a
+calibration target). `compute_dmax` is retained for the forward-model tests only.
 
 ### negadoctor params blob (modversion 2, 76 bytes LE, plain hex)
 
@@ -533,7 +538,18 @@ so the divergence is visible; the wheels **grow to fill the footer pane**
 (drag the right-panel/sash wider for finer precision — `ColorWheel.resize`
 re-renders the disk and re-places marker+pin from the remembered wb). The wb↔wheel mapping is pure math in
 `nega_model.py` (`wb_to_wheel` / `wheel_to_wb`, a log-space zero-sum chroma
-projection). Corrections auto-save to
+projection). **SHADOWS-WHEEL OFFSET-SIGN FLIP (2026-06-21):** `wb_low` reaches
+the image ONLY through `offset_c = wb_high·offset·wb_low`, so the SIGN of
+`offset` is the sign of the shadows wheel's image cast (and `|offset|` its
+strength). With a POSITIVE `OFFSET_DEFAULT` (the roll's calibrated value can be
+either sign — darktable allows it; this roll's is +0.006) the wheel inverted —
+dragging toward magenta greened the shadows. Fix: `ColorWheel.invert` rotates the
+wheel angle 180° vs the wb vector, set per frame in `_sync_wheels` from
+`sign(params.offset)` (only the `low`/shadows wheel; `wb_high` also drives the
+main gain term so highlights never flip). The STORED `wb_low` is always the true
+negadoctor vector — only the UI interaction direction flips, so annotations/GT
+are unchanged. NOTE: near offset≈0 the shadows wheel is correct-direction but
+weak (wb_low authority ∝ |offset|). Corrections auto-save to
 `{stem}_annotations.json`; closing writes `debug_report.txt` (patch size
 changes + print overrides + wb wheel overrides included) for tuning.
 

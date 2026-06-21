@@ -220,6 +220,14 @@ class ColorWheel:
     def __init__(self, parent, kind, on_change, size=260, bg="#484848"):
         self.kind = kind                  # "low" or "high"
         self.on_change = on_change
+        # When True the wheel angle is rotated 180deg relative to the wb vector,
+        # so dragging toward a displayed hue always pushes the IMAGE toward that
+        # hue. Needed for wb_low (shadows): it acts ONLY through
+        # offset_c = wb_high*offset*wb_low, so a POSITIVE `offset` flips the sign
+        # of its output cast (a magenta wb_low then greens the shadows). Set per
+        # frame from the offset sign (see _sync_wheels). The STORED wb is always
+        # the true negadoctor vector — only the UI mapping flips.
+        self.invert = False
         self._marker_wb = [1.0, 1.0, 1.0]
         self._auto_wb = None
         self._anchor_cursor = None        # cursor pos when the drag was anchored
@@ -259,8 +267,23 @@ class ColorWheel:
     # --- view ---
     def _wb_pos(self, wb):
         angle, radius = nm.wb_to_wheel(wb)
+        if self.invert:
+            angle += math.pi          # show the OUTPUT cast position, not the vector's
         r = radius * self._maxr
         return (self._cx + math.cos(angle) * r, self._cy - math.sin(angle) * r)
+
+    def set_invert(self, flag):
+        """Toggle the 180deg wheel<->wb rotation (offset-sign correction for the
+        shadows wheel). Re-places the marker + auto pin so they keep showing the
+        same wb in the new orientation."""
+        flag = bool(flag)
+        if flag == self.invert:
+            return
+        self.invert = flag
+        self._marker_pos = self._wb_pos(self._marker_wb)
+        self._auto_pos = self._wb_pos(self._auto_wb) if self._auto_wb else None
+        self._draw_marker()
+        self._draw_auto()
 
     def _draw_marker(self):
         self.canvas.delete("marker")
@@ -305,7 +328,8 @@ class ColorWheel:
         self._marker_pos = (self._cx + math.cos(angle) * r,
                             self._cy - math.sin(angle) * r)
         self._draw_marker()
-        wb = nm.wheel_to_wb(angle, radius, self.kind)
+        wb_angle = angle + math.pi if self.invert else angle
+        wb = nm.wheel_to_wb(wb_angle, radius, self.kind)
         self._marker_wb = wb              # remember so resize keeps the spot
         self.on_change(wb)
 
@@ -1754,7 +1778,13 @@ class NegadoctorDebugUI(DebugUIBase):
             return
         img_dict = self.images[self.current_idx]
         params = img_dict.get("params") or {}
+        # wb_low only acts via offset_c = wb_high*offset*wb_low, so a POSITIVE
+        # offset inverts the shadows wheel's image cast — flip the wheel mapping
+        # so dragging toward a hue still moves the shadows toward it. wb_high is
+        # unaffected (it also drives the main gain term), so highlights never flip.
+        offset = float(params.get("offset", 0.0))
         for name, wheel in self.wheels.items():
+            wheel.set_invert(WB_NAME_KIND[name] == "low" and offset > 0.0)
             wb = self._effective_wb(img_dict, name)
             wheel.set_wb(wb)
             wheel.set_auto(params.get(WB_NAME_PARAM[name]))   # fixed auto pin
