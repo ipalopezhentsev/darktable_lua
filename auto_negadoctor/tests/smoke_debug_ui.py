@@ -363,6 +363,39 @@ def main():
             assert app._live_rendered, "corrected render did not return"
         step("compare_toggle", compare_toggle)
 
+        # S / Z / D: snapshot the current look, edit, compare the frozen
+        # snapshot render with the current one, then restore the snapshot
+        # (discarding edits made since). The snapshot is kept for repeat use.
+        def snapshot_restore():
+            app._take_snapshot()
+            snap = app._snapshot_for_current()
+            assert snap and snap.get("params"), "snapshot not stored with params"
+            had_gamma = "gamma" in snap["fields"]["print_overrides"]
+            snap_gamma = snap["fields"]["print_overrides"].get("gamma")
+            # edit gamma clearly away from the snapshot
+            app.annotations[stem]["print_overrides"]["gamma"] = 9.9
+            # D engages the frozen snapshot render (independent of the edit)
+            app.compare_default = False
+            app._toggle_snapshot_compare()
+            assert app.compare_snapshot, "snapshot compare did not engage"
+            app._apply_live_render()
+            assert app._showing_snapshot, "snapshot render not shown in compare"
+            # toggling off returns to the current render
+            app._toggle_snapshot_compare()
+            assert not app.compare_snapshot
+            app._apply_live_render()
+            assert not app._showing_snapshot, "did not return to current render"
+            # Z restores the snapshotted look (the 9.9 edit is gone)
+            app._restore_snapshot()
+            restored = app.annotations[stem]["print_overrides"].get("gamma")
+            assert restored == snap_gamma, \
+                f"restore gamma wrong: {restored} vs snapshot {snap_gamma}"
+            assert ("gamma" in app.annotations[stem]["print_overrides"]) == had_gamma, \
+                "restore left the gamma override slot inconsistent"
+            assert app._snapshot_for_current() is not None, \
+                "restore dropped the snapshot (must be kept for repeat use)"
+        step("snapshot_restore", snapshot_restore)
+
         # ] brighter / [ darker: raise/lower black, re-solve exposure to hold the
         # highlight level (the user's manual move). Must be reversible: brighter
         # then darker returns BOTH black and exposure to the originals.

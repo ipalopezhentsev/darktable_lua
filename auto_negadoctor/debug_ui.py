@@ -29,6 +29,7 @@ Interaction (same idiom as the crop UI: select, then Ctrl+Click / scroll):
 """
 
 import sys
+import copy
 import math
 from pathlib import Path
 
@@ -135,6 +136,16 @@ WB_CH_COLORS = ("#ff8888", "#88dd88", "#88bbff")
 # percentiles, D_max, black/exposure and the print tune inside it.
 CROP_NAME = "crop"
 CROP_KEY = "8"
+
+# Snapshot: the per-frame annotation fields captured by "Snapshot current
+# settings" (S) and put back by "Restore to snapshot" (Z). These are the whole
+# editable look — patch/print/wb corrections, crop, notes and the bad flag.
+# global_base is deliberately excluded (it is a roll-wide mechanism with its own
+# set/clear), but its CURRENT effect is already baked into the frozen snapshot
+# params used for the compare render, so the compared image stays faithful.
+SNAPSHOT_FIELDS = ("patch_corrections", "print_overrides", "wb_overrides",
+                   "crop_correction", "patch_notes", "bad_inversion",
+                   "bad_inversion_note")
 
 # Analysis-mask view (M key cycles): category codes from
 # auto_negadoctor.build_analysis_mask and their RGBA tints. The analysis
@@ -889,6 +900,17 @@ class NegadoctorDebugUI(DebugUIBase):
         if self.view_negative:
             return
         img_dict = self.images[self.current_idx]
+        # snapshot compare (D): show the frozen snapshot render, untouched by
+        # later edits, so the user can A/B the stored look vs the current one.
+        snap = self._snapshot_for_current()
+        if self.compare_snapshot and snap and snap.get("params"):
+            lin = self._neg_lin(img_dict)
+            if lin is not None:
+                self._live_rendered = False
+                self._showing_snapshot = True
+                self._set_display_image(self._invert_pil(lin, snap["params"]))
+                return
+        self._showing_snapshot = False
         # compare mode: show the algorithm's default render even when the
         # user has corrections (X toggles back and forth)
         params = None if self.compare_default else self._corrected_params(img_dict)
@@ -927,6 +949,15 @@ class NegadoctorDebugUI(DebugUIBase):
         # ({source_stem, print:{name:val}, wb:{shadows/highlights:[r,g,b]}}).
         # Session-scoped (not persisted); None until something is copied.
         self.params_clipboard = None
+        # Per-frame look snapshots: {stem: {"fields": {...}, "params": {...},
+        # "variant": str}}. "fields" is a deep copy of the SNAPSHOT_FIELDS
+        # annotation slots (the editable look, with annotated values already
+        # taking precedence over auto); "params" is the EFFECTIVE negadoctor
+        # params frozen at snapshot time so the compare render is exact and
+        # independent of later edits. Session-scoped (like params_clipboard).
+        self.snapshots = {}
+        self.compare_snapshot = False   # show the frozen snapshot render (D)
+        self._showing_snapshot = False  # last live render came from a snapshot
         self.view_negative = False
         self.compare_default = False
         self.variant = "analytical"  # "analytical" | "ai"; PERSISTS across frames
@@ -981,6 +1012,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.reset_selection()
         self.view_negative = False
         self.compare_default = False
+        self.compare_snapshot = False
+        self._showing_snapshot = False
         # mask_view intentionally PERSISTS across image switches: when
         # reviewing crops the user steps through the roll in that mode
         self._display_base_pil = None
@@ -989,6 +1022,8 @@ class NegadoctorDebugUI(DebugUIBase):
             self._update_view_btn()
         if hasattr(self, "compare_btn"):
             self._update_compare_btn()
+        if hasattr(self, "snap_cmp_btn"):
+            self._update_snapshot_btn()
 
     def update_counts(self):
         # apply the persistent AI/analytical variant to this frame's params
@@ -1079,6 +1114,8 @@ class NegadoctorDebugUI(DebugUIBase):
         "              paste them onto another frame (annotated values\n"
         "              are copied where present, else the auto ones)\n"
         "  C           clear the selected correction\n"
+        "  S / Z       snapshot current settings / restore to snapshot\n"
+        "  D           compare snapshot render with the current one\n"
         "  V           inverted preview / raw negative\n"
         "  X           corrected render / algorithm default\n"
         "  A           variant: analytical / AI (LLM)\n"
@@ -1182,6 +1219,13 @@ class NegadoctorDebugUI(DebugUIBase):
         adj.add_command(label="Paste params onto this frame", accelerator="Ctrl+V",
                         command=self._paste_params)
         adj.add_separator()
+        adj.add_command(label="Snapshot current settings", accelerator="S",
+                        command=self._take_snapshot)
+        adj.add_command(label="Restore to snapshot", accelerator="Z",
+                        command=self._restore_snapshot)
+        adj.add_command(label="Compare with snapshot", accelerator="D",
+                        command=self._toggle_snapshot_compare)
+        adj.add_separator()
         adj.add_command(label="Toggle bad-inversion flag", accelerator="G",
                         command=self._toggle_bad_inversion)
         menubar.add_cascade(label="Adjust", menu=adj)
@@ -1229,6 +1273,8 @@ class NegadoctorDebugUI(DebugUIBase):
         sep()
         self.view_btn = btn("Negative", self._toggle_view)
         self.compare_btn = btn("Default", self._toggle_compare)
+        self.snap_cmp_btn = btn("vs Snap", self._toggle_snapshot_compare)
+        self._update_snapshot_btn()
         sep()
         self.variant_btn = btn("Analytical", self._toggle_variant)
         self.vignette_btn = btn("Vignette ✓", self._toggle_vignette)
@@ -1539,6 +1585,13 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<G>", lambda e: self._toggle_bad_inversion())
         self.bind_key("<x>", lambda e: self._toggle_compare())
         self.bind_key("<X>", lambda e: self._toggle_compare())
+        # snapshot the current look (S), restore it (Z), compare with it (D)
+        self.bind_key("<s>", lambda e: self._take_snapshot())
+        self.bind_key("<S>", lambda e: self._take_snapshot())
+        self.bind_key("<z>", lambda e: self._restore_snapshot())
+        self.bind_key("<Z>", lambda e: self._restore_snapshot())
+        self.bind_key("<d>", lambda e: self._toggle_snapshot_compare())
+        self.bind_key("<D>", lambda e: self._toggle_snapshot_compare())
         self.bind_key("<a>", lambda e: self._toggle_variant())
         self.bind_key("<A>", lambda e: self._toggle_variant())
         self.bind_key("<n>", lambda e: self._toggle_vignette())
@@ -2293,6 +2346,99 @@ class NegadoctorDebugUI(DebugUIBase):
                                 fg="#ffff88" if self.compare_default else "white")
 
     # ------------------------------------------------------------------
+    # Snapshot / restore / compare (S / Z / D)
+    # ------------------------------------------------------------------
+
+    def _snapshot_for_current(self):
+        """The stored snapshot for the current frame, or None."""
+        imgs = getattr(self, "images", None)
+        if not imgs:
+            return None
+        return getattr(self, "snapshots", {}).get(imgs[self.current_idx]["stem"])
+
+    def _take_snapshot(self):
+        """S: freeze the current frame's editable look. Captures the annotation
+        fields (the annotated values that already win over auto) plus the
+        EFFECTIVE params at this instant, so the look can be restored (Z) or
+        A/B-compared (D) after further editing."""
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        ann = self.annotations[stem]
+        params = self._corrected_params(img_dict) or self._variant_params(img_dict)
+        self.snapshots[stem] = {
+            "fields": {k: copy.deepcopy(ann.get(k)) for k in SNAPSHOT_FIELDS},
+            "params": copy.deepcopy(params) if params else None,
+            "variant": self.variant,
+        }
+        # leaving compare mode (if it was on) so the user sees what they just
+        # snapshotted, not the now-identical frozen copy
+        self.compare_snapshot = False
+        self._update_snapshot_btn()
+        self._update_count_label()
+        self._update_canvas_status()
+        self._set_info_text(
+            f"Snapshot saved for {stem} — the current look is stored.\n"
+            "Edit freely, then Z restores it, or D compares the stored look "
+            "with the current one. (Snapshots are session-scoped.)")
+
+    def _restore_snapshot(self):
+        """Z: put the snapshotted look back, discarding edits made since. The
+        snapshot itself is kept, so you can snapshot → edit → restore → edit
+        again repeatedly."""
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        snap = self.snapshots.get(stem)
+        if not snap:
+            self._set_info_text("No snapshot for this frame yet — press S "
+                                "(Adjust → Snapshot current settings) first.")
+            return
+        ann = self.annotations[stem]
+        for k in SNAPSHOT_FIELDS:
+            ann[k] = copy.deepcopy(snap["fields"].get(k))
+        self.compare_snapshot = False     # we are now AT the snapshot
+        self._showing_snapshot = False
+        self._auto_save(stem)
+        self._sync_wheels()
+        self._update_snapshot_btn()
+        self._update_count_label()
+        self._populate_items_list()
+        self._reposition_inline_slider()
+        self._update_info_from_selection()
+        self._redraw_markers()
+        self._schedule_live_render(delay_ms=10)
+        self._set_info_text(
+            f"Restored {stem} to its snapshot — edits since the snapshot were "
+            "discarded. (The snapshot is kept; press S to re-snapshot.)")
+
+    def _toggle_snapshot_compare(self):
+        """D: flip between the frozen snapshot render and the current render."""
+        snap = self._snapshot_for_current()
+        if not snap:
+            self._set_info_text("No snapshot for this frame yet — press S "
+                                "(Adjust → Snapshot current settings) first.")
+            return
+        if not snap.get("params"):
+            self._set_info_text("This frame's snapshot has no render "
+                                "(no params were available when it was taken).")
+            return
+        self.compare_default = False      # mutually exclusive with the X compare
+        self._update_compare_btn()
+        self.compare_snapshot = not self.compare_snapshot
+        self._update_snapshot_btn()
+        self._schedule_live_render(delay_ms=10)
+        self._update_canvas_status()
+
+    def _update_snapshot_btn(self):
+        if not hasattr(self, "snap_cmp_btn"):
+            return
+        has = self._snapshot_for_current() is not None
+        on = self.compare_snapshot and has
+        label = "Current" if on else "vs Snap"
+        self.snap_cmp_btn.config(
+            text=label,
+            fg="#ffff88" if on else ("white" if has else "#888888"))
+
+    # ------------------------------------------------------------------
     # AI variant switch (spec 03)
     # ------------------------------------------------------------------
 
@@ -2555,6 +2701,8 @@ class NegadoctorDebugUI(DebugUIBase):
 
         if self.view_negative:
             parts.append(("NEGATIVE VIEW", "#88ccff"))
+        elif self.compare_snapshot and self._showing_snapshot:
+            parts.append(("SNAPSHOT RENDER (D: current)", "#ffb0e0"))
         elif self.compare_default and self._has_corrections():
             parts.append(("DEFAULT RENDER (X: corrected)", "#ffcc00"))
         elif self._live_rendered:
@@ -3250,9 +3398,10 @@ class NegadoctorDebugUI(DebugUIBase):
     def item_panel_header_text(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
         crop = ", crop✓" if ann.get("crop_correction") else ""
+        snap = ", snap✓" if self._snapshot_for_current() else ""
         return (f"{len(ann['patch_corrections'])}/2 patches, "
                 f"{len(ann['wb_overrides'])}/2 wb, "
-                f"{len(ann['print_overrides'])}/{len(PRINT_PARAMS)} print{crop}")
+                f"{len(ann['print_overrides'])}/{len(PRINT_PARAMS)} print{crop}{snap}")
 
     def item_rows(self):
         img_dict = self.images[self.current_idx]
