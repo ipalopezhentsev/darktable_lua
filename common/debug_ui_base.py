@@ -174,6 +174,10 @@ class DebugUIBase:
     # Selection / Fit / Hide Markers) is omitted — for UIs whose actions all
     # live on the menu bar + toolbar (it scales poorly and is redundant there).
     SHOW_BOTTOM_BUTTONS = True
+    # When True the UI may start with ZERO images (no empty-session error, no
+    # auto-load of image 0) and have them appended later via add_image() — for
+    # subclasses that analyze + populate progressively after the window is up.
+    ALLOW_EMPTY_SESSION = False
 
     def __init__(self, root, session_dir):
         self.root = root
@@ -187,7 +191,7 @@ class DebugUIBase:
         self.root.geometry(self._scaled_geometry(self.WINDOW_GEOMETRY))
 
         images, constants = self.load_session(session_dir)
-        if not images:
+        if not images and not self.ALLOW_EMPTY_SESSION:
             messagebox.showerror("Error",
                                  f"{self.EMPTY_SESSION_MESSAGE}\n{session_dir}")
             root.destroy()
@@ -198,7 +202,7 @@ class DebugUIBase:
         self.constants = constants
         # Total wall-clock time of the detection run that produced this
         # session (session-level; duplicated into every per-image file)
-        self.run_wall_time_s = images[0].get("run_wall_time_s")
+        self.run_wall_time_s = images[0].get("run_wall_time_s") if images else None
 
         # Per-image annotation state (schema defined by the subclass)
         self.annotations = {}
@@ -261,7 +265,8 @@ class DebugUIBase:
         # after(0) fires on the first event-loop tick; after(150) fires later,
         # by which time lb_rows will already exist.
         self.root.after(0, self._populate_thumb_list)
-        self.root.after(150, self._load_image_by_idx, 0)
+        if self.images:
+            self.root.after(150, self._load_image_by_idx, 0)
 
     # ------------------------------------------------------------------
     # Hi-DPI pixel scaling
@@ -1204,29 +1209,7 @@ class DebugUIBase:
     def _populate_thumb_list(self):
         self.lb_img_labels = []   # Label widget per row (holds thumb, created lazily)
         for i, img_dict in enumerate(self.images):
-            row = tk.Frame(self.lb_inner, bg="#363636", cursor="hand2")
-            row.pack(fill=tk.X, padx=2, pady=(2, 0))
-            self.lb_photos.append(None)   # placeholder; filled in lazily
-
-            def _bind_click(w, idx=i):
-                w.bind("<Button-1>", lambda e: self._on_thumb_row_click(idx))
-                w.bind("<MouseWheel>", self._on_lb_scroll)
-
-            # Placeholder label (shows loading indicator, replaced by thumb later)
-            lbl_img = tk.Label(row, text="…", bg="#363636", fg="#808080",
-                               font=("", 8), cursor="hand2", anchor="center",
-                               width=26, height=5)
-            lbl_img.pack(fill=tk.X)
-            _bind_click(lbl_img)
-            self.lb_img_labels.append(lbl_img)
-
-            lbl_txt = tk.Label(row, text=img_dict["stem"], bg="#363636",
-                               fg="#cccccc", font=("", 8), wraplength=200,
-                               cursor="hand2", anchor="w")
-            lbl_txt.pack(fill=tk.X, padx=2, pady=(1, 3))
-            _bind_click(lbl_txt)
-            _bind_click(row)
-            self.lb_rows.append(row)
+            self._make_thumb_row(i, img_dict)
 
         # Load thumbnails in background thread; main thread applies them
         self._thumb_queue = queue.Queue()
@@ -1234,6 +1217,93 @@ class DebugUIBase:
             target=self._thumb_loader_thread, daemon=True)
         self._thumb_thread.start()
         self.root.after(50, self._poll_thumb_queue)
+
+    def _make_thumb_row(self, i, img_dict):
+        """Build the thumbnail-strip row for image index i (placeholder thumb;
+        the bitmap is filled in later by the batch loader or _stream_thumb)."""
+        row = tk.Frame(self.lb_inner, bg="#363636", cursor="hand2")
+        row.pack(fill=tk.X, padx=2, pady=(2, 0))
+        self.lb_photos.append(None)   # placeholder; filled in lazily
+
+        def _bind_click(w, idx=i):
+            w.bind("<Button-1>", lambda e: self._on_thumb_row_click(idx))
+            w.bind("<MouseWheel>", self._on_lb_scroll)
+
+        # Placeholder label (shows loading indicator, replaced by thumb later)
+        lbl_img = tk.Label(row, text="…", bg="#363636", fg="#808080",
+                           font=("", 8), cursor="hand2", anchor="center",
+                           width=26, height=5)
+        lbl_img.pack(fill=tk.X)
+        _bind_click(lbl_img)
+        self.lb_img_labels.append(lbl_img)
+
+        lbl_txt = tk.Label(row, text=img_dict["stem"], bg="#363636",
+                           fg="#cccccc", font=("", 8), wraplength=200,
+                           cursor="hand2", anchor="w")
+        lbl_txt.pack(fill=tk.X, padx=2, pady=(1, 3))
+        _bind_click(lbl_txt)
+        _bind_click(row)
+        self.lb_rows.append(row)
+
+    # ------------------------------------------------------------------
+    # Progressive population (ALLOW_EMPTY_SESSION subclasses)
+    # ------------------------------------------------------------------
+
+    def add_image(self, img_dict, render_thumb=True):
+        """Append ONE image after construction: register its annotation state,
+        build its thumbnail-strip row, and (optionally) render its thumbnail in
+        the background. Used by subclasses that analyze + populate progressively.
+        Returns the new image's index."""
+        self.images.append(img_dict)
+        if img_dict["stem"] not in self.annotations:
+            self.annotations[img_dict["stem"]] = self.new_annotation_state(img_dict)
+            self._load_existing_annotations_for(img_dict)
+        i = len(self.images) - 1
+        self._make_thumb_row(i, img_dict)
+        if render_thumb:
+            self._stream_thumb(i, img_dict)
+        return i
+
+    def _apply_stream_thumb(self, i, pil):
+        """Apply an ALREADY-rendered thumbnail PIL to row i (main thread). Lets a
+        subclass that rendered the bitmap itself skip the background re-decode."""
+        if i >= len(self.lb_img_labels):
+            return
+        pil = pil.copy()
+        pil.thumbnail((210, 140), Image.LANCZOS)
+        photo = ImageTk.PhotoImage(self._color_manage(pil))
+        self.lb_photos[i] = photo
+        self.lb_img_labels[i].config(image=photo, text="", width=0, height=0)
+
+    def _stream_thumb(self, i, img_dict):
+        """Render one thumbnail off-thread and apply it on the main thread (via a
+        persistent queue poll, so images added at any time get their bitmap)."""
+        if getattr(self, "_stream_q", None) is None:
+            self._stream_q = queue.Queue()
+            self.root.after(50, self._poll_stream_thumbs)
+        q = self._stream_q
+
+        def work():
+            try:
+                pil = self._load_thumb_pil(img_dict)
+                pil.thumbnail((210, 140), Image.LANCZOS)
+            except Exception:
+                pil = None
+            q.put((i, pil))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_stream_thumbs(self):
+        try:
+            while True:
+                i, pil = self._stream_q.get_nowait()
+                if pil is not None and i < len(self.lb_img_labels):
+                    photo = ImageTk.PhotoImage(self._color_manage(pil))
+                    self.lb_photos[i] = photo
+                    self.lb_img_labels[i].config(image=photo, text="",
+                                                 width=0, height=0)
+        except queue.Empty:
+            pass
+        self.root.after(120, self._poll_stream_thumbs)
 
     def _thumb_loader_thread(self):
         """Background: open + resize each image, push PIL Image to queue."""
@@ -1491,26 +1561,31 @@ class DebugUIBase:
     def _load_existing_annotations(self):
         """Load any previously saved annotation files."""
         for img in self.images:
-            stem = img["stem"]
-            ann_path = os.path.join(self.session_dir, f"{stem}{self.ANNOTATION_SUFFIX}")
-            if not os.path.exists(ann_path):
-                continue
-            try:
-                with open(ann_path, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                continue
-            self.deserialize_annotations(img, data)
+            self._load_existing_annotations_for(img)
+
+    def _load_existing_annotations_for(self, img):
+        """Load one image's saved annotation file, if present."""
+        stem = img["stem"]
+        ann_path = os.path.join(self.session_dir, f"{stem}{self.ANNOTATION_SUFFIX}")
+        if not os.path.exists(ann_path):
+            return
+        try:
+            with open(ann_path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        self.deserialize_annotations(img, data)
 
     # ------------------------------------------------------------------
     # Report generation & close
     # ------------------------------------------------------------------
 
     def _on_close(self):
-        # Save current image annotations
-        stem = self.images[self.current_idx]["stem"]
-        self._auto_save(stem)
-        self._write_debug_report()
+        # Save current image annotations (none yet if the session is still empty)
+        if self.images:
+            stem = self.images[self.current_idx]["stem"]
+            self._auto_save(stem)
+            self._write_debug_report()
         self.root.destroy()
 
     def _write_debug_report(self):

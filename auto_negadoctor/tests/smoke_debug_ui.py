@@ -10,8 +10,10 @@ Usage: conda run -n autocrop python auto_negadoctor/tests/smoke_debug_ui.py
        (or pass an existing session dir as the only argument)
 """
 
+import copy
 import json
 import os
+import queue
 import shutil
 import sys
 import tempfile
@@ -782,6 +784,107 @@ def main():
             app._clear_correction()
             assert "film_base" not in app.annotations[stem]["patch_corrections"]
         step("clear_correction", clear)
+
+        # Run mode (Lua launches `debug_ui.py --run`): the UI analyzes the roll
+        # ITSELF and STREAMS each finalized frame into the live view via
+        # on_frame_done, with progress ticks. Exercise the streaming + the base
+        # add_image() row append (reverting it so later steps see clean state).
+        def run_mode_initial():
+            seen, prog, thumbs = [], [], []
+            def on_fr(fr, rl):
+                d = an.frame_session_dict(fr, rl)
+                if not d:
+                    return
+                seen.append(d)
+                # the streamed thumbnail is rendered from the analysis buffer
+                # (fr["_loaded"]) — no TIFF re-decode
+                loaded = fr.get("_loaded")
+                if loaded is not None:
+                    thumbs.append(app._render_thumb_from_lin(loaded[1], fr["params"]))
+            frames, roll = app._call_process_roll(
+                None, False, lambda d, t: prog.append((d, t)), on_frame_done=on_fr)
+            assert prog, "no progress ticks emitted"
+            good = [s for s in seen if s]
+            assert len(good) == len(app.images), \
+                f"on_frame_done streamed {len(good)} != {len(app.images)} frames"
+            assert good[0]["stem"] and "params" in good[0], "streamed dict malformed"
+            assert len(thumbs) == len(app.images) and all(t is not None for t in thumbs), \
+                "streamed thumbnails not rendered from the analysis buffer"
+            # base.add_image appends a row; _apply_stream_thumb fills its bitmap
+            # directly (no re-decode). Revert after, to keep later steps pristine.
+            n0 = len(app.images)
+            i = app.add_image(copy.deepcopy(app.images[0]), render_thumb=False)
+            app._apply_stream_thumb(i, thumbs[0])
+            assert app.lb_photos[i] is not None, "_apply_stream_thumb set no bitmap"
+            assert len(app.images) == n0 + 1 and len(app.lb_rows) == n0 + 1 \
+                and len(app.lb_img_labels) == n0 + 1, "add_image did not add a row"
+            app.images.pop()
+            app.lb_rows.pop().destroy()
+            app.lb_img_labels.pop()
+            app.lb_photos.pop()
+        step("run_mode_initial", run_mode_initial)
+
+        # The first-scan "Analyzing…" overlay is drawn ON the canvas (label +
+        # progress bar), stays centered on resize, and tracks the %.
+        def analyzing_overlay():
+            app._show_canvas_message("Analyzing roll…")
+            items = app.canvas.find_withtag("analyzing_msg")
+            assert len(items) >= 4, "overlay missing (backdrop + label + bar + pct)"
+            cw = app.canvas.winfo_width()
+            texts = [i for i in items if app.canvas.type(i) == "text"]
+            assert texts, "overlay has no text item"
+            tx = app.canvas.coords(texts[0])[0]
+            assert abs(tx - cw / 2) < 3, f"overlay text not centered: {tx} vs {cw/2}"
+            app._set_analyzing_pct(40.0)
+            assert abs(app._prog_target - 40.0) < 1e-9, "real target not stored"
+            # the displayed value eases toward the target (monotonic, never past)
+            app._animate_progress()
+            assert 0.0 < app._analyzing_pct <= 40.0, \
+                f"displayed pct should ease up toward target: {app._analyzing_pct}"
+            app._on_canvas_configure(ev())     # simulated resize re-centers it
+            assert app.canvas.find_withtag("analyzing_msg"), "overlay lost on resize"
+            app._clear_canvas_message()
+            assert app._prog_anim_job is None, "animator not cancelled on clear"
+            assert not app.canvas.find_withtag("analyzing_msg"), "overlay not cleared"
+            assert app._analyzing is False
+        step("analyzing_overlay", analyzing_overlay)
+
+        # Preset selector: re-run the WHOLE analysis under a named preset on the
+        # fly. Drive the worker synchronously (no Tk thread) + _finish_reanalysis
+        # to swap the img_dicts, then restore the pristine "(as exported)"
+        # session. Exercises frame_session_dict reuse + the cache invalidation.
+        def preset_reanalyze():
+            assert "default" in app.preset_combo["values"], \
+                "preset dropdown missing the bundled 'default'"
+            cur = app.current_idx
+            orig_gamma = app.images[cur]["params"]["gamma"]
+            app._reanalysis_queue = queue.Queue()
+            app._reanalysis_worker("default")
+            # the worker emits ("progress", d, t) items then a final
+            # ("result", result); drain to the result and check we saw progress.
+            saw_progress = False
+            result = None
+            while result is None:
+                item = app._reanalysis_queue.get_nowait()
+                if item[0] == "progress":
+                    saw_progress = True
+                else:
+                    result = item[1]
+            assert saw_progress, "reanalysis emitted no progress updates"
+            assert result["error"] is None and result["images"] \
+                and len(result["images"]) == len(app.images), \
+                f"reanalysis failed: {result['error']}"
+            app._reanalyzing = True             # _finish re-enables the combobox
+            app._finish_reanalysis(result)
+            assert app._current_preset_label == "default", "preset label not set"
+            assert app.pil_image is not None, "no render after preset swap"
+            # "(as exported)" restores the original session params exactly
+            app.preset_var.set(app._PRESET_AS_EXPORTED)
+            app._on_preset_selected()
+            assert app._current_preset_label == app._PRESET_AS_EXPORTED
+            assert abs(app.images[cur]["params"]["gamma"] - orig_gamma) < 1e-9, \
+                "'(as exported)' did not restore the original params"
+        step("preset_reanalyze", preset_reanalyze)
 
         step("clear_selection", lambda: app._clear_selection())
         step("close", lambda: app._on_close())

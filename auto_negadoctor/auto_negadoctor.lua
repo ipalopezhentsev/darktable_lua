@@ -212,16 +212,21 @@ local function scan_history_entries(xmp_content)
   return entries
 end
 
--- Check whether an operation has an ACTIVE entry (enabled and inside
--- history_end) in the XMP.
+-- Check whether an operation is ACTIVE in the XMP. A module can appear in
+-- several history entries (toggling it off appends a NEW enabled="0" entry and
+-- leaves the older enabled="1" one behind), so its effective state is decided
+-- by the HIGHEST-num entry below history_end, not by "any enabled entry
+-- exists" — otherwise a stale earlier-enabled entry makes a currently-OFF
+-- module (e.g. agx scrolled back / disabled) look active.
 local function has_enabled_module(xmp_content, opname)
   local history_end = tonumber(xmp_content:match('darktable:history_end="(%d+)"')) or 999
+  local latest = nil
   for i, entry in ipairs(scan_history_entries(xmp_content)) do
-    if entry.operation == opname and entry.enabled and entry.num < history_end then
-      return true
+    if entry.operation == opname and entry.num < history_end then
+      if not latest or entry.num > latest.num then latest = entry end
     end
   end
-  return false
+  return latest ~= nil and latest.enabled
 end
 
 -- Read an image's XMP sidecar content, or nil when the file doesn't exist.
@@ -240,20 +245,22 @@ end
 -- un-cropped, un-vignette-corrected) the analysis needs. Restored right after.
 local CLEAN_EXPORT_OPS = { negadoctor = true, crop = true, lens = true }
 
--- Return the params hex of the ACTIVE entry for `opname` (the enabled entry
--- with the highest num below history_end), or nil if none is active. Used to
+-- Return the params hex of the ACTIVE entry for `opname` (the highest-num
+-- entry below history_end, provided it is enabled), or nil if the module is
+-- not effectively active. Mirrors has_enabled_module's latest-entry-wins
+-- semantics so a later disabling entry hides an older enabled one. Used to
 -- capture the currently-applied look so a continuous-edit re-run can seed the
 -- debug UI from the XMP even when no annotation sidecar survives.
 local function active_module_params(xmp_content, opname)
   local history_end = tonumber(xmp_content:match('darktable:history_end="(%d+)"')) or 999
-  local best = nil
+  local latest = nil
   for i, entry in ipairs(scan_history_entries(xmp_content)) do
-    if entry.operation == opname and entry.enabled and entry.num < history_end then
-      if not best or entry.num > best.num then best = entry end
+    if entry.operation == opname and entry.num < history_end then
+      if not latest or entry.num > latest.num then latest = entry end
     end
   end
-  if not best then return nil end
-  return best.text:match('darktable:params="([^"]*)"')
+  if not latest or not latest.enabled then return nil end
+  return latest.text:match('darktable:params="([^"]*)"')
 end
 
 -- Return a copy of xmp_content with every history entry whose operation is in

@@ -345,6 +345,11 @@ self-consistent: lightest area prints at 0.1 pre-gamma, densest at 0.96).
 
 ### Registered Actions
 
+NOTE (2026-06-22): for the THREE debug-UI actions below, `main()` no longer runs
+`process_roll` — it just launches `debug_ui.py --run` and the **UI runs the
+analysis itself behind a progress bar** (see the Debug UI "Self-run + progress"
+note). The analysis algorithm is unchanged; only the launch point moved.
+
 - **AutoNegadoctor_Debug** (`export_and_invert_debug`) — mode 1: export +
   analyze detached (hidden bat/vbs launch), opens the debug UI; no apply.
 - **AutoNegadoctor_InPlace** (`export_invert_and_apply(false)`) — mode 2:
@@ -639,6 +644,86 @@ bottom "Selected" panel (shown via `default_info_text` when nothing is selected)
 the left label is now a 3-4 line glance. The base (`common/debug_ui_base.py`)
 gained optional `build_menus`/`build_toolbar` hooks (no-op for crop/dust) and an
 `ITEM_PANEL_WIDTH` knob (negadoctor 360, for bigger color wheels).
+**Self-run + progress + preset dropdown (toolbar, 2026-06-22):**
+- **The debug UI runs the analysis ITSELF** (run mode). Lua/`main()` launch it
+  with `--run` (+ `--ai-tune` / `--apply` / `--preset NAME`) and NO longer
+  pre-compute the session — so the FULL window opens IMMEDIATELY (empty, with a
+  centered "Analyzing roll…" overlay + a progress bar **drawn ON the canvas** so
+  it stays visible at any window size and re-centers on resize — see
+  `_draw_analyzing_overlay`/the `_on_canvas_configure` override), then **frames
+  stream into the view as each one finalizes**, the same in-window feel as
+  switching a preset (no separate modal). **There is NO progress bar in the
+  toolbar — progress is ALWAYS the centered canvas overlay** (`_show_canvas_message`
+  / `_set_analyzing_pct` / `_clear_canvas_message`), used identically for the
+  first start AND in-session preset switches; the toolbar has ONLY the preset
+  combo (RIGHT-aligned) — no status text or bar next to it (the combo already
+  shows the active preset; a status label there just duplicated the overlay). The
+  overlay dims whatever is behind it (a frame, during a preset switch) with a
+  stippled backdrop. `load_session` returns `([], {})` in
+  run mode (base allows it via `ALLOW_EMPTY_SESSION`); `__init__` schedules
+  `_start_initial_analysis`, which runs `process_roll` on a background thread and
+  marshals back via a queue (`_initial_analysis_worker`/`_poll_initial_analysis`):
+  `("progress", d, t)` → `_set_analyzing_pct` (canvas overlay); `("frame",
+  session_dict, thumb)` → `add_image` + `_apply_stream_thumb` (the FIRST frame
+  also loads into the canvas); `("done", images, constants)` → swap to the
+  canonical reload (picks up the AI variant + the constants dict), capture
+  `_orig_images`, restore any seeded global-base override. **Progressive
+  appearance is bounded by the roll-wide reductions:** no frame finalizes until
+  stage 0/A/B1 + the global film base + roll-median wb are done, so frames stream
+  in during the frame-parallel **stage B2** — which is why **B2 also ticks the
+  progress bar**, so the bar tracks the frames actually appearing instead of
+  stalling. **Progress ticks are COST-WEIGHTED by MEASURED per-stage wall time**
+  (`_PROG_W_VIG/_A/_B1/_B2` = 1.5/2.8/6.0/2.2 per frame; the vignette decode
+  ticks per-frame too, via `estimate_vignette(on_done=)`, not one lump). NOTE the
+  slow stage is **B1** (full-frame preview render + wb region/patch search ≈ half
+  the wall time), NOT the print tune (B2 renders the small crop, it's fast) — an
+  earlier by-feel guess had B2 heaviest, which made the bar leap 50→100% at the
+  end. Re-measure (time each `_map_frames`) if the per-stage cost shifts. **Even
+  with correct weights the bar is intrinsically BURSTY** — each frame-parallel
+  stage's per-frame ticks land together near the stage's end (GIL-bound lockstep),
+  so the raw progress steps at stage boundaries. To make it READ as smooth motion
+  the debug UI's overlay **eases the displayed value toward the real target and
+  gently trickles** (`_animate_progress`: monotonic ease-up + a bounded creep to
+  `target+12`, capped <99) — measured continuous + monotonic, longest pause ~1.8s
+  vs the old multi-second freeze + 50→100 jump. **The
+  streamed thumbnail is rendered IN `on_frame` from the buffer the analysis
+  already decoded** (`fr["_loaded"]` → `_render_thumb_from_lin`, a downscaled
+  invert), NOT re-loaded from the TIFF on a separate thread — that separate
+  thread was starved by the 8-worker analysis pool, so thumbnails used to appear
+  in one burst only after analysis freed the CPU. Streaming is wired through
+  `process_roll(on_frame_done=)` → a new `_map_frames(on_result=)` that fires per
+  finalized item in order, on the caller's thread; the `roll` dict is built
+  BEFORE B2 so streamed frames carry full roll context (analytical params only —
+  the AI variant is added after B2, hence the canonical reload on done). The progress callback also prints
+  `PROGRESS|d|t` so the Lua foreground (annotate-apply) flow streams it. The UI
+  writes `negadoctor_results.txt` (the vignette the Lua apply step still reads) +
+  the debug sessions itself. `main()` for debug-UI modes now ONLY launches the UI
+  (seeding annotations first for apply mode, which is analysis-independent;
+  collecting durable annotations after); InPlace (non-UI) modes still run
+  `process_roll` + `write_results` in `main()` unchanged. **Base support
+  (`common/debug_ui_base.py`):** opt-in `ALLOW_EMPTY_SESSION` (no empty-session
+  error, no auto-load of image 0), `add_image()` + `_make_thumb_row` (extracted
+  from `_populate_thumb_list`), `_apply_stream_thumb(i, pil)` (apply an
+  already-rendered thumbnail directly) + a persistent `_stream_thumb`/
+  `_poll_stream_thumbs` for late background renders, `_load_existing_annotations_for(img)`,
+  and `images[0]`/`_on_close` guards — all no-ops for crop/dust.
+- **Preset dropdown:** a `ttk.Combobox` lists the bundled tuning presets
+  (`presets/*.json`, via `_preset_names`) plus `(as exported)`. Selecting one
+  **re-runs the WHOLE analysis** under that preset's `Tuning` on a **background
+  thread** (window already up, so async via a queue — `_start_reanalysis`/
+  `_reanalysis_worker`/`_poll_reanalysis`/`_finish_reanalysis`, progress shown by
+  the same centered canvas overlay as first start; Tcl isn't thread-safe so the
+  worker touches no widgets), swaps every frame's img_dict in place, and refreshes renders/
+  thumbnails. `frame_session_dict` in `auto_negadoctor.py` (extracted from
+  `write_debug_sessions`) builds the per-frame session dict in memory so the swap
+  reuses the exact write/load shape. User annotations (keyed by stem) carry over
+  and re-apply on top of the new params; `(as exported)` restores a pristine
+  deepcopy of the original session (`_orig_images`). Re-analysis is analytical
+  only (AI variant reset).
+- Both paths share `_call_process_roll` (cfg from preset, source negatives from
+  `_source_image_paths` — loaded frames' paths, else the session-dir TIFFs/JPEGs)
+  and `_make_progress_popup`/`_set_progress`. Smoke-tested (`run_mode_initial` +
+  `preset_reanalyze` steps).
 **Global film-base OVERRIDE (Adjust → "Set global film base from this
 frame"):** the auto winner (`choose_global_base`) can be overridden — the
 CURRENT frame's effective film base becomes the roll-wide base and every frame's

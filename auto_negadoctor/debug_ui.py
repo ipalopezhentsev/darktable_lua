@@ -29,12 +29,16 @@ Interaction (same idiom as the crop UI: select, then Ctrl+Click / scroll):
 """
 
 import sys
+import os
 import copy
 import math
+import queue
+import threading
+import time
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 import numpy as np
 from PIL import Image, ImageTk
@@ -404,6 +408,13 @@ class NegadoctorDebugUI(DebugUIBase):
     # the auto params, auto where none) so the Lua side can write the XMPs.
     apply_mode = False
     APPLIED_RESULTS_FILENAME = "applied_results.txt"
+    # Run mode (Lua launches the UI with --run): the UI runs the WHOLE analysis
+    # itself on startup, behind a progress popup, instead of loading a session
+    # the caller pre-computed — so the window opens immediately and shows progress
+    # while even the first inversion runs. ai_tune / start_preset come from argv.
+    run_mode = False
+    ai_tune = False
+    start_preset = None
     EMPTY_SESSION_MESSAGE = "No *_debug_nega.json files found in:"
     ITEM_PANEL_TITLE = "Patches:"
     CENTER_BUTTON_TEXT = "Center on patch"
@@ -421,9 +432,268 @@ class NegadoctorDebugUI(DebugUIBase):
     # Session / annotation lifecycle
     # ------------------------------------------------------------------
 
+    def __init__(self, root, session_dir):
+        super().__init__(root, session_dir)
+        # Run mode (Lua launches --run): the full UI is already built and shown
+        # (empty); analyze the roll on a background thread and stream each frame
+        # into the view as it finalizes, with the toolbar progress bar — the same
+        # in-window feel as switching a preset, no separate modal popup.
+        if self.run_mode and root.winfo_exists():
+            self.root.after(150, self._start_initial_analysis)
+
     def load_session(self, session_dir):
         import auto_negadoctor
+        # Run mode starts EMPTY (ALLOW_EMPTY_SESSION) and populates progressively
+        # in _start_initial_analysis; otherwise load the pre-built session.
+        if self.run_mode:
+            return [], {}
         return auto_negadoctor.load_debug_nega_dir(session_dir)
+
+    # ------------------------------------------------------------------
+    # First-run analysis (run mode): analyze on a background thread and
+    # add frames to the live UI as each one finalizes.
+    # ------------------------------------------------------------------
+
+    def _start_initial_analysis(self):
+        """Begin the background analysis; frames stream in via _poll_initial."""
+        self._reanalyzing = True
+        self._init_wall_t0 = time.perf_counter()
+        if hasattr(self, "preset_combo"):
+            self.preset_combo.config(state="disabled")
+        self._show_canvas_message("Analyzing roll…")
+        self._init_q = queue.Queue()
+        threading.Thread(target=self._initial_analysis_worker, daemon=True).start()
+        self.root.after(80, self._poll_initial_analysis)
+
+    def _initial_analysis_worker(self):
+        import auto_negadoctor as an
+        q = self._init_q
+
+        def progress(done, total):
+            q.put(("progress", done, total))
+            print(f"PROGRESS|{done}|{total}", flush=True)   # stream to the Lua side
+
+        def on_frame(fr, roll):
+            data = an.frame_session_dict(fr, roll)
+            if data is None:
+                return
+            # Render this frame's thumbnail RIGHT HERE from the buffer the
+            # analysis already decoded (fr["_loaded"]), instead of re-loading the
+            # TIFF on a separate thread that the analysis pool would starve — so
+            # the thumbnail shows up as soon as the frame finalizes, not in a
+            # burst once analysis frees the CPU.
+            thumb = None
+            loaded = fr.get("_loaded")
+            if loaded is not None:
+                try:
+                    thumb = self._render_thumb_from_lin(loaded[1], fr["params"])
+                except Exception:
+                    thumb = None
+            q.put(("frame", data, thumb))
+
+        try:
+            frames, roll = self._call_process_roll(
+                self.start_preset, self.ai_tune, progress, on_frame_done=on_frame)
+            wall = time.perf_counter() - self._init_wall_t0
+            an.write_results(frames, roll, self.session_dir, ai_tune=self.ai_tune)
+            an.write_debug_sessions(frames, roll, self.session_dir, wall_time_s=wall)
+            # canonical reload = analytical + any AI variant + the constants dict
+            images, constants = an.load_debug_nega_dir(self.session_dir)
+            q.put(("done", images, constants))
+        except Exception as e:
+            q.put(("error", e))
+
+    def _poll_initial_analysis(self):
+        try:
+            while True:
+                item = self._init_q.get_nowait()
+                kind = item[0]
+                if kind == "progress":
+                    _, done, total = item
+                    pct = (100.0 * done / total) if total else 0.0
+                    self._set_analyzing_pct(pct)       # centered canvas overlay
+                elif kind == "frame":
+                    self._add_analyzed_frame(item[1], item[2])
+                elif kind == "error":
+                    self._finish_initial_analysis(error=item[1])
+                    return
+                else:                                  # ("done", images, constants)
+                    self._finish_initial_analysis(images=item[1], constants=item[2])
+                    return
+        except queue.Empty:
+            pass
+        self.root.after(80, self._poll_initial_analysis)
+
+    def _add_analyzed_frame(self, session_dict, thumb=None):
+        """A frame finalized: show it (and load the first one into the canvas).
+        `thumb` is a pre-rendered PIL from the analysis buffer; apply it directly
+        (no background re-decode) when present, else fall back to a lazy render."""
+        first = not self.images
+        i = self.add_image(session_dict, render_thumb=(thumb is None))
+        if thumb is not None:
+            self._apply_stream_thumb(i, thumb)
+        self._update_count_label()
+        if first:
+            self._clear_canvas_message()
+            self._load_image_by_idx(0)
+
+    def _render_thumb_from_lin(self, lin, params):
+        """Cheap thumbnail PIL from an already-decoded linear negative: downscale
+        to thumbnail size, then invert. Avoids re-reading the TIFF. Runs on the
+        analysis worker thread (during stage B2); the downscaled render is tiny."""
+        import cv2
+        h, w = lin.shape[:2]
+        longest = max(h, w)
+        if longest > self._THUMB_RENDER_MAX:
+            s = self._THUMB_RENDER_MAX / longest
+            lin = cv2.resize(lin, (max(1, round(w * s)), max(1, round(h * s))),
+                             interpolation=cv2.INTER_AREA)
+        return self._invert_pil(lin, params)
+
+    def _finish_initial_analysis(self, images=None, constants=None, error=None):
+        self._reanalyzing = False
+        if hasattr(self, "preset_combo"):
+            self.preset_combo.config(state="readonly")
+        if error is not None or images is None:
+            self._clear_canvas_message()
+            msg = (error if error is not None
+                   else "no frames could be analyzed (source negatives missing?)")
+            messagebox.showerror("Analysis failed",
+                                 f"Could not analyze the roll:\n{msg}",
+                                 parent=self.root)
+            return
+        # Swap to the canonical session dicts (picks up the AI variant + the
+        # constants), keeping the existing rows/order (same stems, same order).
+        self.constants = constants or self.constants
+        self.data["constants"] = self.constants
+        if images and len(images) == len(self.images):
+            self.images[:] = images
+        elif images:                       # mismatch (shouldn't happen) — rebuild
+            self.images[:] = images
+        self._orig_images = copy.deepcopy(self.images)
+        self._restore_global_base_override()
+        if self.images:
+            self._neg_cache_key = None
+            self._load_image_by_idx(min(self.current_idx, len(self.images) - 1))
+
+    def _show_canvas_message(self, text):
+        """Start the centered 'analyzing' overlay (label + a progress bar drawn
+        ON the canvas, so it's always visible regardless of the toolbar width).
+        It re-centers on resize; the bar EASES toward real progress + gently
+        trickles, so the staged/bursty real updates read as smooth motion."""
+        self._analyzing = True
+        self._analyzing_text = text
+        self._analyzing_pct = 0.0       # displayed (animated)
+        self._prog_target = 0.0         # latest REAL progress
+        self._draw_analyzing_overlay()
+        self._start_progress_anim()
+
+    def _set_analyzing_pct(self, pct):
+        # record the real target; the animator eases the displayed value to it
+        self._prog_target = max(getattr(self, "_prog_target", 0.0),
+                                max(0.0, min(100.0, pct)))
+
+    def _start_progress_anim(self):
+        if getattr(self, "_prog_anim_job", None) is None:
+            self._prog_anim_job = self.root.after(60, self._animate_progress)
+
+    def _animate_progress(self):
+        self._prog_anim_job = None
+        if not getattr(self, "_analyzing", False):
+            return
+        disp, tgt = self._analyzing_pct, self._prog_target
+        # ease up toward the real target (a jump becomes a ~0.5s glide); never
+        # move backward
+        disp = max(disp, disp + (tgt - disp) * 0.25)
+        # once caught up, trickle slowly so a long opaque stage never looks
+        # frozen — but stay within a small margin of real progress (and < 99)
+        cap = min(99.0, tgt + 12.0)
+        if disp < cap:
+            disp = min(cap, disp + (cap - disp) * 0.04)
+        self._analyzing_pct = disp
+        self._draw_analyzing_overlay()
+        self._prog_anim_job = self.root.after(60, self._animate_progress)
+
+    def _draw_analyzing_overlay(self):
+        """(Re)draw the centered analyzing label + progress bar on the canvas."""
+        c = self.canvas
+        c.delete("analyzing_msg")
+        if not getattr(self, "_analyzing", False):
+            return
+        cw, ch = max(c.winfo_width(), 1), max(c.winfo_height(), 1)
+        cx, cy = cw / 2, ch / 2
+        pct = getattr(self, "_analyzing_pct", 0.0)
+        # dim whatever is behind (a frame during a preset switch) so the label +
+        # bar stay readable; stipple fakes alpha. First item, so it's behind.
+        c.create_rectangle(0, 0, cw, ch, fill="#000000", stipple="gray50",
+                           outline="", tags="analyzing_msg")
+        c.create_text(cx, cy - self.scaled(24), text=self._analyzing_text,
+                      fill="#ffffff", font=("", 14), justify="center",
+                      tags="analyzing_msg")
+        bar_w = min(cw * 0.6, self.scaled(420))
+        bar_h = self.scaled(22)
+        x0, y0 = cx - bar_w / 2, cy + self.scaled(8)
+        c.create_rectangle(x0, y0, x0 + bar_w, y0 + bar_h, fill="#333333",
+                           outline="#555555", tags="analyzing_msg")
+        if pct > 0:
+            c.create_rectangle(x0, y0, x0 + bar_w * pct / 100.0, y0 + bar_h,
+                               fill="#4a90d9", outline="", tags="analyzing_msg")
+        # percent centered ON the bar (white + bold reads on both the filled and
+        # unfilled portions), not below it where it was nearly invisible
+        c.create_text(cx, y0 + bar_h / 2, text=f"{pct:.0f}%", fill="#ffffff",
+                      font=("", 10, "bold"), tags="analyzing_msg")
+
+    def _clear_canvas_message(self):
+        self._analyzing = False
+        if getattr(self, "_prog_anim_job", None) is not None:
+            try:
+                self.root.after_cancel(self._prog_anim_job)
+            except Exception:
+                pass
+            self._prog_anim_job = None
+        self.canvas.delete("analyzing_msg")
+
+    def _on_canvas_configure(self, event):
+        # While analyzing the canvas has no image; keep the overlay centered on
+        # resize (the base re-fit path only runs when there IS an image).
+        if getattr(self, "_analyzing", False):
+            self._draw_analyzing_overlay()
+            return
+        super()._on_canvas_configure(event)
+
+    def _source_image_paths(self):
+        """Source-negative paths for (re)analysis: the loaded frames' paths when
+        the session is populated, else the TIFFs (then JPEGs) in the session
+        dir — the run-mode case, where no img_dicts exist yet."""
+        imgs = getattr(self, "images", None)
+        if imgs:
+            return [d["negative_path"] for d in imgs
+                    if d.get("negative_path") and Path(d["negative_path"]).exists()]
+        d = Path(self.session_dir)
+        for pat in ("*.tif", "*.tiff", "*.jpg", "*.jpeg"):
+            hits = sorted(str(p) for p in d.glob(pat))
+            if hits:
+                return hits
+        return []
+
+    def _call_process_roll(self, preset_name, ai_tune, progress_cb,
+                           on_frame_done=None):
+        """Run auto_negadoctor.process_roll under `preset_name` (None / the
+        '(as exported)' sentinel → DEFAULT_TUNING). Returns (frames, roll).
+        `on_frame_done(fr, roll)` streams each finalized frame. No Tk access —
+        safe to call from a worker thread."""
+        import auto_negadoctor as an
+        cfg = (an._tuning.load(preset_name)
+               if preset_name and preset_name != self._PRESET_AS_EXPORTED
+               else an.DEFAULT_TUNING)
+        image_paths = self._source_image_paths()
+        if not image_paths:
+            raise RuntimeError("no source negatives for this session")
+        exif = an.parse_exif_params(
+            os.path.join(str(self.session_dir), "exif_params.txt"))
+        return an.process_roll(image_paths, exif, progress_cb, ai_tune=ai_tune,
+                               session_dir=str(self.session_dir), cfg=cfg,
+                               on_frame_done=on_frame_done)
 
     def new_annotation_state(self, img_dict):
         return {
@@ -934,7 +1204,26 @@ class NegadoctorDebugUI(DebugUIBase):
     # Selection state
     # ------------------------------------------------------------------
 
+    # Combobox sentinel for "restore the params as they were exported" (the
+    # original session, before any on-the-fly preset re-analysis).
+    _PRESET_AS_EXPORTED = "(as exported)"
+
     def init_selection_state(self):
+        # Pristine copy of the loaded session img_dicts so "(as exported)" can
+        # restore the original analysis after on-the-fly preset re-runs. These
+        # are JSON-shaped dicts (params/borders/patches — no pixel buffers), so
+        # the deep copy is cheap.
+        self._orig_images = copy.deepcopy(self.images)
+        # label the originally-run preset (so the dropdown shows what produced
+        # the current look); "(as exported)" otherwise / for a re-opened session.
+        self._current_preset_label = (self.start_preset if self.start_preset
+                                      else self._PRESET_AS_EXPORTED)
+        self._reanalyzing = False
+        self._reanalysis_queue = None
+        self._analyzing = False        # first-scan canvas overlay active
+        self._analyzing_pct = 0.0      # displayed (eased) progress
+        self._prog_target = 0.0        # latest real progress
+        self._prog_anim_job = None
         # selected_patch holds a patch name OR a print-param name
         self.selected_patch = None
         # User-chosen roll-wide film base: the local base of one frame,
@@ -992,6 +1281,12 @@ class NegadoctorDebugUI(DebugUIBase):
         self._patch_drag = None        # in-progress patch move (press/drag/release)
         # restore a saved global film-base override (the source frame's
         # annotation carries the snapshot)
+        self._restore_global_base_override()
+
+    def _restore_global_base_override(self):
+        """Activate a saved global film-base override from the per-frame
+        annotations (re-run after progressive population, since init ran on the
+        still-empty image list)."""
         for img in (getattr(self, "images", None) or []):
             gb = self.annotations[img["stem"]].get("global_base")
             if gb:
@@ -1284,12 +1579,170 @@ class NegadoctorDebugUI(DebugUIBase):
         self.mask_btn = btn(MASK_BTN_LABELS[0], self._cycle_mask_view)
         self.hist_btn = btn("Histogram ✓", self._toggle_histogram)
         self.clip_btn = btn("Clip", self._toggle_clipping)
+        # Preset selector: pick a tuning preset and re-run the whole analysis
+        # on the fly (off the Tk thread), then refresh every frame's render.
+        # RIGHT-aligned in its own frame so it (and the progress bar) stay
+        # visible even when the left button row is crowded at the default width.
+        pr = tk.Frame(row, bg="#3f3f3f")
+        pr.pack(side=tk.RIGHT, padx=(8, 4))
+        tk.Label(pr, text="Preset:", bg="#3f3f3f", fg="#cccccc",
+                 font=("", 8)).pack(side=tk.LEFT, padx=(2, 2))
+        self.preset_var = tk.StringVar(value=self._current_preset_label)
+        values = [self._PRESET_AS_EXPORTED] + self._preset_names()
+        if self._current_preset_label not in values:   # a start --preset path/name
+            values.append(self._current_preset_label)
+        self.preset_combo = ttk.Combobox(
+            pr, textvariable=self.preset_var, state="readonly", width=14,
+            values=values)
+        self.preset_combo.pack(side=tk.LEFT, padx=1, pady=2)
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        # No status text next to the dropdown — the dropdown already shows the
+        # active preset, and analysis PROGRESS is the centered canvas overlay.
 
         # second row: live view-state status (moved off the image)
         self.canvas_status = tk.Label(parent, text="", bg="#2c2c2c",
                                       fg="#cccccc", font=("Courier", 9),
                                       anchor="w", padx=8, pady=2)
         self.canvas_status.pack(side=tk.TOP, fill=tk.X)
+
+    # ------------------------------------------------------------------
+    # Preset selector: re-run the whole analysis under a different Tuning
+    # preset and refresh every frame's live render (the honest output of
+    # that preset — the same pipeline the production run uses).
+    # ------------------------------------------------------------------
+
+    def _preset_names(self):
+        """Sorted names of the bundled tuning presets (presets/*.json)."""
+        import auto_negadoctor as an
+        try:
+            d = Path(an._tuning.PRESETS_DIR)
+            return sorted(p.stem for p in d.glob("*.json"))
+        except Exception:
+            return []
+
+    def _defocus_preset_combo(self):
+        """Move focus off the preset combo (back to the canvas) and clear its
+        text-selection highlight, so it doesn't sit looking 'selected' and the
+        keyboard shortcuts keep working."""
+        try:
+            self.preset_combo.selection_clear()
+        except Exception:
+            pass
+        self.canvas.focus_set()
+
+    def _on_preset_selected(self, event=None):
+        name = self.preset_var.get()
+        # A readonly combobox, after a pick, keeps keyboard focus (swallowing the
+        # canvas/root shortcut keys) AND shows its text with the selection
+        # highlight. Drop the highlight now, and hand focus back to the canvas
+        # once this event settles.
+        self.preset_combo.selection_clear()
+        self.root.after_idle(self._defocus_preset_combo)
+        if self._reanalyzing:
+            return
+        if name == self._PRESET_AS_EXPORTED:
+            if self._current_preset_label == self._PRESET_AS_EXPORTED:
+                return
+            self.images[:] = copy.deepcopy(self._orig_images)
+            self._current_preset_label = self._PRESET_AS_EXPORTED
+            self._after_reanalysis(self._PRESET_AS_EXPORTED)
+            return
+        if name == self._current_preset_label:
+            return
+        self._start_reanalysis(name)
+
+    def _start_reanalysis(self, preset_name):
+        """Kick off process_roll under `preset_name` on a background thread; the
+        result + progress are marshalled back to the Tk thread via a queue (Tcl
+        is not thread-safe, so the worker must not touch widgets — same pattern
+        as the thumbnail loader). Progress is shown by the centered canvas
+        overlay, exactly like the first start (no bar next to the dropdown)."""
+        self._reanalyzing = True
+        self.preset_combo.config(state="disabled")
+        self._show_canvas_message(f"Applying preset '{preset_name}'…")
+        self._reanalysis_queue = queue.Queue()
+        threading.Thread(target=self._reanalysis_worker, args=(preset_name,),
+                         daemon=True).start()
+        self.root.after(100, self._poll_reanalysis)
+
+    def _reanalysis_worker(self, preset_name):
+        import auto_negadoctor as an
+        q = self._reanalysis_queue
+
+        def progress(done, total):
+            q.put(("progress", done, total))
+
+        result = {"preset": preset_name, "images": None, "error": None}
+        try:
+            frames, roll = self._call_process_roll(preset_name, False, progress)
+            by_stem = {}
+            for fr in frames:
+                data = an.frame_session_dict(fr, roll)
+                if data is not None:
+                    by_stem[data["stem"]] = data
+            if not by_stem:
+                raise RuntimeError(
+                    "no frames could be analyzed (source negatives missing?)")
+            # Preserve the original frame order; keep the previous dict for any
+            # frame that errored under this preset (so the roll never shrinks).
+            result["images"] = [by_stem.get(old["stem"], old) for old in self.images]
+        except Exception as e:   # surfaced to the user on the Tk thread
+            result["error"] = e
+        q.put(("result", result))
+
+    def _poll_reanalysis(self):
+        try:
+            while True:
+                item = self._reanalysis_queue.get_nowait()
+                if item[0] == "progress":
+                    _, done, total = item
+                    self._set_analyzing_pct((100.0 * done / total)
+                                            if total else 0.0)
+                else:                       # ("result", result)
+                    self._finish_reanalysis(item[1])
+                    return
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_reanalysis)
+
+    def _finish_reanalysis(self, result):
+        self._reanalyzing = False
+        self.preset_combo.config(state="readonly")
+        self._clear_canvas_message()
+        if result["error"] is not None or not result["images"]:
+            messagebox.showerror(
+                "Preset analysis failed",
+                f"Could not apply preset '{result['preset']}':\n{result['error']}",
+                parent=self.root)
+            self.preset_var.set(self._current_preset_label)
+            return
+        self.images[:] = result["images"]
+        self._current_preset_label = result["preset"]
+        self._after_reanalysis(result["preset"])
+
+    def _after_reanalysis(self, applied_label):
+        """Swap-in done: every frame's params/border/vignette changed, so all
+        stem-keyed caches and the AI variant are stale. Drop them, re-render the
+        thumbnails, and reload the current frame through the normal path."""
+        self.variant = "analytical"
+        self._neg_cache_key = None
+        self._neg_cache = None
+        self._amask_cache_stem = None
+        self._amask_cache = None
+        self._refresh_thumbnails()
+        self._load_image_by_idx(self.current_idx)
+        self.canvas.focus_set()    # keep keyboard shortcuts alive post-switch
+
+    def _refresh_thumbnails(self):
+        """Re-render the thumbnail strip from the current img_dicts (the labels
+        already exist; just re-run the background loader against self.images)."""
+        if not getattr(self, "lb_img_labels", None):
+            return
+        self._thumb_queue = queue.Queue()
+        self._thumb_thread = threading.Thread(
+            target=self._thumb_loader_thread, daemon=True)
+        self._thumb_thread.start()
+        self.root.after(50, self._poll_thumb_queue)
 
     def build_item_panel_footer(self, parent):
         """Two color wheels (shadows -> wb_low, highlights -> wb_high) below
@@ -3710,13 +4163,38 @@ DebugUI = NegadoctorDebugUI
 
 
 def main():
-    # `--apply` (passed by auto_negadoctor.py --annotate-apply) makes the UI
-    # write applied_results.txt on close. run_main reads argv[1] as the session
-    # dir, so the flag elsewhere in argv is harmless once we've consumed it.
+    # Flags passed by auto_negadoctor.py. run_main reads argv[1] as the session
+    # dir, so consume every flag (and --preset's value) out of argv first.
+    #   --apply    : write applied_results.txt on close (annotate-apply flow)
+    #   --run      : the UI runs the analysis itself on startup (progress popup)
+    #   --ai-tune  : also compute the vision-LLM alternate variant
+    #   --preset N : run the first analysis under preset N (name or path)
     if "--apply" in sys.argv:
         NegadoctorDebugUI.apply_mode = True
-        sys.argv = [a for a in sys.argv if a != "--apply"]
-    NegadoctorDebugUI.run_main(usage="Usage: debug_ui.py <session_dir> [--apply]")
+    if "--run" in sys.argv:
+        NegadoctorDebugUI.run_mode = True
+        NegadoctorDebugUI.ALLOW_EMPTY_SESSION = True   # populate progressively
+    if "--ai-tune" in sys.argv:
+        NegadoctorDebugUI.ai_tune = True
+    argv, skip = [], False
+    for i, a in enumerate(sys.argv):
+        if skip:
+            skip = False
+            continue
+        if a == "--preset":
+            NegadoctorDebugUI.start_preset = (sys.argv[i + 1]
+                                              if i + 1 < len(sys.argv) else None)
+            skip = True
+        elif a.startswith("--preset="):
+            NegadoctorDebugUI.start_preset = a.split("=", 1)[1]
+        elif a in ("--apply", "--run", "--ai-tune"):
+            continue
+        else:
+            argv.append(a)
+    sys.argv = argv
+    NegadoctorDebugUI.run_main(
+        usage="Usage: debug_ui.py <session_dir> "
+              "[--run] [--apply] [--ai-tune] [--preset NAME]")
 
 
 if __name__ == "__main__":

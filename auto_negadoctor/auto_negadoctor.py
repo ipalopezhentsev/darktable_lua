@@ -131,16 +131,23 @@ class _Progress:
         self._cb(d, self._total)
 
 
-def _map_frames(fn, items, workers, on_done=None):
+def _map_frames(fn, items, workers, on_done=None, on_result=None):
     """Apply fn to each item, order-preserving. Runs in a named thread pool
     when workers > 1 (so nested pixel-render runs inline); else inline. fn must
-    be self-contained — it may mutate its OWN item but not shared state."""
+    be self-contained — it may mutate its OWN item but not shared state.
+
+    on_done(): fired once per completed item (no arg) — progress counter.
+    on_result(item): fired with each finished item, in order — lets a caller
+    stream results as they finalize (e.g. the debug UI's progressive display).
+    Both fire on the collecting (caller's) thread, not the worker threads."""
     results = [None] * len(items)
     if workers <= 1 or len(items) <= 1:
         for i, it in enumerate(items):
             results[i] = fn(it)
             if on_done:
                 on_done()
+            if on_result:
+                on_result(results[i])
         return results
     # NOTE: not a `with` block on purpose — the executor's __exit__ does
     # shutdown(wait=True), which on Ctrl-C blocks until every already-submitted
@@ -155,11 +162,28 @@ def _map_frames(fn, items, workers, on_done=None):
             results[i] = fut.result()
             if on_done:
                 on_done()
+            if on_result:
+                on_result(results[i])
     except BaseException:
         ex.shutdown(wait=False, cancel_futures=True)
         raise
     ex.shutdown(wait=True)
     return results
+
+
+# Per-frame wall-cost weights for the progress bar, so it advances ~uniformly in
+# TIME across the very differently-priced stages instead of jumping (equal count
+# per stage made it race through the cheap stages and crawl/leap on the others).
+# RATIOS measured (12-frame roll, 8 workers): vignette 1.7s, A 2.8s, B1 6.1s,
+# B2 2.2s — B1 (full-frame preview render + wb region/patch search) is the
+# SLOWEST, NOT the print tune. Only the ratios matter; re-measure if the
+# pipeline's per-stage cost shifts.
+_PROG_W_VIG = 1.5    # stage 0: decode every TIFF (read + colour-manage)
+_PROG_W_A = 2.8      # stage A: film-base search on the cached decode
+_PROG_W_B1 = 6.0     # stage B1: one full-frame preview render + wb search (slow)
+_PROG_W_B2 = 2.2     # stage B2: print tune (renders the cropped region)
+_PROG_W_TOTAL = _PROG_W_VIG + _PROG_W_A + _PROG_W_B1 + _PROG_W_B2
+_PROG_W_PREFIX = _PROG_W_VIG + _PROG_W_A   # standalone process_roll_prefix
 
 # --- resolution independence -------------------------------------------------
 # Every size-dependent constant below is a RATIO of the frame dimension (a
@@ -1302,21 +1326,23 @@ def _vig_frame_envelope(c, cfg=DEFAULT_TUNING):
     return (h, w), lum[::vig_ds, ::vig_ds]
 
 
-def vignette_frame_cache(image_paths, exif_by_stem, cfg=DEFAULT_TUNING):
+def vignette_frame_cache(image_paths, exif_by_stem, cfg=DEFAULT_TUNING,
+                         on_done=None):
     """Decode each frame's trial-invariant buffers (full-res luma, clip mask,
     border) ONCE so vignette_envelope can be re-folded cheaply per trial without
     re-reading the TIFFs — the calibration runner's vignette FULL path uses this
     to avoid re-decoding every frame on every optimizer evaluation. Heavy (decode
     + border + luma) and memory-hungry (a float64 luma + bool clip per frame, in
     RAM); frame-parallel. Returns a list aligned with image_paths (None per
-    undecodable frame). (cfg only feeds detect_dark_border's BORDER_* here.)"""
+    undecodable frame). (cfg only feeds detect_dark_border's BORDER_* here.)
+    on_done(): fired per decoded frame, for progress reporting."""
     paths = list(image_paths)
     return _map_frames(lambda p: _vig_decode_frame(p, exif_by_stem, cfg), paths,
-                       _proc_workers(len(paths)))
+                       _proc_workers(len(paths)), on_done=on_done)
 
 
 def vignette_envelope(image_paths, exif_by_stem, frame_cache=None,
-                      cfg=DEFAULT_TUNING):
+                      cfg=DEFAULT_TUNING, on_done=None):
     """The roll-wide radial vignette ENVELOPE — the heavy TIFF accumulation part
     of the estimate, split out so callers can capture it ONCE and then re-fit
     cheaply (the calibration runner does this for the VIG profile-fit constants).
@@ -1332,7 +1358,8 @@ def vignette_envelope(image_paths, exif_by_stem, frame_cache=None,
     # (first frame sets the shape). The heavy decode is either supplied via
     # frame_cache or done here in parallel.
     if frame_cache is None:
-        frame_cache = vignette_frame_cache(image_paths, exif_by_stem, cfg)
+        frame_cache = vignette_frame_cache(image_paths, exif_by_stem, cfg,
+                                           on_done=on_done)
     # Re-fold each cached frame to its downsampled valid-luma map in parallel
     # (independent per frame; order preserved so the serial np.maximum fold below
     # is unchanged). This is the per-trial work in the runner's vignette FULL path.
@@ -1382,7 +1409,7 @@ def vignette_envelope(image_paths, exif_by_stem, frame_cache=None,
 
 
 def estimate_vignette(image_paths, exif_by_stem, frame_cache=None,
-                      cfg=DEFAULT_TUNING):
+                      cfg=DEFAULT_TUNING, on_done=None):
     """Roll-wide vignette estimate (see the VIG_* constants block): capture the
     radial envelope from the TIFFs, then fit it.
 
@@ -1393,7 +1420,7 @@ def estimate_vignette(image_paths, exif_by_stem, frame_cache=None,
     Returns (params dict {strength, radius, steepness} or None,
              info dict {residual, corner_falloff, bins, frames})."""
     env = vignette_envelope(image_paths, exif_by_stem, frame_cache=frame_cache,
-                            cfg=cfg)
+                            cfg=cfg, on_done=on_done)
     if env["r"] is None:
         return None, {"frames": env["used"], "reason": env["reason"]}
     return fit_vignette_profile(env["r"], env["e"], env["used"], cfg)
@@ -1649,10 +1676,12 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
     n = len(image_paths)
     paths = list(image_paths)
     workers = _proc_workers(n)
-    prog = _prog if _prog is not None else _Progress(progress, 3 * n)
+    prog = _prog if _prog is not None else _Progress(progress, _PROG_W_PREFIX * n)
 
     # ---- Stage 0: roll-wide vignette estimation (uncorrected frames) ----
-    vig, vig_info = estimate_vignette(image_paths, exif_by_stem, cfg=cfg)
+    # ticks per decoded frame (weighted) so the bar doesn't sit then jump
+    vig, vig_info = estimate_vignette(image_paths, exif_by_stem, cfg=cfg,
+                                      on_done=lambda: prog.tick(_PROG_W_VIG))
     if vig:
         print(f"Vignette estimate: strength={vig['strength']:.3f} "
               f"radius={vig['radius']:.3f} steepness={vig['steepness']:.3f} "
@@ -1668,7 +1697,6 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
         print(f"Vignette: fit failed ({reason}); applying default "
               f"strength={vig['strength']:.3f} radius={vig['radius']:.3f} "
               f"steepness={vig['steepness']:.3f}")
-    prog.tick(n)
 
     # ---- Stage A: per-frame film-base candidates (frame-parallel) ----
     def stage_a(path):
@@ -1719,7 +1747,8 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
         fr["time_a"] = time.perf_counter() - t0
         return fr
 
-    frames = _map_frames(stage_a, paths, workers, on_done=prog.tick)
+    frames = _map_frames(stage_a, paths, workers,
+                         on_done=lambda: prog.tick(_PROG_W_A))
 
     # ---- Global film base ----
     good = [f for f in frames if not f["error"]]
@@ -1741,8 +1770,14 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
 
 
 def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
-                 session_dir=None, cfg=DEFAULT_TUNING, prep=None):
+                 session_dir=None, cfg=DEFAULT_TUNING, prep=None,
+                 on_frame_done=None):
     """Run the full analysis. Returns list of per-frame result dicts.
+
+    on_frame_done(fr, roll): optional, fired (on the caller's thread) as each
+    frame's params finalize in stage B2 — for streaming the result to a
+    progressive UI. `roll` is complete by then (the AI variant, if any, is added
+    afterward, so streamed frames carry analytical params only).
 
     ai_tune: after the analytical params are computed, add a vision-LLM
     per-scene nudge as an ALTERNATE variant (params_ai / params_ai_hex on each
@@ -1761,13 +1796,16 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
     trial-invariant prefix on every inversion trial."""
     n = len(image_paths)
     workers = _proc_workers(n)
-    prog = _Progress(progress, 3 * n)
 
     # Stage 0 (vignette) + stage A (film base) + the global film base form the
     # trial-INVARIANT prefix (see process_roll_prefix). A fresh run builds it
     # inline; a calibration that fits only wb/picker/print constants computes it
     # ONCE and feeds it back via `prep=`.
     reuse = prep is not None
+    # progress total = the weighted phases actually run (cost-weighted so the bar
+    # is ~uniform in time); on reuse only B1+B2 run.
+    total_w = (_PROG_W_B1 + _PROG_W_B2) if reuse else _PROG_W_TOTAL
+    prog = _Progress(progress, total_w * n)
     if not reuse:
         prep = process_roll_prefix(image_paths, exif_by_stem, cfg=cfg, _prog=prog)
 
@@ -1876,7 +1914,8 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
         fr["time_b"] = time.perf_counter() - t0
         return fr
 
-    frames = _map_frames(stage_b1, frames, workers, on_done=prog.tick)
+    frames = _map_frames(stage_b1, frames, workers,
+                         on_done=lambda: prog.tick(_PROG_W_B1))
 
     # ---- Roll-median fallback for frames without usable patches ----
     lows = [fr["wb_low"] for fr in frames if not fr["error"] and fr.get("wb_low")]
@@ -1915,16 +1954,8 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
         fr["params_hex"] = nm.encode_negadoctor_params(fr["params"])
         return fr
 
-    frames = _map_frames(stage_b2, frames, workers)
-
-    # ---- Stage C (opt-in): vision-LLM per-scene nudge (alternate variant) ----
-    if ai_tune:
-        run_scene_tuning(frames, session_dir)
-
-    # release the per-frame decode cache (large float buffers, not serializable)
-    for fr in frames:
-        fr.pop("_loaded", None)
-
+    # roll is complete before B2 (it carries no B2 output), so build it now —
+    # stream each finalized frame to on_frame_done with the full roll context.
     roll = {
         "winner_stem": winner_stem,
         "winner_rect": winner_rect,
@@ -1935,6 +1966,21 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
         "vignette": vig,
         "vignette_info": vig_info,
     }
+    stream = ((lambda fr: on_frame_done(fr, roll)) if on_frame_done else None)
+    # tick progress for B2 too (so the bar tracks the frames that finalize +
+    # stream out here), and stream each finalized frame.
+    frames = _map_frames(stage_b2, frames, workers,
+                         on_done=lambda: prog.tick(_PROG_W_B2),
+                         on_result=stream)
+
+    # ---- Stage C (opt-in): vision-LLM per-scene nudge (alternate variant) ----
+    if ai_tune:
+        run_scene_tuning(frames, session_dir)
+
+    # release the per-frame decode cache (large float buffers, not serializable)
+    for fr in frames:
+        fr.pop("_loaded", None)
+
     return frames, roll
 
 
@@ -2016,6 +2062,64 @@ def build_analysis_mask(shape_hw, border):
     return mask
 
 
+def frame_session_dict(fr, roll, wall_time_s=None):
+    """Build the per-frame debug-session dict (the value written as
+    {stem}_debug_nega.json, minus the run-wide `constants`).
+
+    Shared by write_debug_sessions (which writes it to JSON) and the debug UI's
+    on-the-fly preset re-analysis (which rebuilds img_dicts in memory from a
+    fresh process_roll under a different Tuning). Returns None for an errored
+    frame (skipped, exactly like write_debug_sessions does)."""
+    if fr["error"]:
+        return None
+    is_winner = bool(roll and fr["stem"] == roll["winner_stem"])
+    data = {
+        "stem": fr["stem"],
+        "negative_path": fr["path"],
+        "width": fr["width"],
+        "height": fr["height"],
+        "exif": fr["exif"],
+        "border": list(fr["border"]),
+        "film_base": {
+            "local": fr["base"],
+            "applied_dmin": fr["params"]["Dmin"],
+            "is_global_winner": is_winner,
+            "global_winner_stem": roll["winner_stem"] if roll else None,
+            "global_rect_on_winner": roll["winner_rect"] if roll else None,
+        },
+        "patches": {
+            "highlights": dict(fr["highlight_patch"],
+                               used_fallback=fr["fallback_wb_high"])
+                          if fr.get("highlight_patch") else
+                          {"used_fallback": True},
+        },
+        "picked_min": fr["picked_min"],
+        "picked_max": fr["picked_max"],
+        "wb_high_boot": fr.get("wb_high_boot"),
+        "source_16bit_tiff": fr.get("source_16bit_tiff", False),
+        "vignette": (roll or {}).get("vignette"),
+        "vignette_info": (roll or {}).get("vignette_info"),
+        "params": fr["params"],
+        "params_hex": fr["params_hex"],
+        # spec 03: alternate vision-LLM variant (present only with --ai-tune).
+        # The UI switches its render base between these (key A).
+        "params_analytical": fr["params"],
+        "params_ai": fr.get("params_ai"),
+        "params_ai_hex": fr.get("params_ai_hex"),
+        "scene": fr.get("scene"),
+        "scene_tuning": fr.get("scene_tuning"),
+        "processing_time_s": round(fr.get("time_a", 0) + fr.get("time_b", 0), 2),
+    }
+    if wall_time_s is not None:
+        data["run_wall_time_s"] = round(float(wall_time_s), 2)
+    # calibration review payloads (live vs fitted), if the caller attached
+    # them — the debug UI's R toggle swaps between them.
+    if fr.get("review") is not None:
+        data["review"] = fr["review"]
+        data["review_kind"] = fr.get("review_kind")
+    return data
+
+
 def write_debug_sessions(frames, roll, output_dir, wall_time_s=None):
     """Write {stem}_debug_nega.json per frame.
 
@@ -2030,54 +2134,10 @@ def write_debug_sessions(frames, roll, output_dir, wall_time_s=None):
     out_dir = Path(output_dir)
 
     for fr in frames:
-        if fr["error"]:
+        data = frame_session_dict(fr, roll, wall_time_s=wall_time_s)
+        if data is None:
             continue
-        is_winner = bool(roll and fr["stem"] == roll["winner_stem"])
-        data = {
-            "stem": fr["stem"],
-            "negative_path": fr["path"],
-            "width": fr["width"],
-            "height": fr["height"],
-            "exif": fr["exif"],
-            "border": list(fr["border"]),
-            "film_base": {
-                "local": fr["base"],
-                "applied_dmin": fr["params"]["Dmin"],
-                "is_global_winner": is_winner,
-                "global_winner_stem": roll["winner_stem"] if roll else None,
-                "global_rect_on_winner": roll["winner_rect"] if roll else None,
-            },
-            "patches": {
-                "highlights": dict(fr["highlight_patch"],
-                                   used_fallback=fr["fallback_wb_high"])
-                              if fr.get("highlight_patch") else
-                              {"used_fallback": True},
-            },
-            "picked_min": fr["picked_min"],
-            "picked_max": fr["picked_max"],
-            "wb_high_boot": fr.get("wb_high_boot"),
-            "source_16bit_tiff": fr.get("source_16bit_tiff", False),
-            "vignette": (roll or {}).get("vignette"),
-            "vignette_info": (roll or {}).get("vignette_info"),
-            "params": fr["params"],
-            "params_hex": fr["params_hex"],
-            # spec 03: alternate vision-LLM variant (present only with --ai-tune).
-            # The UI switches its render base between these (key A).
-            "params_analytical": fr["params"],
-            "params_ai": fr.get("params_ai"),
-            "params_ai_hex": fr.get("params_ai_hex"),
-            "scene": fr.get("scene"),
-            "scene_tuning": fr.get("scene_tuning"),
-            "constants": constants,
-            "processing_time_s": round(fr.get("time_a", 0) + fr.get("time_b", 0), 2),
-        }
-        if wall_time_s is not None:
-            data["run_wall_time_s"] = round(float(wall_time_s), 2)
-        # calibration review payloads (live vs fitted), if the caller attached
-        # them — the debug UI's R toggle swaps between them.
-        if fr.get("review") is not None:
-            data["review"] = fr["review"]
-            data["review_kind"] = fr.get("review_kind")
+        data["constants"] = constants
         with open(out_dir / f"{fr['stem']}_debug_nega.json", "w") as f:
             json.dump(data, f, indent=2)
 
@@ -2159,30 +2219,21 @@ def main():
     print("=" * 60)
     print(f"Processing {len(image_paths)} frame(s); exif entries: {len(exif_by_stem)}")
 
-    def progress(done, total):
-        print(f"PROGRESS|{done}|{total}", flush=True)
-
-    wall_t0 = time.perf_counter()
-    frames, roll = process_roll(image_paths, exif_by_stem, progress,
-                                ai_tune=ai_tune, session_dir=output_dir,
-                                cfg=DEFAULT_TUNING)
-    wall_time = time.perf_counter() - wall_t0
-
-    ok = sum(1 for f in frames if not f["error"])
-    err = len(frames) - ok
-    print("=" * 60)
-    print(f"Processing complete: {ok} succeeded, {err} failed; "
-          f"wall time {wall_time:.1f}s")
-    for fr in frames:
-        if fr["error"]:
-            print(f"  ERR {fr['stem']}: {fr['error']}")
-
-    write_results(frames, roll, output_dir, ai_tune=ai_tune)
-
-    if debug_ui and ok:
-        write_debug_sessions(frames, roll, output_dir, wall_time_s=wall_time)
+    # ---- Debug-UI modes: the UI runs the analysis ITSELF ----
+    # So the window opens IMMEDIATELY and shows a progress bar while even the
+    # first inversion runs (instead of darktable sitting on a blank wait until
+    # process_roll finishes here). main() only launches it (passing --run +
+    # flags); the UI writes negadoctor_results.txt (the vignette the Lua apply
+    # step reads), the debug sessions, and — in apply mode — applied_results.txt
+    # on close. For the blocking annotate-apply flow we seed annotations first
+    # (independent of the analysis) and collect the durable annotations after.
+    if debug_ui:
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
-        ui_cmd = [sys.executable, str(debug_ui_script), str(output_dir)]
+        ui_cmd = [sys.executable, str(debug_ui_script), str(output_dir), "--run"]
+        if ai_tune:
+            ui_cmd.append("--ai-tune")
+        if preset:
+            ui_cmd += ["--preset", preset]
         if annotate_apply:
             ui_cmd.append("--apply")
             # Continuous edit: seed the session so a re-edit continues from the
@@ -2204,6 +2255,28 @@ def main():
         else:
             print(f"Launching debug UI: {debug_ui_script}", flush=True)
             subprocess.Popen(ui_cmd)
+        return
+
+    # ---- Non-UI (InPlace) modes: run the analysis here and write results ----
+    def progress(done, total):
+        print(f"PROGRESS|{done}|{total}", flush=True)
+
+    wall_t0 = time.perf_counter()
+    frames, roll = process_roll(image_paths, exif_by_stem, progress,
+                                ai_tune=ai_tune, session_dir=output_dir,
+                                cfg=DEFAULT_TUNING)
+    wall_time = time.perf_counter() - wall_t0
+
+    ok = sum(1 for f in frames if not f["error"])
+    err = len(frames) - ok
+    print("=" * 60)
+    print(f"Processing complete: {ok} succeeded, {err} failed; "
+          f"wall time {wall_time:.1f}s")
+    for fr in frames:
+        if fr["error"]:
+            print(f"  ERR {fr['stem']}: {fr['error']}")
+
+    write_results(frames, roll, output_dir, ai_tune=ai_tune)
 
     if err > 0:
         sys.exit(1)
