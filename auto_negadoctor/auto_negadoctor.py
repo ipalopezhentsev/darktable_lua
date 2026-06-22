@@ -48,6 +48,7 @@ Results file format:
 
 import json
 import os
+import shutil
 import statistics
 import struct
 import subprocess
@@ -271,6 +272,147 @@ def parse_exif_params(params_file):
                 "iso": entry.get("iso"),
             }
     return out
+
+
+def parse_source_paths(src_file):
+    """Parse source_paths.txt written by the Lua side (stem|/full/source/path).
+
+    Returns {stem: source_path}. Used to locate each frame's DURABLE annotation
+    sidecar (kept next to the original raw), keyed by the full source path so
+    same-named stems from different rolls (every roll has a DSC_0013) never
+    collide.
+    """
+    out = {}
+    if not os.path.exists(src_file):
+        return out
+    with open(src_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or "|" not in line:
+                continue
+            stem, path = line.split("|", 1)
+            out[stem.strip()] = path.strip()
+    return out
+
+
+def parse_applied_state(state_file):
+    """Parse applied_state.txt written by the Lua side for frames that already
+    carry an applied inversion (continuous edit). Line format:
+    `stem|negadoctor=<hex>|crop=<hex>` (crop optional). Returns
+    {stem: {"negadoctor": hex|None, "crop": hex|None}}.
+    """
+    out = {}
+    if not os.path.exists(state_file):
+        return out
+    with open(state_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or "|" not in line:
+                continue
+            parts = line.split("|")
+            entry = {}
+            for p in parts[1:]:
+                if "=" in p:
+                    k, v = p.split("=", 1)
+                    entry[k] = v.strip()
+            out[parts[0].strip()] = {
+                "negadoctor": entry.get("negadoctor") or None,
+                "crop": entry.get("crop") or None,
+            }
+    return out
+
+
+# Suffix for the durable per-frame annotation sidecar kept NEXT TO the source
+# raw (alongside its .xmp), so the annotate-apply "continuous edit" flow reloads
+# the user's previous corrections across runs — each run uses a fresh temp
+# session dir, so the in-session {stem}_annotations.json alone would be lost.
+DURABLE_ANN_SUFFIX = ".negadoctor_annotations.json"
+
+
+def _durable_ann_path(source_file, stem):
+    return Path(source_file).parent / (stem + DURABLE_ANN_SUFFIX)
+
+
+def _annotation_from_applied(nega_hex, crop_hex=None):
+    """Reconstruct a debug-UI annotation dict from the already-APPLIED XMP
+    params, so a continuous-edit re-run starts from the current darktable look
+    even when no saved annotation sidecar survives (the XMP is the real source
+    of truth). Only the user-tunable levers are reconstructed: the wb wheels
+    (wb_low/wb_high), the print params (D_max/offset/black/gamma/soft_clip/
+    exposure) and the crop. The film-base Dmin is left to the fresh auto
+    re-derivation — it's reliably reproduced for the roll, and an annotation
+    can't carry a Dmin vector (only a patch rect we can't invert it back to)."""
+    p = nm.decode_negadoctor_params(nega_hex)
+    over = {name: {"corrected": float(p[name])}
+            for name in ("D_max", "offset", "black", "gamma", "soft_clip", "exposure")}
+    ann = {
+        "print_overrides": over,
+        "wb_overrides": {
+            "shadows": {"corrected": [float(v) for v in p["wb_low"]]},
+            "highlights": {"corrected": [float(v) for v in p["wb_high"]]},
+        },
+    }
+    if crop_hex:
+        try:
+            l, t, r, b = struct.unpack("<4f", bytes.fromhex(crop_hex)[:16])
+            # crop_correction.corrected is a NORMALIZED [x, y, w, h] rect
+            ann["crop_correction"] = {
+                "corrected": [l, t, max(0.0, r - l), max(0.0, b - t)]}
+        except (struct.error, ValueError):
+            pass
+    return ann
+
+
+def seed_session_annotations(stem_to_src, applied_state, session_dir):
+    """Seed the debug session's {stem}_annotations.json for continuous edit.
+    Precedence per frame: the durable sidecar next to the source raw (richest —
+    carries patches/notes) if present, else reconstruct from the already-applied
+    XMP params (`applied_state`), else nothing (fresh auto-detection)."""
+    n_durable = n_xmp = 0
+    for stem in set(stem_to_src) | set(applied_state):
+        dest = Path(session_dir) / f"{stem}_annotations.json"
+        src = stem_to_src.get(stem)
+        durable = _durable_ann_path(src, stem) if src else None
+        if durable and durable.exists():
+            try:
+                shutil.copyfile(durable, dest)
+                n_durable += 1
+                continue
+            except OSError as e:
+                print(f"  Warning: could not load saved annotations for {stem}: {e}")
+        st = applied_state.get(stem)
+        if st and st.get("negadoctor"):
+            try:
+                ann = _annotation_from_applied(st["negadoctor"], st.get("crop"))
+                ann["stem"] = stem
+                with open(dest, "w") as f:
+                    json.dump(ann, f, indent=2)
+                n_xmp += 1
+            except Exception as e:
+                print(f"  Warning: could not reconstruct annotations for {stem}: {e}")
+    if n_durable or n_xmp:
+        print(f"Continuous edit: seeded {n_durable} frame(s) from saved "
+              f"annotations, {n_xmp} from the applied XMP")
+    return n_durable, n_xmp
+
+
+def persist_durable_annotations(stem_to_src, session_dir):
+    """Copy the debug UI's {stem}_annotations.json from session_dir back to the
+    durable sidecar next to each source raw, so the NEXT annotate-apply run
+    starts from these corrections."""
+    saved = 0
+    for stem, src in stem_to_src.items():
+        produced = Path(session_dir) / f"{stem}_annotations.json"
+        if not produced.exists():
+            continue
+        try:
+            shutil.copyfile(produced, _durable_ann_path(src, stem))
+            saved += 1
+        except OSError as e:
+            print(f"  Warning: could not save annotations for {stem}: {e}")
+    if saved:
+        print(f"Continuous edit: saved annotations for {saved} frame(s)")
+    return saved
 
 
 def read_exif_fallback(jpeg_path):
@@ -2043,9 +2185,21 @@ def main():
         ui_cmd = [sys.executable, str(debug_ui_script), str(output_dir)]
         if annotate_apply:
             ui_cmd.append("--apply")
+            # Continuous edit: seed the session so a re-edit continues from the
+            # current look instead of fresh auto-detection. Prefer the durable
+            # sidecar next to each source raw; fall back to reconstructing from
+            # the already-applied XMP params (applied_state.txt) — the XMP is the
+            # real source of truth and survives even if no sidecar/temp does.
+            stem_to_src = parse_source_paths(
+                os.path.join(str(output_dir), "source_paths.txt"))
+            applied_state = parse_applied_state(
+                os.path.join(str(output_dir), "applied_state.txt"))
+            seed_session_annotations(stem_to_src, applied_state, output_dir)
             print(f"Launching debug UI (apply mode), waiting for it to close: "
                   f"{debug_ui_script}", flush=True)
             subprocess.run(ui_cmd)
+            # Save the corrections durably for the next continuous-edit run.
+            persist_durable_annotations(stem_to_src, output_dir)
             print("APPLIED_RESULTS_READY", flush=True)
         else:
             print(f"Launching debug UI: {debug_ui_script}", flush=True)

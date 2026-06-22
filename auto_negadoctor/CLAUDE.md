@@ -8,6 +8,48 @@
    frame has an enabled negadoctor entry (the export would already be
    inverted — run `AutoNegadoctor_Remove` first), WARNS if a tone mapper
    (agx/filmicrgb/sigmoid/basecurve) is enabled or an XMP is missing.
+   **EXCEPTION — continuous edit (annotate-apply only, 2026-06-22):** the
+   `AutoNegadoctor_Annotate_Apply` flow does NOT abort on an already-inverted
+   frame. Instead, `export_and_detect` (when `annotate_apply`) calls
+   `disable_modules_for_clean_export` to temporarily force `enabled="0"` on every
+   active negadoctor/crop/lens history entry of those frames (saving the original
+   XMP bytes), reloads via `apply_sidecar`, exports the now-CLEAN negative for
+   re-analysis, then `restore_xmps` rewrites the original XMP bytes and reloads —
+   always, including the export-failure path. On apply the corrections land as a
+   NEW negadoctor (+crop) history entry on top of the prior ones (which stay
+   enabled and scrollable), so repeated edits stack as history steps. All three
+   ops are disabled together (not just negadoctor) so the film-base search sees
+   the rebate, crop detection sees the full frame, and the vignette estimator
+   isn't fed already-corrected pixels — i.e. exactly the first-run conditions.
+   **Annotations carry over across re-edits (the continuous part):** the debug
+   UI saves per-frame annotations into the throwaway temp `session_dir`, so to
+   make a re-edit START FROM the last edit (not fresh auto-detection),
+   `seed_session_annotations` (Python `main()`, annotate-apply path) writes the
+   session's `{stem}_annotations.json` BEFORE the UI launches, with this
+   precedence per frame:
+   1. **Durable sidecar** next to the source raw —
+      `<source_dir>/<stem>.negadoctor_annotations.json` (`DURABLE_ANN_SUFFIX`),
+      keyed by the full source path from `source_paths.txt` so same-named stems
+      across rolls never collide. Richest source (carries patch rects + notes +
+      only the params the user actually changed). After the UI closes,
+      `persist_durable_annotations` copies the UI's output back out so the next
+      run finds it.
+   2. **Reconstruct from the applied XMP** (`_annotation_from_applied`) when no
+      sidecar survives — the XMP is the real source of truth and outlives any
+      temp/sidecar file (per the user, 2026-06-22: "don't rely on the temp
+      folder; take the values from the XMP"). The Lua side writes
+      `applied_state.txt` (`stem|negadoctor=<hex>|crop=<hex>`,
+      `active_module_params` reads the effective entry) for every re-edited
+      frame; Python decodes the negadoctor blob into wb_overrides
+      (wb_low/wb_high) + print_overrides (D_max/offset/black/gamma/soft_clip/
+      exposure) and the crop blob into a `crop_correction` rect. This pins the
+      whole current look (the XMP can't say which values were user-edited).
+      Dmin/film-base is NOT reconstructed (an annotation carries a patch rect,
+      not a Dmin vector) — it's left to the fresh auto re-derivation, reliably
+      ~identical for the roll.
+   Rects are normalized [0,1] (export-resolution-independent). Reconstructed/
+   loaded annotations are OVERRIDES applied on top of the fresh clean-negative
+   auto analysis, so a re-edit = "continue from the current look."
 2. Lua exports the selected frames as **32-bit float TIFF** at
    `EXPORT_MAX_WIDTH` (currently 2000px) to
    `%TEMP%/darktable_autonegadoctor_<timestamp>/`. The analysis is
@@ -328,6 +370,9 @@ self-consistent: lightest area prints at 0.1 pre-gamma, densest at 0.96).
   as auto_crop — positions are post-orientation so orientation is preserved, the
   flip entry is never touched) and negadoctor (`apply_negadoctor_new_item` —
   ALWAYS a NEW history item, per the user's request, not an in-place replace).
+  **Continuous edit:** this flow may be re-run on already-inverted frames (no
+  abort — see Data Flow §1); the re-analysis exports the clean negative and the
+  new corrections stack as fresh negadoctor/crop history entries on top.
   Both crop and negadoctor insert via the shared `insert_history_entry`
   (history_end-protected). The temp folder is KEPT (it holds the annotations).
   Guarded by `tests/smoke_debug_ui.py` (sets `apply_mode`, verifies

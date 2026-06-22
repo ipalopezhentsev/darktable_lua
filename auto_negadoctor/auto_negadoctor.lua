@@ -235,11 +235,113 @@ local function read_xmp(image)
   return content, xmp_path
 end
 
+-- Operations whose ACTIVE history entries must be neutralized before the
+-- analysis export so a re-edit still exports the CLEAN negative (un-inverted,
+-- un-cropped, un-vignette-corrected) the analysis needs. Restored right after.
+local CLEAN_EXPORT_OPS = { negadoctor = true, crop = true, lens = true }
+
+-- Return the params hex of the ACTIVE entry for `opname` (the enabled entry
+-- with the highest num below history_end), or nil if none is active. Used to
+-- capture the currently-applied look so a continuous-edit re-run can seed the
+-- debug UI from the XMP even when no annotation sidecar survives.
+local function active_module_params(xmp_content, opname)
+  local history_end = tonumber(xmp_content:match('darktable:history_end="(%d+)"')) or 999
+  local best = nil
+  for i, entry in ipairs(scan_history_entries(xmp_content)) do
+    if entry.operation == opname and entry.enabled and entry.num < history_end then
+      if not best or entry.num > best.num then best = entry end
+    end
+  end
+  if not best then return nil end
+  return best.text:match('darktable:params="([^"]*)"')
+end
+
+-- Return a copy of xmp_content with every history entry whose operation is in
+-- `opset` forced to enabled="0". Splices from the end so earlier match
+-- positions stay valid while we rewrite.
+local function xmp_with_modules_disabled(xmp_content, opset)
+  local entries = scan_history_entries(xmp_content)
+  table.sort(entries, function(a, b) return a.s > b.s end)
+  for i, entry in ipairs(entries) do
+    if opset[entry.operation] and entry.enabled then
+      local disabled = entry.text:gsub('darktable:enabled="%d"',
+        'darktable:enabled="0"')
+      xmp_content = xmp_content:sub(1, entry.s - 1) .. disabled ..
+                    xmp_content:sub(entry.e + 1)
+    end
+  end
+  return xmp_content
+end
+
+-- Continuous edit: for each image that already has an ACTIVE negadoctor entry,
+-- temporarily disable the apply-flow modules (negadoctor + crop + lens) in its
+-- XMP and reload, so the analysis export is the clean negative. Returns two
+-- lists: restore records { image, xmp_path, original } for restore_xmps(), and
+-- applied-state records { stem, negadoctor, crop } capturing the currently
+-- applied params so Python can seed the debug UI from the XMP (continuous edit).
+-- Only frames actually changed are recorded.
+local function disable_modules_for_clean_export(images)
+  local restore_records = {}
+  local applied_state = {}
+  for i, image in ipairs(images) do
+    local xmp_content, xmp_path = read_xmp(image)
+    if xmp_content and xmp_path and has_enabled_module(xmp_content, "negadoctor") then
+      local disabled = xmp_with_modules_disabled(xmp_content, CLEAN_EXPORT_OPS)
+      if disabled ~= xmp_content then
+        local file = io.open(xmp_path, "w")
+        if file then
+          file:write(disabled)
+          file:close()
+          image:apply_sidecar(xmp_path)
+          restore_records[#restore_records + 1] =
+            { image = image, xmp_path = xmp_path, original = xmp_content }
+          local base_name = image.filename:match("(.+)%..+$") or image.filename
+          applied_state[#applied_state + 1] = {
+            stem = df.sanitize_filename(base_name),
+            negadoctor = active_module_params(xmp_content, "negadoctor"),
+            crop = active_module_params(xmp_content, "crop"),
+          }
+          dlog.msg(dlog.info, "disable_modules_for_clean_export",
+            "Temporarily disabled negadoctor/crop/lens for " .. image.filename)
+        else
+          dlog.msg(dlog.warn, "disable_modules_for_clean_export",
+            "Could not open XMP to disable modules: " .. xmp_path)
+        end
+      end
+    end
+  end
+  return restore_records, applied_state
+end
+
+-- Undo disable_modules_for_clean_export: rewrite each saved XMP with its
+-- original content and reload, restoring the user's active inversion.
+local function restore_xmps(restore_records)
+  for i, rec in ipairs(restore_records) do
+    local file = io.open(rec.xmp_path, "w")
+    if file then
+      file:write(rec.original)
+      file:close()
+      rec.image:apply_sidecar(rec.xmp_path)
+      dlog.msg(dlog.info, "restore_xmps",
+        "Restored original XMP for " .. rec.image.filename)
+    else
+      dlog.msg(dlog.error, "restore_xmps",
+        "FAILED to restore XMP (frame left with modules disabled): " .. rec.xmp_path)
+      dt.print(string.format(
+        _("WARNING: could not restore %s - its inversion is temporarily disabled"),
+        rec.image.filename))
+    end
+  end
+end
+
 -- Pre-flight check over the selection. Returns ok, plus prints warnings.
--- Aborts (returns false) when any frame has an ACTIVE negadoctor entry:
--- the analysis export would already be inverted. Warns about tone mappers
+-- Aborts (returns false) when any frame has an ACTIVE negadoctor entry (the
+-- analysis export would already be inverted) UNLESS annotate_apply is set: the
+-- continuous-edit flow re-analyzes such frames by temporarily disabling the
+-- apply-flow modules for the export (see disable_modules_for_clean_export) and
+-- adds a fresh negadoctor history entry on apply. Warns about tone mappers
 -- (agx/filmic/sigmoid/basecurve) and missing XMPs (in-place apply needs one).
-local function preflight_check(images)
+local function preflight_check(images, annotate_apply)
   local inverted = {}
   local tone_mapped = {}
   local missing_xmp = 0
@@ -262,12 +364,24 @@ local function preflight_check(images)
   end
 
   if #inverted > 0 then
-    dt.print(string.format(
-      _("ABORT: %d frame(s) already have negadoctor enabled (e.g. %s). Run AutoNegadoctor_Remove first."),
-      #inverted, inverted[1]))
-    dlog.msg(dlog.error, "preflight_check",
-      "Aborting: negadoctor already enabled on " .. table.concat(inverted, ", "))
-    return false
+    if annotate_apply then
+      -- Continuous edit: don't abort. The export step disables negadoctor/
+      -- crop/lens on these frames so the analysis sees the clean negative, and
+      -- the apply step adds a NEW negadoctor (+crop) history entry on top.
+      dt.print(string.format(
+        _("Continuous edit: %d frame(s) already inverted (e.g. %s) - re-analyzing the clean negative; a new history entry is added on apply."),
+        #inverted, inverted[1]))
+      dlog.msg(dlog.info, "preflight_check",
+        "Continuous edit mode: re-analyzing already-inverted frames: " ..
+        table.concat(inverted, ", "))
+    else
+      dt.print(string.format(
+        _("ABORT: %d frame(s) already have negadoctor enabled (e.g. %s). Run AutoNegadoctor_Remove first."),
+        #inverted, inverted[1]))
+      dlog.msg(dlog.error, "preflight_check",
+        "Aborting: negadoctor already enabled on " .. table.concat(inverted, ", "))
+      return false
+    end
   end
 
   if #tone_mapped > 0 then
@@ -469,8 +583,10 @@ end
 
 -- Annotate+apply flow: ALWAYS insert a NEW negadoctor history entry (per the
 -- user's request: "create new history item if negadoctor already exists"), so
--- the annotation-tuned inversion is a fresh, active step on top - any prior
--- (disabled) negadoctor entry is left in the history untouched.
+-- the annotation-tuned inversion is a fresh, active step on top. Any prior
+-- negadoctor entry (continuous edit re-runs leave it ENABLED) is left untouched
+-- in the history; the new higher-num step wins as the active params, and the
+-- earlier edits stay scrollable in the history stack.
 local function apply_negadoctor_new_item(image, params_hex)
   dlog.msg(dlog.info, "apply_negadoctor_new_item", "Called for " .. image.filename)
 
@@ -741,7 +857,7 @@ end
 -- Returns: nega_results, filename_to_image, export_dir (or nil on failure /
 --   detached debug launch)
 local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
-  if not preflight_check(images) then
+  if not preflight_check(images, annotate_apply) then
     return nil, nil, nil
   end
 
@@ -778,6 +894,16 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
   local filename_to_image = {}
   local source_paths = {}
 
+  -- Continuous edit: on the annotate-apply flow, temporarily disable any active
+  -- negadoctor/crop/lens so already-inverted frames export as the clean negative
+  -- the analysis needs (and capture their applied params for the UI to seed
+  -- from). Restored right after the export (before the early returns below).
+  -- Other modes abort in preflight, so this is a no-op there.
+  local restore_records, applied_state = {}, {}
+  if annotate_apply then
+    restore_records, applied_state = disable_modules_for_clean_export(images)
+  end
+
   local export_ok, export_err = pcall(function()
     for i, image in ipairs(images) do
       local scale = EXPORT_MAX_WIDTH / image.width
@@ -806,6 +932,9 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
   -- Always restore the export profile preferences
   dt.preferences.write("darktable", "plugins/lighttable/export/icctype", "integer", saved_icctype)
   dt.preferences.write("darktable", "plugins/lighttable/export/iccprofile", "string", saved_iccprofile or "")
+
+  -- Always restore the temporarily-disabled modules (continuous edit)
+  restore_xmps(restore_records)
 
   if not export_ok then
     dt.print(string.format(_("Export failed: %s"), tostring(export_err)))
@@ -852,6 +981,27 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
   else
     dlog.msg(dlog.warn, "export_and_detect",
       "Could not write source_paths.txt")
+  end
+
+  -- Continuous edit: record the currently-applied params of any re-edited frame
+  -- so Python can seed the debug UI from the XMP when no annotation sidecar
+  -- survives (stem|negadoctor=<hex>|crop=<hex>; crop omitted when absent).
+  if #applied_state > 0 then
+    local as_file = export_dir .. "/applied_state.txt"
+    local af = io.open(as_file, "w")
+    if af then
+      for i, st in ipairs(applied_state) do
+        if st.negadoctor then
+          local line = st.stem .. "|negadoctor=" .. st.negadoctor
+          if st.crop then line = line .. "|crop=" .. st.crop end
+          af:write(line .. "\n")
+        end
+      end
+      af:close()
+    else
+      dlog.msg(dlog.warn, "export_and_detect",
+        "Could not write applied_state.txt")
+    end
   end
 
   -- Call Python script
