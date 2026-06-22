@@ -2116,8 +2116,10 @@ class NegadoctorDebugUI(DebugUIBase):
         return mask
 
     # --- clipping indication ---------------------------------------------
-    # A channel at the 8-bit ceiling/floor of the displayed sRGB render is
-    # clipped: 255 == highlights blown (linear >= 1.0), 0 == shadows crushed.
+    # Highlights blown = ANY channel at the 8-bit ceiling (255 -> linear >= 1.0,
+    # lost detail + hue cast). Shadows crushed = ALL channels at the floor (0 ->
+    # truly black); a single floored channel on a saturated dark colour is not a
+    # crushed shadow (see the .all() vs .any() note in _decorate).
     # The on-image overlay (L, default off) paints those pixels a "wrong"
     # colour; the meter + histogram spikes always report the fractions.
     CLIP_HI_LEVEL = 255
@@ -2140,7 +2142,13 @@ class NegadoctorDebugUI(DebugUIBase):
         clip_hi = clip_lo = None
         if self.show_clipping:
             clip_hi = (arr >= self.CLIP_HI_LEVEL).any(axis=2)
-            clip_lo = (arr <= self.CLIP_LO_LEVEL).any(axis=2)
+            # Shadow clip = the pixel is TRULY black (ALL channels at the floor),
+            # not just any one channel. A saturated dark colour (deep green
+            # foliage in shade -> e.g. (3,18,0)) legitimately zeroes its weakest
+            # channel while the dominant channel still carries tonal detail; an
+            # .any() test there is a false "crushed shadow". Highlights stay
+            # .any() — a single blown channel IS lost highlight detail + hue cast.
+            clip_lo = (arr <= self.CLIP_LO_LEVEL).all(axis=2)
         if self.mask_view != 0:
             mask = self._analysis_mask(self.images[self.current_idx])
             if mask is not None and mask.shape[:2] != arr.shape[:2]:
@@ -2234,7 +2242,8 @@ class NegadoctorDebugUI(DebugUIBase):
         # only in hide-rejected mode) — drives the meter + histogram spikes
         total = len(pixels)
         hi = int(np.count_nonzero((pixels >= self.CLIP_HI_LEVEL).any(axis=1)))
-        lo = int(np.count_nonzero((pixels <= self.CLIP_LO_LEVEL).any(axis=1)))
+        # shadow clip = all channels at the floor (truly black); see _decorate
+        lo = int(np.count_nonzero((pixels <= self.CLIP_LO_LEVEL).all(axis=1)))
         self._clip_stats = {"hi": hi / total * 100.0,
                             "lo": lo / total * 100.0, "total": total}
         hists = []

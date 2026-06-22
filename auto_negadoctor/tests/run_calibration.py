@@ -160,7 +160,7 @@ class _Tracker:
                 else:
                     head = f"eval {self.n} | {_dur(el)} elapsed"
                 ctx = f" | {self.ctx}" if self.ctx else ""
-                print(f"    [{head}]{ctx} obj={v:.4f} best={self.best:.4f}"
+                print(f"    [{head}]{ctx} obj={v:.6f} best={self.best:.6f}"
                       f"{'  *' if improved else ''}", flush=True)
         return v
 
@@ -236,11 +236,9 @@ def _coord(objective, spec, fit):
     nparams = len(spec)
     for cyc in range(max_iters):
         if verbose:
-            print(f"  cycle {cyc + 1}/{max_iters} (best {best:.4f})", flush=True)
+            print(f"  cycle {cyc + 1}/{max_iters} (best {best:.6f})", flush=True)
         before = best
         for pi, (n, s) in enumerate(spec.items(), 1):
-            if hasattr(objective, "ctx"):
-                objective.ctx = f"cycle {cyc + 1}/{max_iters} param {pi}/{nparams} {n}"
             lo, hi = s["range"]
             span = hi - lo
             step = float(s.get("init_step", fit.get("init_step", span / 8.0)))
@@ -253,6 +251,9 @@ def _coord(objective, spec, fit):
                     cand[n] = _clamp(x[n] + d, lo, hi)
                     if abs(cand[n] - x[n]) < 1e-12:
                         continue
+                    if hasattr(objective, "ctx"):
+                        objective.ctx = (f"cycle {cyc + 1}/{max_iters} "
+                                         f"param {pi}/{nparams} {n}={cand[n]:.6g}")
                     o = objective(cand)
                     if o < best - 1e-12:
                         contrib[n]["improvement"] += best - o
@@ -329,7 +330,7 @@ def _random(objective, spec, fit):
                     eta = el / done * (n_trials - done) if done else 0.0
                     print(f"    [{100.0 * done / n_trials:5.1f}% | trial "
                           f"{done}/{n_trials} | {workers} workers | "
-                          f"ETA {_dur(eta)}] best={best_live:.4f}", flush=True)
+                          f"ETA {_dur(eta)}] best={best_live:.6f}", flush=True)
     except BaseException:
         ex.shutdown(wait=False, cancel_futures=True)
         raise
