@@ -99,7 +99,9 @@ def _proc_workers(n):
     # MORE workers just thrash the memory bus — measured knee on a 20-core box:
     # 8w≈20s, 16w≈24s (worse), 20w≈19s. Cap at the knee; override with
     # NEGA_PROC_WORKERS if your machine has more memory bandwidth.
-    return max(1, min((os.cpu_count() or 1), 20, n))
+    #ILYA: 8 is good for large jobs, despite CPU is used more actively with 20,
+    #in reality the process takes longer, seems really due to memory bandwidth
+    return max(1, min((os.cpu_count() or 1), 8, n))
 
 
 def _get_loaded(fr):

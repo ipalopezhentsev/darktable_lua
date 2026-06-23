@@ -571,6 +571,7 @@ class NegadoctorDebugUI(DebugUIBase):
         elif images:                       # mismatch (shouldn't happen) — rebuild
             self.images[:] = images
         self._orig_images = copy.deepcopy(self.images)
+        self._seed_preset_cache()
         self._restore_global_base_override()
         if self.images:
             self._neg_cache_key = None
@@ -1218,6 +1219,17 @@ class NegadoctorDebugUI(DebugUIBase):
         # the current look); "(as exported)" otherwise / for a re-opened session.
         self._current_preset_label = (self.start_preset if self.start_preset
                                       else self._PRESET_AS_EXPORTED)
+        # Per-preset analytical-result cache (label -> deep copy of the img_dict
+        # list it produced). The analytical result is a pure function of (preset
+        # file + source negatives), both fixed for the session, so switching
+        # A->B->A need only RE-RUN process_roll once per distinct preset. User
+        # annotations are applied on top at render time (_corrected_params), not
+        # baked into these dicts, so serving a cached set doesn't freeze edits.
+        # "(as exported)" is NOT cached here — it has its own _orig_images slot.
+        # NOTE: a preset JSON edited on disk mid-session would be served stale
+        # from here (presets are rarely hand-edited while the UI is open).
+        self._preset_cache = {}
+        self._seed_preset_cache()
         self._reanalyzing = False
         self._reanalysis_queue = None
         self._analyzing = False        # first-scan canvas overlay active
@@ -1279,6 +1291,9 @@ class NegadoctorDebugUI(DebugUIBase):
         self._crop_drag_edge = None
         self._crop_drag_rect = None
         self._patch_drag = None        # in-progress patch move (press/drag/release)
+        self._pointer_xy = None        # last canvas hover position (pixel readout)
+        self._disp_arr = None          # cached ndarray of _display_base_pil
+        self._disp_arr_id = None
         # restore a saved global film-base override (the source frame's
         # annotation carries the snapshot)
         self._restore_global_base_override()
@@ -1630,6 +1645,23 @@ class NegadoctorDebugUI(DebugUIBase):
             pass
         self.canvas.focus_set()
 
+    def _seed_preset_cache(self):
+        """Record the currently-loaded images under the preset that PRODUCED
+        them, so selecting that preset BY NAME is an instant cache hit instead
+        of an identical re-run. The exported session was produced by
+        `start_preset` if given, else `$NEGA_PRESET`/"default"
+        (`an.DEFAULT_PRESET`) — so a plain export, labelled "(as exported)", is
+        byte-identical to the bundled "default" preset, and selecting "default"
+        must NOT re-run process_roll. (If $NEGA_PRESET=punchy the export is
+        punchy, so we cache under "punchy" and selecting "default" correctly
+        stays a real re-run.)"""
+        if not self.images:
+            return
+        import auto_negadoctor as an
+        effective = self.start_preset or getattr(an, "DEFAULT_PRESET", "default")
+        if effective and effective != self._PRESET_AS_EXPORTED:
+            self._preset_cache[effective] = copy.deepcopy(self.images)
+
     def _on_preset_selected(self, event=None):
         name = self.preset_var.get()
         # A readonly combobox, after a pick, keeps keyboard focus (swallowing the
@@ -1648,6 +1680,12 @@ class NegadoctorDebugUI(DebugUIBase):
             self._after_reanalysis(self._PRESET_AS_EXPORTED)
             return
         if name == self._current_preset_label:
+            return
+        cached = self._preset_cache.get(name)
+        if cached is not None:                 # already analyzed this session
+            self.images[:] = copy.deepcopy(cached)
+            self._current_preset_label = name
+            self._after_reanalysis(name)
             return
         self._start_reanalysis(name)
 
@@ -1718,6 +1756,9 @@ class NegadoctorDebugUI(DebugUIBase):
             return
         self.images[:] = result["images"]
         self._current_preset_label = result["preset"]
+        # Memoize so a later switch back to this preset is instant (see
+        # _preset_cache note in init_selection_state).
+        self._preset_cache[result["preset"]] = copy.deepcopy(result["images"])
         self._after_reanalysis(result["preset"])
 
     def _after_reanalysis(self, applied_label):
@@ -2069,6 +2110,10 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<Control-C>", lambda e: self._copy_params())
         self.bind_key("<Control-v>", lambda e: self._paste_params())
         self.bind_key("<Control-V>", lambda e: self._paste_params())
+        # Hover readout: show the displayed image's RGB at the pointer (near the
+        # histogram). Plain <Motion> (no button) — drags use <B1-Motion>.
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
+        self.canvas.bind("<Leave>", self._on_canvas_leave)
 
     def image_status_text(self, img_dict):
         """Compact glanceable summary for the left panel. The full per-frame
@@ -2794,6 +2839,78 @@ class NegadoctorDebugUI(DebugUIBase):
                                     fill="#ff6060" if over else "#cccccc",
                                     font=("Courier", 8), tags="clipmeter")
 
+    # ------------------------------------------------------------------
+    # Hover pixel readout (RGB of the displayed image, near the histogram)
+    # ------------------------------------------------------------------
+
+    def _on_canvas_motion(self, event):
+        self._pointer_xy = (event.x, event.y)
+        self._draw_pixel_readout(event.x, event.y)
+
+    def _on_canvas_leave(self, event):
+        self._pointer_xy = None
+        self.canvas.delete("pixelreadout")
+
+    def _display_base_array(self):
+        """Cached HxWx3 uint8 ndarray of the undecorated displayed image (the
+        same pixels the histogram reads — true sRGB, = the export). Rebuilt only
+        when the display base changes, so a per-pixel hover lookup is cheap."""
+        pil = getattr(self, "_display_base_pil", None)
+        if pil is None:
+            return None
+        if self._disp_arr_id != id(pil):
+            try:
+                self._disp_arr = np.asarray(pil.convert("RGB"))
+            except Exception:
+                self._disp_arr = None
+            self._disp_arr_id = id(pil)
+        return self._disp_arr
+
+    def _draw_pixel_readout(self, cx=None, cy=None):
+        """Show the displayed image's RGB at the pointer, in a small box stacked
+        under the histogram/clip-meter. Same pixel set as the histogram, so the
+        values match what the histogram and clip meter report."""
+        self.canvas.delete("pixelreadout")
+        if self.pil_image is None:
+            return
+        if cx is None:
+            if self._pointer_xy is None:
+                return
+            cx, cy = self._pointer_xy
+        arr = self._display_base_array()
+        if arr is None:
+            return
+        ix, iy = canvas_to_image(cx, cy, self.offset_x, self.offset_y, self.zoom)
+        ix, iy = int(math.floor(ix)), int(math.floor(iy))
+        ih, iw = arr.shape[:2]
+        cw = self.canvas.winfo_width()
+        # wider than the 150px histogram so the three RGB columns don't crowd
+        # (right edges stay aligned: both end at cw-12)
+        pw = 192
+        x0 = cw - pw - 12
+        hist_shown = self.show_histogram and getattr(self, "_hist_data", None)
+        clip_y0 = (10 + 72 + 8) if hist_shown else 10
+        clip_ph = 16 + 2 * (13 + 4)
+        y0 = clip_y0 + clip_ph + 8
+        ph = 20
+        self.canvas.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#1c1c1c",
+                                     outline="#666666", tags="pixelreadout")
+        cy_text = y0 + ph / 2
+        if not (0 <= ix < iw and 0 <= iy < ih):
+            self.canvas.create_text(x0 + 4, cy_text, anchor="w",
+                                    text="pixel  —", fill="#888888",
+                                    font=("Courier", 8), tags="pixelreadout")
+            return
+        r, g, b = (int(v) for v in arr[iy, ix][:3])
+        seg = (pw - 12) / 3.0
+        for i, (lab, val, color) in enumerate((("R", r, "#ff6666"),
+                                               ("G", g, "#66dd66"),
+                                               ("B", b, "#7799ff"))):
+            self.canvas.create_text(x0 + 8 + i * seg, cy_text, anchor="w",
+                                    text=f"{lab} {val:>3}", fill=color,
+                                    font=("Courier", 8, "bold"),
+                                    tags="pixelreadout")
+
     def _toggle_compare(self):
         """X: flip between the corrected render and the algorithm's default."""
         if not self._has_corrections():
@@ -3081,7 +3198,7 @@ class NegadoctorDebugUI(DebugUIBase):
 
     def overlay_tags(self):
         return ("patches", "corrections", "labels", "badges", "histogram",
-                "clipmeter")
+                "clipmeter", "pixelreadout")
 
     def _draw_rect(self, rect, color, tags, width=2, dash=None, label=None):
         x, y, w, h = rect
@@ -3142,6 +3259,7 @@ class NegadoctorDebugUI(DebugUIBase):
 
         self._draw_histogram()
         self._draw_clip_meter()
+        self._draw_pixel_readout()       # re-uses the last hover position
         self._update_canvas_status()
 
     def _redraw(self):

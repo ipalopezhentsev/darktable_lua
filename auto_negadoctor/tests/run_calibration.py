@@ -48,6 +48,7 @@ Review a finished session in the debug UI (inversion):
 
 import argparse
 import json
+import math
 import random
 import shutil
 import statistics
@@ -220,6 +221,18 @@ def _grid(objective, spec):
     return bx, {"grid_total": total}
 
 
+def _step_levels(step, step_min, shrink):
+    """How many distinct step sizes the shrinking line search walks for one param
+    in one cycle: step, step·shrink, step·shrink², … while ≥ step_min. This is the
+    param's fixed per-cycle 'grid' (deterministic, independent of how the search
+    plays out) — used for the `step X/Y` progress in the descent context line."""
+    if step < step_min:
+        return 0
+    if not (0.0 < shrink < 1.0):
+        return 1
+    return int(math.floor(math.log(step_min / step) / math.log(shrink))) + 1
+
+
 def _coord(objective, spec, fit):
     """Coordinate descent: per param a shrinking-step ± line search; repeat full
     cycles (sweeps over ALL params) until a cycle improves the objective by less
@@ -244,8 +257,13 @@ def _coord(objective, spec, fit):
             step = float(s.get("init_step", fit.get("init_step", span / 8.0)))
             step_min = float(s.get("step_min", fit.get("step_min", span / 256.0)))
             shrink = float(s.get("step_shrink", fit.get("step_shrink", 0.5)))
+            nlev = _step_levels(step, step_min, shrink)   # this param's fixed grid
+            level = 1
             while step >= step_min:
                 moved = False
+                # each step level probes BOTH directions (x+step, x-step) before
+                # shrinking; `probe +/-` says which, so the two same-level entries
+                # are legible (you see both only when neither improved → shrink).
                 for d in (step, -step):
                     cand = dict(x)
                     cand[n] = _clamp(x[n] + d, lo, hi)
@@ -253,7 +271,9 @@ def _coord(objective, spec, fit):
                         continue
                     if hasattr(objective, "ctx"):
                         objective.ctx = (f"cycle {cyc + 1}/{max_iters} "
-                                         f"param {pi}/{nparams} {n}={cand[n]:.6g}")
+                                         f"param {pi}/{nparams} step {level}/{nlev} "
+                                         f"probe {'+' if d > 0 else '-'} "
+                                         f"{n}={cand[n]:.6g}")
                     o = objective(cand)
                     if o < best - 1e-12:
                         contrib[n]["improvement"] += best - o
@@ -262,6 +282,7 @@ def _coord(objective, spec, fit):
                         break
                 if not moved:
                     step *= shrink
+                    level += 1
         cycles.append({"cycle": cyc + 1, "objective": best,
                        "improvement": before - best})
         if before - best < eps:
@@ -368,7 +389,11 @@ def principal_components(evaluate, spec, point):
 
     `evaluate(overrides)->{objective}`. Returns
     {components:[{eigenvalue, variance_pct, top_loadings:[{param,weight}]}],
-     n_evals, f0}."""
+     sensitivity:[{param, h, gradient, curvature, max_step_delta}], n_evals, f0}.
+    `sensitivity` is the blunt per-param freeze signal (central-difference
+    gradient + diagonal curvature in grid-step units + the largest one-step
+    objective change), computed free from the same probes and sorted
+    loudest-first; a param flat in both directions is a freeze candidate."""
     names = list(spec)
     N = len(names)
     h = {n: float(spec[n].get("grid_step")
@@ -377,18 +402,35 @@ def principal_components(evaluate, spec, point):
     lo = {n: spec[n]["range"][0] for n in names}
     hi = {n: spec[n]["range"][1] for n in names}
 
+    # The PCA is a SERIAL chain of full-path evals (each one re-runs the pipeline)
+    # — at N=33 that's ~595 evals = hours, so print throttled progress + ETA
+    # through the single eval chokepoint. `phase` labels the current block.
+    total_evals = 1 + 2 * N + N * (N - 1) // 2
+    prog = {"n": 0, "t0": time.perf_counter(), "last": 0.0, "phase": "baseline"}
+
     def ev(deltas):
         c = dict(point)
         for n, d in deltas.items():
             c[n] = _clamp(point[n] + d, lo[n], hi[n])
-        return evaluate(c)["objective"]
+        o = evaluate(c)["objective"]
+        prog["n"] += 1
+        now = time.perf_counter()
+        if now - prog["last"] >= 1.0 or prog["n"] == total_evals:
+            prog["last"] = now
+            el = now - prog["t0"]
+            eta = el / prog["n"] * (total_evals - prog["n"]) if prog["n"] else 0.0
+            print(f"    [PCA {prog['n']}/{total_evals} | {prog['phase']} | "
+                  f"{_dur(el)} elapsed | ETA {_dur(eta)}] obj={o:.6f}", flush=True)
+        return o
 
     f0 = ev({})
+    prog["phase"] = "diagonal (+/-h per param)"
     fp = {n: ev({n: h[n]}) for n in names}
     fm = {n: ev({n: -h[n]}) for n in names}
     H = np.zeros((N, N))
     for i, n in enumerate(names):                       # diagonal curvature
         H[i, i] = (fp[n] - 2 * f0 + fm[n]) / (h[n] * h[n])
+    prog["phase"] = "mixed partials (coupling)"
     for i in range(N):                                  # mixed partials (coupling)
         for j in range(i + 1, N):
             ni, nj = names[i], names[j]
@@ -411,8 +453,21 @@ def principal_components(evaluate, spec, point):
             "top_loadings": [{"param": p, "weight": round(w, 3)}
                              for p, w in loads[:6] if abs(w) > 0.05],
         })
+    # Per-param SENSITIVITY (the blunt freeze signal, free from the same probes):
+    # the central-difference gradient + diagonal curvature in grid-step-normalized
+    # units (one grid_step = the unit move per axis, matching the Hessian scaling
+    # above), plus the largest one-step objective change. A param flat in BOTH
+    # directions (max_step_delta ~ 0) is a freeze candidate — the metric ignores
+    # it near `point`. Sorted loudest-first so the dead params sink to the bottom.
+    sensitivity = sorted(
+        ({"param": n, "h": h[n],
+          "gradient": (fp[n] - fm[n]) / 2.0,        # Δobjective per grid_step
+          "curvature": fp[n] - 2 * f0 + fm[n],       # Δobjective per grid_step²
+          "max_step_delta": max(abs(fp[n] - f0), abs(fm[n] - f0))}
+         for n in names),
+        key=lambda s: -s["max_step_delta"])
     return {"f0": f0, "n_evals": 1 + 2 * N + N * (N - 1) // 2,
-            "components": comps}
+            "components": comps, "sensitivity": sensitivity}
 
 
 def build_spec(kind, fit_params):
@@ -1079,6 +1134,25 @@ def _write_report(path, config, results):
             lines.append(f"- **PC{i}** eigenvalue {_fmt(comp['eigenvalue'])} "
                          f"({comp['variance_pct']:.0f}% of total curvature): {load}")
         lines.append("")
+
+        sens = pca.get("sensitivity")
+        if sens:
+            lines.append("### Per-param sensitivity (freeze signal)\n")
+            lines.append("Central-difference gradient + diagonal curvature in "
+                         "grid-step units (one probe = one grid_step per axis), "
+                         "and the largest objective change from a single ±grid_step "
+                         "move. Sorted loudest-first — params near the bottom "
+                         "(max Δobj ≈ 0) are flat at this point and can be FROZEN "
+                         "(drop from `fit.params`). A huge Δobj means a step crosses "
+                         "a clip/containment cliff (the param gates a hard "
+                         "constraint).\n")
+            lines.append("| param | grid_step | gradient | curvature | max Δobj |")
+            lines.append("|---|---|---|---|---|")
+            for s in sens:
+                lines.append(f"| {s['param']} | {s['h']:g} | "
+                             f"{s['gradient']:+.6f} | {s['curvature']:+.6f} | "
+                             f"{s['max_step_delta']:.6f} |")
+            lines.append("")
 
     if results.get("fitted"):
         lines.append("## Fitted constants (record-only — adopt by hand)\n")

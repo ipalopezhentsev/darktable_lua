@@ -856,6 +856,13 @@ def main():
         def preset_reanalyze():
             assert "default" in app.preset_combo["values"], \
                 "preset dropdown missing the bundled 'default'"
+            # A plain export ("(as exported)") IS the preset that produced it
+            # (start_preset, else $NEGA_PRESET/"default"); the cache is seeded
+            # under that NAME so selecting it is an instant hit, not a re-run.
+            import auto_negadoctor as _an
+            exported_as = app.start_preset or _an.DEFAULT_PRESET
+            assert exported_as in app._preset_cache, \
+                "exported session not seeded into the cache under its preset name"
             cur = app.current_idx
             orig_gamma = app.images[cur]["params"]["gamma"]
             app._reanalysis_queue = queue.Queue()
@@ -878,12 +885,24 @@ def main():
             app._finish_reanalysis(result)
             assert app._current_preset_label == "default", "preset label not set"
             assert app.pil_image is not None, "no render after preset swap"
+            # _finish_reanalysis memoizes the result under its label.
+            assert "default" in app._preset_cache, \
+                "reanalysis result not memoized in _preset_cache"
+            default_gamma = app.images[cur]["params"]["gamma"]
             # "(as exported)" restores the original session params exactly
             app.preset_var.set(app._PRESET_AS_EXPORTED)
             app._on_preset_selected()
             assert app._current_preset_label == app._PRESET_AS_EXPORTED
             assert abs(app.images[cur]["params"]["gamma"] - orig_gamma) < 1e-9, \
                 "'(as exported)' did not restore the original params"
+            # Switching BACK to "default" must serve from the cache: instant
+            # (no _start_reanalysis, so _reanalyzing stays False) and identical.
+            app.preset_var.set("default")
+            app._on_preset_selected()
+            assert app._current_preset_label == "default", "cache hit didn't swap label"
+            assert app._reanalyzing is False, "cache hit wrongly kicked off a re-run"
+            assert abs(app.images[cur]["params"]["gamma"] - default_gamma) < 1e-9, \
+                "cached preset params differ from the re-run"
         step("preset_reanalyze", preset_reanalyze)
 
         step("clear_selection", lambda: app._clear_selection())

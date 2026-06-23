@@ -143,6 +143,20 @@ def test_principal_components():
           abs(comps[0]["eigenvalue"]) > 5 * abs(comps[1]["eigenvalue"]),
           (comps[0]["eigenvalue"], comps[1]["eigenvalue"]))
 
+    # Per-param sensitivity (the freeze signal): at the minimum the gradient is
+    # ~0 in both axes; the symmetric f makes a and b equally curved, so their
+    # one-step Δobjective is positive and equal.
+    sens = {s["param"]: s for s in pca["sensitivity"]}
+    check("sensitivity reports both params", set(sens) == {"a", "b"}, set(sens))
+    check("gradient ~0 at the minimum",
+          abs(sens["a"]["gradient"]) < 1e-9 and abs(sens["b"]["gradient"]) < 1e-9,
+          (sens["a"]["gradient"], sens["b"]["gradient"]))
+    check("symmetric params have equal, positive max Δobj",
+          sens["a"]["max_step_delta"] > 0
+          and abs(sens["a"]["max_step_delta"]
+                  - sens["b"]["max_step_delta"]) < 1e-12,
+          (sens["a"]["max_step_delta"], sens["b"]["max_step_delta"]))
+
 
 def test_crop_overtrim_metric():
     print("crop over-trim metric:")
