@@ -1,0 +1,18 @@
+{
+  "kind": "inversion",
+  "rolls": [
+    "2506-1"
+  ],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 6,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  },
+  "metric": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
+  "created": "2026-06-22T01:54:16",
+  "git_commit": "ad035a1"
+}

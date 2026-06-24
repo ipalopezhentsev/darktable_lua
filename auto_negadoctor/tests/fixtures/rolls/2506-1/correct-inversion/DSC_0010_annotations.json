@@ -2,17 +2,29 @@
   "stem": "DSC_0010",
   "patch_corrections": {},
   "print_overrides": {
+    "D_max": {
+      "applied": 1.7217812499999998,
+      "corrected": 2.04
+    },
     "black": {
       "applied": 0.13817148627419398,
-      "corrected": 0.158
+      "corrected": 0.258
     },
     "exposure": {
       "applied": 1.0819079542593966,
-      "corrected": 1.0210121257071934
+      "corrected": 0.9930924954370359
     },
     "gamma": {
       "applied": 4.53125,
-      "corrected": 4.23
+      "corrected": 5.65
+    },
+    "offset": {
+      "applied": 0.006250000000000007,
+      "corrected": -0.01
+    },
+    "soft_clip": {
+      "applied": 0.75,
+      "corrected": 0.75
     }
   },
   "wb_overrides": {
@@ -23,8 +35,8 @@
         1.0
       ],
       "corrected": [
-        1.587,
-        1.323,
+        1.547,
+        1.31,
         1.0
       ]
     },
@@ -35,8 +47,8 @@
         1.0
       ],
       "corrected": [
-        0.831,
-        0.756,
+        0.475,
+        0.518,
         1.0
       ]
     }

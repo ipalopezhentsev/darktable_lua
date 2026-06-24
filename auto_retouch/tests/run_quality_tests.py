@@ -268,6 +268,59 @@ def _match_spots(baseline_spots, new_spots, radius=MATCH_RADIUS):
     return matched_pairs, missing, new_fps, source_issues, source_mismatches, radius_mismatches
 
 
+# ---------------------------------------------------------------------------
+# Calibration score helpers (SHARED with tests/run_calibration.py — the same
+# "share the metric between gate and runner" split auto_negadoctor uses). A frame's
+# annotations are the ground truth: `false_positives` (detections the user marked
+# NOT-dust → want gone) and `missed_dust` / `missed_strokes` (defects the user wants
+# found → want covered). Each helper returns per-frame counts; the runner's
+# evaluator turns them into a (precision-weighted) objective.
+# ---------------------------------------------------------------------------
+
+def _stroke_gt_from_ann(ms):
+    """A missed-stroke annotation ({path:[[x,y]...], stroke_width_px}) → the {cx, cy,
+    length_px, path} shape `_match_strokes` consumes (midpoint + polyline length)."""
+    path = ms.get("path") or []
+    if not path:
+        return {"cx": ms.get("cx", 0.0), "cy": ms.get("cy", 0.0),
+                "length_px": ms.get("length_px", 0.0)}
+    xs = [p[0] for p in path]
+    ys = [p[1] for p in path]
+    length = sum(math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+                 for i in range(len(path) - 1))
+    return {"cx": sum(xs) / len(xs), "cy": sum(ys) / len(ys),
+            "length_px": length, "path": path}
+
+
+def dust_score_per_frame(detected_dots, ann, radius=MATCH_RADIUS):
+    """Score a frame's circular-dust detections against its annotations.
+      n_fp     annotated false_positives the detection still REPRODUCES (bad).
+      n_missed annotated missed_dust NOT covered by any detection (bad).
+    """
+    fps = ann.get("false_positives", []) or []
+    missed = ann.get("missed_dust", []) or []
+    n_fp = sum(1 for fp in fps
+               if any(_dist(fp, s) <= radius for s in detected_dots))
+    n_missed = sum(1 for md in missed
+                   if not any(_dist(md, s) <= radius for s in detected_dots))
+    return {"n_fp": n_fp, "n_missed": n_missed, "n_detected": len(detected_dots),
+            "n_fp_ann": len(fps), "n_missed_ann": len(missed)}
+
+
+def stroke_score_per_frame(detected_strokes, ann, radius=MATCH_RADIUS):
+    """Score a frame's stroke detections against its annotations.
+      n_missed annotated missed_strokes NOT matched by a detected stroke (bad).
+      n_fp     detected strokes whose midpoint matches a false_positive point (bad).
+    """
+    gt = [_stroke_gt_from_ann(ms) for ms in (ann.get("missed_strokes", []) or [])]
+    fps = ann.get("false_positives", []) or []
+    _matched, missing, _new = _match_strokes(gt, detected_strokes)
+    n_fp = sum(1 for s in detected_strokes
+               if any(_dist(fp, s) <= radius for fp in fps))
+    return {"n_missed": len(missing), "n_fp": n_fp,
+            "n_detected": len(detected_strokes), "n_missed_ann": len(gt)}
+
+
 def _verdict(baseline_count, new_count, matched, missing, new_fps, source_issues, source_mismatches, radius_mismatches):
     match_rate = (len(matched) / baseline_count) if baseline_count > 0 else 1.0
     new_ratio = (len(new_fps) / baseline_count) if baseline_count > 0 else 0.0

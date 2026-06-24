@@ -21,6 +21,11 @@ local gettext = dt.gettext.gettext
 -- Script directory (for finding auto_crop.py)
 local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
 
+-- Shared darktable-Lua utilities (common/dt_utils.lua) — stateless XMP/binary
+-- helpers shared by all three auto_* plugins.
+package.path = package.path .. ";" .. script_dir .. "../common/?.lua"
+local dtu = require("dt_utils")
+
 -- Set up logging
 --NOTE in event handlers it won't apply and needs to be set up again!
 dlog.log_level(dlog.info)  -- Enable info level and above
@@ -80,27 +85,11 @@ local function parse_crop_results(results_file_path)
 end
 
 -- Helper: Encode a 32-bit float as little-endian hex string
-local function float_to_le_hex(value)
-    local packed = string.pack("<f", value)
-    return (packed:gsub(".", function(c) return string.format("%02x", string.byte(c)) end))
-end
+local float_to_le_hex = dtu.float_to_le_hex
 
 -- Helper: Find the highest history item num in XMP content
 -- This is more reliable than using history_end attribute
-local function find_max_history_num(xmp_content)
-  local max_num = -1
-
-  -- Scan through all darktable:num attributes in history items
-  for num_str in xmp_content:gmatch('darktable:num="(%d+)"') do
-    local num = tonumber(num_str)
-    if num and num > max_num then
-      max_num = num
-    end
-  end
-
-  dlog.msg(dlog.info, "find_max_history_num", string.format("Found max history num=%d", max_num))
-  return max_num
-end
+local find_max_history_num = dtu.find_max_history_num
 
 -- Helper: Create crop module XML entry
 local function create_crop_module_xml(num, params_hex)
@@ -120,18 +109,10 @@ local function create_crop_module_xml(num, params_hex)
 end
 
 -- Helper: Generate a random hex string of given length
-local function generate_random_hex(length)
-  local hex = ""
-  for i = 1, length do
-    hex = hex .. string.format("%x", math.random(0, 15))
-  end
-  return hex
-end
+local generate_random_hex = dtu.generate_random_hex
 
 -- Helper: Generate darktable-format timestamp (microseconds since 0001-01-01)
-local function generate_darktable_timestamp()
-  return (os.time() + 62135596800) * 1000000
-end
+local generate_darktable_timestamp = dtu.generate_darktable_timestamp
 
 -- Apply crop to source image in-place by modifying its own XMP sidecar file
 -- Also updates change_timestamp and history_current_hash to force preview regeneration

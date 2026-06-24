@@ -1,0 +1,12 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "fit": {
+    "method": "none",
+    "pca": true,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  }
+}

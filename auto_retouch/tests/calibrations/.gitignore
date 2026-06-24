@@ -1,0 +1,3 @@
+# Transient debug-UI sessions written by `run_calibration.py --review`
+# (they reference local, gitignored roll JPGs and are regenerated on demand).
+*/review/

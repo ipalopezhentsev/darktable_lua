@@ -19,9 +19,14 @@ Writes: {export_dir}/{stem}_annotations.json   (auto-saved per image)
 
 import sys
 import math
+import os
+import json
+import queue
+import threading
 from pathlib import Path
 
 import tkinter as tk
+import tkinter.ttk as ttk
 
 sys.path.insert(0, str(Path(__file__).parent.parent))   # repo root -> common
 sys.path.insert(0, str(Path(__file__).parent))           # feature dir -> detect_dust
@@ -32,6 +37,24 @@ from common.debug_ui_base import (
 
 # Default full width (px) assigned to a hand-drawn missed thread.
 DEFAULT_MISSED_STROKE_WIDTH = 8.0
+
+
+class _MenuEntryState:
+    """Adapter so the existing `self.remove_missed_btn.config(state=…)` call
+    sites drive a MENU ENTRY's enabled state now that the action moved off the
+    lower-left button column onto the Annotate menu (SHOW_BOTTOM_BUTTONS=False)."""
+
+    def __init__(self, menu, index):
+        self._menu, self._index = menu, index
+
+    def config(self, **kw):
+        if "state" in kw:
+            try:
+                self._menu.entryconfig(self._index, state=kw["state"])
+            except tk.TclError:
+                pass
+
+    configure = config
 
 
 class DustDebugUI(DebugUIBase):
@@ -47,6 +70,7 @@ class DustDebugUI(DebugUIBase):
                     "r":  30, "ctr": 40, "tex": 36, "fp": 24, "nt": 22}
     ITEM_ANCHORS = {"fp": "center", "nt": "center"}
     NOTE_COLUMN  = "nt"
+    SHOW_BOTTOM_BUTTONS = False     # actions live on the menu bar + toolbar
 
     # ------------------------------------------------------------------
     # Session / annotation lifecycle
@@ -54,13 +78,40 @@ class DustDebugUI(DebugUIBase):
 
     def load_session(self, session_dir):
         import detect_dust
+        self._session_dir = session_dir
         images, constants = detect_dust.load_debug_spots_dir(session_dir)
+        self._run_mode = False
+        if not images:
+            # No precomputed debug_spots.json — the export dir / roll folder has
+            # only JPGs. Build minimal img_dicts and let the UI RUN DETECTION ITSELF
+            # (background pool, streaming + progress overlay) so the window opens
+            # immediately instead of after the whole batch. Drives the darktable
+            # Debug action, the preset combo, and `run_calibration.py --review`.
+            images = self._images_from_dir(session_dir)
+            self._run_mode = bool(images)
         # Sensor-dust sessions reuse this UI wholesale (sensor spots are dot
         # spots in the same dict format); only title and report wording differ.
         self.sensor_mode = bool(images and images[0].get("mode") == "sensor")
         if self.sensor_mode:
             self.root.title("Sensor Dust Debug UI")
         return images, constants
+
+    def _images_from_dir(self, session_dir):
+        """Minimal img_dicts from a directory of JPGs (no debug_spots.json). Each is
+        flagged `_detect_pending` so detection runs lazily when the frame is shown."""
+        from PIL import Image
+        out = []
+        d = Path(session_dir)
+        for p in sorted(d.glob("*.jpg")) + sorted(d.glob("*.jpeg")):
+            try:
+                with Image.open(p) as im:
+                    w, h = im.size
+            except Exception:
+                continue
+            out.append({"stem": p.stem, "image_path": str(p),
+                        "width": int(w), "height": int(h),
+                        "detected": [], "rejected": [], "_detect_pending": True})
+        return out
 
     def new_annotation_state(self, img_dict):
         return {
@@ -189,9 +240,25 @@ class DustDebugUI(DebugUIBase):
         self.selected_keypoint = None    # (spot_idx, kp_idx) or None: selected stroke key point
         self.selected_missed_stroke = None  # int or None: index into missed_strokes
 
+        # Visibility toggles — now View-menu checkbuttons (were left-panel
+        # checkboxes). Created here (before the UI is built) so the menu can bind
+        # to them; the BooleanVars need a root, which exists by now.
+        self.show_rejected_var = tk.BooleanVar(master=self.root, value=False)
+        self.show_source_brush_var = tk.BooleanVar(master=self.root, value=False)
+
         # Thread-draw mode: click to place centerline points for a missed thread
         self.thread_draw_mode = False
         self.thread_draw_points = []     # list of [x,y] image coords (in-progress)
+
+        # Calibration review (run_calibration.py --review): each frame carries a
+        # review={"fitted":{detected,rejected}, "live":{...}} payload + a
+        # review_kind. R swaps the active source in place — instant, both were
+        # precomputed — exactly like auto_negadoctor. PERSISTS across frames.
+        imgs = getattr(self, "images", None) or []
+        self.review_mode = any(im.get("review") for im in imgs)
+        self.review_source = "fitted"    # "fitted" | "live"
+        if self.review_mode:
+            self._apply_review_source()
 
     def reset_selection(self):
         self.selected_detected = set()
@@ -202,96 +269,408 @@ class DustDebugUI(DebugUIBase):
         self.selected_missed_stroke = None
         self.remove_missed_btn.config(state=tk.DISABLED)
 
+    def __init__(self, root, session_dir):
+        super().__init__(root, session_dir)
+        # Run mode (the Lua Debug action / --review launch the UI on a JPG-only dir):
+        # the window is already up; detect the whole roll on a background pool and
+        # stream each frame's spots in as it finishes, with the shared progress
+        # overlay — the same UI-first feel as auto_negadoctor.
+        if getattr(self, "_run_mode", False) and root.winfo_exists():
+            self.root.after(200, self._start_background_detect)
+
     def reset_for_new_image(self):
         self.thread_draw_mode = False
         self.thread_draw_points = []
         self.reset_selection()
+        # A pending frame only exists in run mode (set by _images_from_dir); the
+        # background pass — already running, or scheduled right after __init__ —
+        # detects every frame, so just show the overlay here until this one lands
+        # (_poll_bg_detect reveals it). Do NOT kick a separate single detect, or the
+        # frame would be detected twice (once here, once by the pool).
+        img = self.images[self.current_idx] if self.images else None
+        if img and img.get("_detect_pending"):
+            tail = (f"  ({self._bg_done}/{self._bg_total})"
+                    if getattr(self, "_bg_total", 0) else "")
+            self._show_canvas_message(f"Detecting {img['stem']} …{tail}")
+            if getattr(self, "_bg_total", 0):
+                self._set_analyzing_pct(100.0 * self._bg_done / self._bg_total)
+        elif getattr(self, "_analyzing", False):
+            self._clear_canvas_message()
+
+    # ------------------------------------------------------------------
+    # Run-mode background detection (detect the whole roll, streaming)
+    # ------------------------------------------------------------------
+
+    def _ml_model_path(self):
+        return os.environ.get("RETOUCH_ML_MODEL") or None
+
+    def _start_background_detect(self):
+        """Detect every frame on a small background pool, streaming each result into
+        the view as it lands (progress via the shared canvas overlay)."""
+        if not self.images or getattr(self, "_bg_active", False):
+            return
+        import detect_dust
+        self._bg_active = True
+        self._bg_done = 0
+        self._bg_total = len(self.images)
+        self._bg_q = queue.Queue()
+        cfg = (self._cfg_for_selection() if hasattr(self, "_preset_var")
+               else detect_dust.DEFAULT_TUNING)
+        ml = self._ml_model_path()
+        self._update_detect_progress()
+        if self.images[self.current_idx].get("_detect_pending"):
+            self._show_canvas_message(f"Detecting roll…  (0/{self._bg_total})")
+        items = [(i, d.get("image_path")) for i, d in enumerate(self.images)]
+
+        def worker():
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            # full-res detection is memory-heavy — a small pool (override via
+            # RETOUCH_UI_WORKERS) streams results without OOM. detect() releases the
+            # GIL in cv2/numpy, so threads give real parallelism.
+            n = max(1, int(os.environ.get("RETOUCH_UI_WORKERS", "3")))
+
+            def one(it):
+                i, p = it
+                if not p:
+                    return (i, None, "no image path")
+                try:
+                    spots, _r, err, _l = detect_dust.detect(p, ml_model_path=ml, cfg=cfg)
+                    return (i, spots or [], err)
+                except Exception as ex:   # noqa: BLE001
+                    return (i, None, str(ex))
+
+            with ThreadPoolExecutor(max_workers=n) as ex:
+                for fut in as_completed([ex.submit(one, it) for it in items]):
+                    self._bg_q.put(fut.result())
+            self._bg_q.put(None)   # sentinel
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.root.after(120, self._poll_bg_detect)
+
+    def _poll_bg_detect(self):
+        try:
+            while True:
+                item = self._bg_q.get_nowait()
+                if item is None:
+                    self._bg_active = False
+                    self._update_detect_progress(done=True)
+                    if not self.images[self.current_idx].get("_detect_pending"):
+                        self._clear_canvas_message()
+                    return
+                i, spots, err = item
+                if spots is not None and 0 <= i < len(self.images):
+                    self.images[i]["detected"] = spots
+                    self.images[i]["_detect_pending"] = False
+                self._bg_done += 1
+                self._update_detect_progress()
+                if i == self.current_idx:
+                    # reveal the current frame's spots as they land
+                    self._clear_canvas_message()
+                    self.annotations[self.images[i]["stem"]] = \
+                        self.new_annotation_state(self.images[i])
+                    self.reset_selection()
+                    self._populate_items_list()
+                    self._redraw()
+                    self.update_counts()
+        except queue.Empty:
+            pass
+        if getattr(self, "_bg_active", False):
+            self.root.after(120, self._poll_bg_detect)
+
+    def _update_detect_progress(self, done=False):
+        if hasattr(self, "_detect_status"):
+            self._detect_status.config(
+                text="" if done else f"detecting {self._bg_done}/{self._bg_total}…")
+        if getattr(self, "_analyzing", False):
+            self._set_analyzing_pct(100.0 * self._bg_done / max(1, self._bg_total))
+
+    # ------------------------------------------------------------------
+    # Preset dropdown + on-demand re-detection (calibration preview / --review)
+    # ------------------------------------------------------------------
+
+    def build_feature_toolbar(self, parent, row):
+        """Feature toolbar after the common nav/zoom/fit (base build_toolbar):
+        the FP/Missed counts (left) and, right-aligned, the calibration-review
+        fitted/live toggle + the 'Detect with:' preset combo. Selecting a preset
+        re-runs detection on the CURRENT frame under that preset's Tuning
+        (background thread) and swaps its spots — the same in-UI preview
+        auto_negadoctor's preset combo gives. A `(fitted — review)` entry appears
+        when launched by `run_calibration.py --review` (the fitted preset arrives
+        via RETOUCH_REVIEW_PRESET)."""
+        self.toolbar_separator(row)
+        # Annotation counts (was the label atop the old bottom button column).
+        self.count_label = ttk.Label(row, text="FP: 0 | Missed: 0")
+        self.count_label.pack(side="left", padx=8)
+
+        # Right-aligned: review toggle + preset combo (matches negadoctor).
+        self._review_preset = self._load_review_preset_env()
+        choices = ["(live default)"] + self._preset_names()
+        if self._review_preset is not None:
+            choices.append("(fitted — review)")
+        start = "(fitted — review)" if self._review_preset is not None else choices[0]
+        self._preset_var = tk.StringVar(value=start)
+        if getattr(self, "review_mode", False):
+            self.review_btn = tk.Button(
+                row, text="Src: FITTED", command=self._toggle_review_source,
+                **self.TOOLBAR_BTN_STYLE)
+            self.review_btn.pack(side="right", padx=8, pady=2)
+            self._update_review_btn()
+        combo = ttk.Combobox(row, values=choices, textvariable=self._preset_var,
+                             state="readonly", width=18)
+        combo.pack(side="right", padx=2, pady=2)
+        combo.bind("<<ComboboxSelected>>", lambda e: self._redetect_current())
+        ttk.Label(row, text="Detect with:").pack(side="right", padx=(8, 2))
+        self._detect_status = ttk.Label(row, text="")
+        self._detect_status.pack(side="right", padx=8)
+
+    # ------------------------------------------------------------------
+    # Menu hooks (the base builds the generic View / Navigate / Help bar)
+    # ------------------------------------------------------------------
+
+    def extend_view_menu(self, view):
+        view.add_checkbutton(label="Show rejected candidates",
+                             variable=self.show_rejected_var,
+                             command=self._redraw_markers)
+        view.add_checkbutton(label="Show source brush",
+                             variable=self.show_source_brush_var,
+                             command=self._redraw_markers)
+        view.add_separator()
+        view.add_command(label="Review source: fitted / live", accelerator="R",
+                         command=self._toggle_review_source)
+
+    def extend_help_menu(self, helpm):
+        # _show_legend / _show_shortcuts (both non-modal popups) live in the base.
+        helpm.add_command(label="Marker legend…", command=self._show_legend)
+        helpm.add_command(label="Mouse & keyboard shortcuts…",
+                          command=self._show_shortcuts)
+
+    _SHORTCUTS_TEXT = (
+        "MOUSE\n"
+        "  Scroll                zoom in / out\n"
+        "  Scroll (1 spot sel'd) adjust radius correction\n"
+        "  Middle drag           pan\n"
+        "  Click                 select marker\n"
+        "  Drag                  multi-select\n"
+        "  Shift+click / drag    add to selection\n"
+        "  Ctrl+click            add missed dust\n"
+        "  Ctrl+drag             zoom to rectangle\n\n"
+        "KEYS\n"
+        "  Space / B   next / previous image\n"
+        "  R           rejected → missed\n"
+        "              (review session: fitted / live detection)\n"
+        "  T           draw missed thread (click pts, Enter=done, Esc=cancel)\n"
+        "  M           mark false positive\n"
+        "  C           clear FP mark\n"
+        "  Del         remove missed marker\n"
+        "  Note box    comment on the selected object (saves as you type)\n"
+        "  H           hide / show all markers\n"
+        "  P           display color management on / off (sRGB->monitor)\n"
+        "  + / -       zoom ×2 / ÷2     Arrows pan (Shift = fast)\n"
+        "  F           fit to window"
+    )
+
+    # ------------------------------------------------------------------
+    # Calibration review: fitted vs live detection (R)
+    # ------------------------------------------------------------------
+
+    def _on_r_key(self):
+        """R: in a calibration-review session flip fitted/live; otherwise the
+        normal 'rejected → missed' annotation action."""
+        if getattr(self, "review_mode", False):
+            self._toggle_review_source()
+        else:
+            self._mark_rejected_as_missed()
+
+    def _apply_review_source(self):
+        """Swap every review frame's detected/rejected lists to the active source
+        (fitted vs live) IN PLACE, so all render/hit-test paths use it unchanged."""
+        if not getattr(self, "review_mode", False):
+            return
+        for img in self.images:
+            rev = img.get("review")
+            if not rev:
+                continue
+            src = rev.get(self.review_source) or {}
+            if src.get("detected") is not None:
+                img["detected"] = src["detected"]
+            if src.get("rejected") is not None:
+                img["rejected"] = src["rejected"]
+
+    def _toggle_review_source(self):
+        """Flip the preview between the FITTED detection (this calibration
+        session's result) and the LIVE detection (the current source code).
+        Only meaningful while reviewing a session."""
+        if not getattr(self, "review_mode", False):
+            self._set_info_text("Not reviewing a calibration session "
+                                "(open one via run_calibration.py --review).")
+            return
+        self.review_source = "live" if self.review_source == "fitted" else "fitted"
+        self._apply_review_source()
+        # The detected lists differ between sources, so spot indices change —
+        # rebuild the (empty) annotation state for every frame and refresh.
+        for img in self.images:
+            self.annotations[img["stem"]] = self.new_annotation_state(img)
+        self.reset_selection()
+        self._update_review_btn()
+        self._populate_items_list()
+        self._redraw()
+        self.update_counts()
+
+    def _update_review_btn(self):
+        if not hasattr(self, "review_btn"):
+            return
+        if not getattr(self, "review_mode", False):
+            self.review_btn.config(text="Source —", fg="#888888",
+                                   state=tk.DISABLED)
+            return
+        fitted = self.review_source == "fitted"
+        self.review_btn.config(
+            text="Src: FITTED" if fitted else "Src: live",
+            fg="#9fd0ff" if fitted else "#ffd080", state=tk.NORMAL)
+
+    def _preset_names(self):
+        import tuning
+        d = getattr(tuning, "PRESETS_DIR", None)
+        if not d or not os.path.isdir(d):
+            return []
+        return sorted(f[:-5] for f in os.listdir(d) if f.endswith(".json"))
+
+    def _load_review_preset_env(self):
+        raw = os.environ.get("RETOUCH_REVIEW_PRESET")
+        if not raw:
+            return None
+        try:
+            import tuning
+            return tuning.from_mapping(json.loads(raw), source="<review env>")
+        except Exception:
+            return None
+
+    def _cfg_for_selection(self):
+        import detect_dust
+        import tuning
+        sel = self._preset_var.get()
+        if sel == "(live default)":
+            return detect_dust.DEFAULT_TUNING
+        if sel == "(fitted — review)" and self._review_preset is not None:
+            return self._review_preset
+        try:
+            return tuning.load(sel)
+        except Exception:
+            return detect_dust.DEFAULT_TUNING
+
+    def _redetect_current(self):
+        """Detect the current frame under the selected preset on a background thread
+        (detection is full-res + slow), then swap its spots + refresh on the UI thread."""
+        if not self.images or not hasattr(self, "_preset_var"):
+            return
+        if getattr(self, "_bg_active", False):
+            return   # a full-roll background pass owns detection right now
+        img = self.images[self.current_idx]
+        path = img.get("image_path")
+        if not path or not os.path.isfile(path):
+            return
+        cfg = self._cfg_for_selection()
+        ml = self._ml_model_path()
+        idx = self.current_idx
+        if not hasattr(self, "_detect_q"):
+            self._detect_q = queue.Queue()
+        if getattr(self, "_detecting", False):
+            return   # one at a time; the combo selection persists for next time
+        self._detecting = True
+        # SHARED canvas progress overlay (common/debug_ui_base.py) — same machinery
+        # negadoctor uses for process_roll / preset switches. Detection has no
+        # sub-progress, so _poll_detect heartbeats the bar while it runs.
+        self._show_canvas_message(f"Detecting {img['stem']} …")
+        if hasattr(self, "_detect_status"):
+            self._detect_status.config(text=f"detecting {img['stem']}…")
+
+        def work():
+            import detect_dust
+            try:
+                spots, _rej, err, _ls = detect_dust.detect(path, ml_model_path=ml, cfg=cfg)
+                self._detect_q.put((idx, spots or [], err))
+            except Exception as ex:   # noqa: BLE001
+                self._detect_q.put((idx, None, str(ex)))
+
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(150, self._poll_detect)
+
+    def _poll_detect(self):
+        try:
+            idx, spots, err = self._detect_q.get_nowait()
+        except queue.Empty:
+            # Indeterminate heartbeat: nudge the overlay bar forward while the
+            # (single-image, ~tens-of-seconds) detection runs, so it doesn't stall.
+            self._set_analyzing_pct(min(85.0, getattr(self, "_prog_target", 0.0) + 1.0))
+            self.root.after(150, self._poll_detect)
+            return
+        self._detecting = False
+        self._set_analyzing_pct(100.0)
+        self._clear_canvas_message()
+        if spots is not None and 0 <= idx < len(self.images):
+            self.images[idx]["detected"] = spots
+            self.images[idx]["_detect_pending"] = False
+            if idx == self.current_idx:
+                self.annotations[self.images[idx]["stem"]] = \
+                    self.new_annotation_state(self.images[idx])  # indices changed
+                self.reset_selection()
+                self._populate_items_list()
+                self._redraw()
+                self.update_counts()
+        if hasattr(self, "_detect_status"):
+            self._detect_status.config(text=("" if not err else f"error: {err}"))
 
     # ------------------------------------------------------------------
     # Layout / text hooks
     # ------------------------------------------------------------------
 
-    def build_left_controls(self, parent):
-        # Show rejected toggle
-        self.show_rejected_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(parent, text="Show rejected candidates",
-                       variable=self.show_rejected_var,
-                       command=self._redraw_markers,
-                       bg="#484848", fg="white", selectcolor="#363636",
-                       activebackground="#484848", activeforeground="white"
-                       ).pack(anchor="w", padx=6, pady=2)
-
-        # Show source brush circle toggle
-        self.show_source_brush_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(parent, text="Show source brush",
-                       variable=self.show_source_brush_var,
-                       command=self._redraw_markers,
-                       bg="#484848", fg="white", selectcolor="#363636",
-                       activebackground="#484848", activeforeground="white"
-                       ).pack(anchor="w", padx=6, pady=2)
-
     def build_left_info(self, parent):
-        self.add_legend(parent, [
-            ("●", "#00cc44", "Detected spot"),
-            ("●", "#ff44cc", "Radius mismatch vs baseline"),
-            ("✕", "#ff3333", "False positive"),
-            ("●", "#ff8800", "Rejected candidate"),
-            ("✚", "#00ffff", "Missed dust (added)"),
-            ("╱", "#00ffff", "Missed thread (drawn)"),
-            ("□", "#00cc44", "Heal source (- - line)"),
-            ("○", "#00cc44", "Source brush (dashed)"),
-            ("□", "#ff4444", "Baseline source (mismatch)"),
-            ("○", "#ff9900", "Baseline radius (dashed, zoom in)"),
-            ("○", "#00ddff", "Corrected radius (annotated)"),
-        ])
-        self.add_hints(parent, (
-            "Mouse:\n"
-            "  Scroll — zoom in/out\n"
-            "  Scroll (1 spot sel'd) —\n"
-            "    adjust radius correction\n"
-            "  Middle drag — pan\n"
-            "  Click — select marker\n"
-            "  Drag — multi-select\n"
-            "  Shift+click/drag — add to sel\n"
-            "  Ctrl+click — add missed\n"
-            "  Ctrl+drag — zoom to rect\n"
-            "Keys:\n"
-            "  Space/B — next/prev image\n"
-            "  R — rejected → missed\n"
-            "  T — draw missed thread\n"
-            "    (click pts, Enter=done,\n"
-            "     Esc=cancel)\n"
-            "  M — mark false positive\n"
-            "  C — clear FP mark\n"
-            "  Del — remove missed marker\n"
-            "  Note box — comment on sel.\n"
-            "    object (saves as you type)\n"
-            "  H — hide/show all markers\n"
-            "  +/- — zoom ×2 / ÷2\n"
-            "  Arrows — pan  (Shift=fast)\n"
-            "  F — fit to window"
-        ))
+        # Keep the left panel minimal — only the image list. The per-frame status
+        # (dims / detected / rejected) lives in the bottom "Selected" box via
+        # default_info_text; the visibility toggles are View-menu checkbuttons;
+        # the legend + shortcuts are Help-menu popups — all like auto_negadoctor.
+        self.status_label.pack_forget()
 
-    def build_feature_buttons(self, btn_frame, btn_cfg):
-        self.count_label = tk.Label(btn_frame, text="FP: 0 | Missed: 0",
-                                    bg="#484848", fg="#c0c0c0", font=("", 9))
-        self.count_label.pack(anchor="e", pady=(0, 4))
+    # Marker legend + the full mouse/key reference live on the Help menu (popups),
+    # NOT in the left panel — same as auto_negadoctor.
+    _LEGEND_ENTRIES = [
+        ("●", "#00cc44", "Detected spot"),
+        ("●", "#ff44cc", "Radius mismatch vs baseline"),
+        ("✕", "#ff3333", "False positive"),
+        ("●", "#ff8800", "Rejected candidate"),
+        ("✚", "#00ffff", "Missed dust (added)"),
+        ("╱", "#00ffff", "Missed thread (drawn)"),
+        ("□", "#00cc44", "Heal source (- - line)"),
+        ("○", "#00cc44", "Source brush (dashed)"),
+        ("□", "#ff4444", "Baseline source (mismatch)"),
+        ("○", "#ff9900", "Baseline radius (dashed, zoom in)"),
+        ("○", "#00ddff", "Corrected radius (annotated)"),
+    ]
 
-        tk.Button(btn_frame, text="Rejected → Missed  (R)",
-                  command=self._mark_rejected_as_missed, **btn_cfg).pack(fill=tk.X, pady=1)
-
-        self.mark_fp_btn = tk.Button(btn_frame, text="Mark False Positive  (M)",
-                                     command=self._mark_fp, **btn_cfg)
-        self.mark_fp_btn.pack(fill=tk.X, pady=1)
-
-        self.clear_fp_btn = tk.Button(btn_frame, text="Clear FP Mark  (C)",
-                                      command=self._clear_fp, **btn_cfg)
-        self.clear_fp_btn.pack(fill=tk.X, pady=1)
-
-        self.remove_missed_btn = tk.Button(btn_frame, text="Remove Missed  (Del)",
-                                           command=self._remove_missed,
-                                           state=tk.DISABLED, **btn_cfg)
-        self.remove_missed_btn.pack(fill=tk.X, pady=1)
+    def build_feature_menus(self, menubar):
+        """The 'Annotate' cascade — the edit actions that used to be the
+        lower-left button column (SHOW_BOTTOM_BUTTONS is now False, like
+        auto_negadoctor). 'Remove Missed' is enabled only when a missed marker
+        is selected; the existing `self.remove_missed_btn.config(state=…)` call
+        sites drive that menu entry through a tiny proxy (see _MenuEntryState)."""
+        ann = tk.Menu(menubar, tearoff=0)
+        ann.add_command(label="Rejected → Missed", accelerator="R",
+                        command=self._mark_rejected_as_missed)
+        ann.add_command(label="Mark false positive", accelerator="M",
+                        command=self._mark_fp)
+        ann.add_command(label="Clear FP mark", accelerator="C",
+                        command=self._clear_fp)
+        rm_idx = ann.index("end") + 1
+        ann.add_command(label="Remove missed", accelerator="Del",
+                        command=self._remove_missed, state=tk.DISABLED)
+        ann.add_separator()
+        ann.add_command(label="Draw missed thread", accelerator="T",
+                        command=self._toggle_thread_draw)
+        ann.add_separator()
+        ann.add_command(label="Clear selection", command=self._clear_selection)
+        menubar.add_cascade(label="Annotate", menu=ann)
+        # Drive the (formerly button) enable/disable through the menu entry.
+        self.remove_missed_btn = _MenuEntryState(ann, rm_idx)
 
     def bind_feature_keys(self):
         self.bind_key("<m>", lambda e: self._mark_fp())
@@ -300,8 +679,8 @@ class DustDebugUI(DebugUIBase):
         self.bind_key("<C>", lambda e: self._clear_fp())
         self.bind_key("<Delete>", lambda e: self._remove_missed())
         self.bind_key("<BackSpace>", lambda e: self._remove_missed())
-        self.bind_key("<r>", lambda e: self._mark_rejected_as_missed())
-        self.bind_key("<R>", lambda e: self._mark_rejected_as_missed())
+        self.bind_key("<r>", lambda e: self._on_r_key())
+        self.bind_key("<R>", lambda e: self._on_r_key())
         self.bind_key("<t>", lambda e: self._toggle_thread_draw())
         self.bind_key("<T>", lambda e: self._toggle_thread_draw())
         self.bind_key("<Return>", lambda e: self._finish_thread())
@@ -319,11 +698,26 @@ class DustDebugUI(DebugUIBase):
                 f"{time_str}")
 
     def default_info_text(self):
-        return ("No marker selected.\n"
+        # The per-frame status (dims / detected / rejected / timings) now lives
+        # here in the bottom "Selected" box (the left status label is hidden).
+        head = ""
+        if self.images:
+            head = self.image_status_text(self.images[self.current_idx]) + "\n\n"
+        return (head + "No marker selected.\n"
                 "Click a marker or Ctrl+Click to add missed dust.")
+
+    def _nothing_selected(self):
+        return (not self.selected_detected and not self.selected_rejected
+                and not self.selected_missed and self.selected_source is None
+                and self.selected_keypoint is None
+                and self.selected_missed_stroke is None)
 
     def update_counts(self):
         self._update_count_label()
+        # Detection can land after the box was first filled (run-mode streaming),
+        # so refresh the per-frame status while nothing is selected.
+        if self._nothing_selected():
+            self._set_info_text(self.default_info_text())
 
     # ------------------------------------------------------------------
     # Note hooks (free-text user annotation per object)

@@ -577,90 +577,11 @@ class NegadoctorDebugUI(DebugUIBase):
             self._neg_cache_key = None
             self._load_image_by_idx(min(self.current_idx, len(self.images) - 1))
 
-    def _show_canvas_message(self, text):
-        """Start the centered 'analyzing' overlay (label + a progress bar drawn
-        ON the canvas, so it's always visible regardless of the toolbar width).
-        It re-centers on resize; the bar EASES toward real progress + gently
-        trickles, so the staged/bursty real updates read as smooth motion."""
-        self._analyzing = True
-        self._analyzing_text = text
-        self._analyzing_pct = 0.0       # displayed (animated)
-        self._prog_target = 0.0         # latest REAL progress
-        self._draw_analyzing_overlay()
-        self._start_progress_anim()
-
-    def _set_analyzing_pct(self, pct):
-        # record the real target; the animator eases the displayed value to it
-        self._prog_target = max(getattr(self, "_prog_target", 0.0),
-                                max(0.0, min(100.0, pct)))
-
-    def _start_progress_anim(self):
-        if getattr(self, "_prog_anim_job", None) is None:
-            self._prog_anim_job = self.root.after(60, self._animate_progress)
-
-    def _animate_progress(self):
-        self._prog_anim_job = None
-        if not getattr(self, "_analyzing", False):
-            return
-        disp, tgt = self._analyzing_pct, self._prog_target
-        # ease up toward the real target (a jump becomes a ~0.5s glide); never
-        # move backward
-        disp = max(disp, disp + (tgt - disp) * 0.25)
-        # once caught up, trickle slowly so a long opaque stage never looks
-        # frozen — but stay within a small margin of real progress (and < 99)
-        cap = min(99.0, tgt + 12.0)
-        if disp < cap:
-            disp = min(cap, disp + (cap - disp) * 0.04)
-        self._analyzing_pct = disp
-        self._draw_analyzing_overlay()
-        self._prog_anim_job = self.root.after(60, self._animate_progress)
-
-    def _draw_analyzing_overlay(self):
-        """(Re)draw the centered analyzing label + progress bar on the canvas."""
-        c = self.canvas
-        c.delete("analyzing_msg")
-        if not getattr(self, "_analyzing", False):
-            return
-        cw, ch = max(c.winfo_width(), 1), max(c.winfo_height(), 1)
-        cx, cy = cw / 2, ch / 2
-        pct = getattr(self, "_analyzing_pct", 0.0)
-        # dim whatever is behind (a frame during a preset switch) so the label +
-        # bar stay readable; stipple fakes alpha. First item, so it's behind.
-        c.create_rectangle(0, 0, cw, ch, fill="#000000", stipple="gray50",
-                           outline="", tags="analyzing_msg")
-        c.create_text(cx, cy - self.scaled(24), text=self._analyzing_text,
-                      fill="#ffffff", font=("", 14), justify="center",
-                      tags="analyzing_msg")
-        bar_w = min(cw * 0.6, self.scaled(420))
-        bar_h = self.scaled(22)
-        x0, y0 = cx - bar_w / 2, cy + self.scaled(8)
-        c.create_rectangle(x0, y0, x0 + bar_w, y0 + bar_h, fill="#333333",
-                           outline="#555555", tags="analyzing_msg")
-        if pct > 0:
-            c.create_rectangle(x0, y0, x0 + bar_w * pct / 100.0, y0 + bar_h,
-                               fill="#4a90d9", outline="", tags="analyzing_msg")
-        # percent centered ON the bar (white + bold reads on both the filled and
-        # unfilled portions), not below it where it was nearly invisible
-        c.create_text(cx, y0 + bar_h / 2, text=f"{pct:.0f}%", fill="#ffffff",
-                      font=("", 10, "bold"), tags="analyzing_msg")
-
-    def _clear_canvas_message(self):
-        self._analyzing = False
-        if getattr(self, "_prog_anim_job", None) is not None:
-            try:
-                self.root.after_cancel(self._prog_anim_job)
-            except Exception:
-                pass
-            self._prog_anim_job = None
-        self.canvas.delete("analyzing_msg")
-
-    def _on_canvas_configure(self, event):
-        # While analyzing the canvas has no image; keep the overlay centered on
-        # resize (the base re-fit path only runs when there IS an image).
-        if getattr(self, "_analyzing", False):
-            self._draw_analyzing_overlay()
-            return
-        super()._on_canvas_configure(event)
+    # The canvas progress-overlay machinery (_show_canvas_message /
+    # _set_analyzing_pct / _animate_progress / _clear_canvas_message /
+    # _draw_analyzing_overlay) + the _analyzing branch of _on_canvas_configure now
+    # live in common/debug_ui_base.py (SHARED with the dust UI). Used here for the
+    # initial process_roll run + preset switches.
 
     def _source_image_paths(self):
         """Source-negative paths for (re)analysis: the loaded frames' paths when
@@ -1380,18 +1301,8 @@ class NegadoctorDebugUI(DebugUIBase):
         ("■", "#4080ff", "Clipped shadows (L)"),
     ]
 
-    def _show_legend(self):
-        win = getattr(self, "_legend_win", None)
-        if win is not None and win.winfo_exists():
-            win.lift()
-            return
-        win = tk.Toplevel(self.root, bg="#484848")
-        win.title("Marker legend")
-        win.transient(self.root)
-        self._legend_win = win
-        self.add_legend(win, self._LEGEND_ENTRIES)
-        tk.Button(win, text="Close", command=win.destroy, bg="#585858",
-                  fg="white", relief=tk.FLAT, padx=10, pady=4).pack(pady=8)
+    # _show_legend / _show_shortcuts (both non-modal popups) live in the base;
+    # this class only supplies the _LEGEND_ENTRIES + _SHORTCUTS_TEXT content.
 
     # Full mouse/key reference, shown from Help → Shortcuts… (was the always-on
     # text block in the lower-left panel).
@@ -1444,17 +1355,12 @@ class NegadoctorDebugUI(DebugUIBase):
         "= fine tune)."
     )
 
-    def _show_shortcuts(self):
-        messagebox.showinfo("Mouse & keyboard shortcuts", self._SHORTCUTS_TEXT,
-                            parent=self.root)
-
     # ------------------------------------------------------------------
     # Menu bar + toolbar (mirror the keyboard shortcuts; the shortcuts
     # themselves stay bound in bind_feature_keys)
     # ------------------------------------------------------------------
 
-    def build_menus(self, menubar):
-        view = tk.Menu(menubar, tearoff=0)
+    def extend_view_menu(self, view):
         view.add_command(label="Inverted / negative", accelerator="V",
                          command=self._toggle_view)
         view.add_command(label="Corrected / default render", accelerator="X",
@@ -1473,19 +1379,8 @@ class NegadoctorDebugUI(DebugUIBase):
                          command=self._toggle_histogram)
         view.add_command(label="Clip overlay on / off", accelerator="L",
                          command=self._toggle_clipping)
-        view.add_command(label="Display color management on / off",
-                         accelerator="P", command=self._toggle_color_manage)
-        view.add_command(label="Hide / show markers", accelerator="H",
-                         command=self._toggle_hide_markers)
-        view.add_separator()
-        view.add_command(label="Fit to window", accelerator="F",
-                         command=self._fit_to_window)
-        view.add_command(label="Zoom in", accelerator="+",
-                         command=lambda: self._zoom_step(2.0))
-        view.add_command(label="Zoom out", accelerator="-",
-                         command=lambda: self._zoom_step(0.5))
-        menubar.add_cascade(label="View", menu=view)
 
+    def build_feature_menus(self, menubar):
         sel = tk.Menu(menubar, tearoff=0)
         sel.add_command(label="Film base patch", accelerator="1",
                         command=lambda: self._select_patch("film_base"))
@@ -1540,46 +1435,19 @@ class NegadoctorDebugUI(DebugUIBase):
                         command=self._toggle_bad_inversion)
         menubar.add_cascade(label="Adjust", menu=adj)
 
-        nav = tk.Menu(menubar, tearoff=0)
-        nav.add_command(label="Next image", accelerator="Space",
-                        command=lambda: self._nav_image(+1))
-        nav.add_command(label="Previous image", accelerator="B",
-                        command=lambda: self._nav_image(-1))
-        menubar.add_cascade(label="Navigate", menu=nav)
-
-        helpm = tk.Menu(menubar, tearoff=0)
+    def extend_help_menu(self, helpm):
         helpm.add_command(label="Marker legend…", command=self._show_legend)
         helpm.add_command(label="Mouse & keyboard shortcuts…",
                           command=self._show_shortcuts)
-        menubar.add_cascade(label="Help", menu=helpm)
 
-    def build_toolbar(self, parent):
-        """View & navigation controls across the top of the center panel. The
-        view toggles carry the state (text + colour) so the menu items can stay
-        plain commands; edit actions live in the lower button panel. A second
-        row holds the live view-state status (what used to be drawn on top of
-        the image)."""
-        tb = {"bg": "#585858", "fg": "white", "relief": tk.FLAT,
-              "padx": 6, "pady": 3, "highlightthickness": 0, "bd": 0}
+    def build_feature_toolbar(self, parent, row):
+        """View-state buttons after the common nav/zoom/fit (base build_toolbar).
+        The view toggles carry the state (text + colour) so the menu items can
+        stay plain commands. A second row holds the live view-state status (what
+        used to be drawn on top of the image)."""
+        btn = lambda text, cmd, **kw: self.toolbar_button(row, text, cmd, **kw)
+        sep = lambda: self.toolbar_separator(row)
 
-        row = tk.Frame(parent, bg="#3f3f3f")
-        row.pack(side=tk.TOP, fill=tk.X)
-
-        def sep():
-            tk.Frame(row, width=1, bg="#6a6a6a").pack(
-                side=tk.LEFT, fill=tk.Y, padx=5, pady=3)
-
-        def btn(text, cmd, **kw):
-            b = tk.Button(row, text=text, command=cmd, **tb, **kw)
-            b.pack(side=tk.LEFT, padx=1, pady=2)
-            return b
-
-        btn("◀", lambda: self._nav_image(-1))
-        btn("▶", lambda: self._nav_image(+1))
-        sep()
-        btn("－", lambda: self._zoom_step(0.5))
-        btn("＋", lambda: self._zoom_step(2.0))
-        btn("Fit", self._fit_to_window)
         sep()
         self.view_btn = btn("Negative", self._toggle_view)
         self.compare_btn = btn("Default", self._toggle_compare)
@@ -2098,8 +1966,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<T>", lambda e: self._toggle_histogram())
         self.bind_key("<l>", lambda e: self._toggle_clipping())
         self.bind_key("<L>", lambda e: self._toggle_clipping())
-        self.bind_key("<p>", lambda e: self._toggle_color_manage())
-        self.bind_key("<P>", lambda e: self._toggle_color_manage())
+        # P (display colour management) is bound by the base class.
         # ] brighter / [ darker: black + exposure in unison (see _brighten)
         self.bind_key("<bracketright>", lambda e: self._brighten(False))
         self.bind_key("<bracketleft>", lambda e: self._brighten(True))
@@ -2110,10 +1977,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<Control-C>", lambda e: self._copy_params())
         self.bind_key("<Control-v>", lambda e: self._paste_params())
         self.bind_key("<Control-V>", lambda e: self._paste_params())
-        # Hover readout: show the displayed image's RGB at the pointer (near the
-        # histogram). Plain <Motion> (no button) — drags use <B1-Motion>.
-        self.canvas.bind("<Motion>", self._on_canvas_motion)
-        self.canvas.bind("<Leave>", self._on_canvas_leave)
+        # The pipette hover readout (<Motion>/<Leave>) is bound by the base class.
 
     def image_status_text(self, img_dict):
         """Compact glanceable summary for the left panel. The full per-frame
@@ -2707,21 +2571,25 @@ class NegadoctorDebugUI(DebugUIBase):
     # Histogram of the displayed (converted) image
     # ------------------------------------------------------------------
 
-    HIST_BINS = 128
+    # The histogram + pipette now live in the shared LEFT-PANEL section
+    # (common/debug_ui_base.py), not on the canvas. This class only supplies the
+    # two hooks: the UNDECORATED displayed pixels, and the content-restricted
+    # pixel subset (which also sets self._clip_stats for the clip spikes + the
+    # on-canvas clip meter).
 
-    def _refresh_histogram(self):
-        """Per-channel histogram of the undecorated displayed image. In
-        hide-rejected mode the holder/border pixels are excluded, so the
-        histogram shows the photo content only (the inverted holder would
-        otherwise fake a clipped-whites spike)."""
-        self._hist_data = None
+    def _display_rgb_array(self):
+        """The undecorated true-sRGB displayed image (no clip overlay / mask
+        blanking) — what the histogram + pipette must read."""
+        return self._display_base_array()
+
+    def _histogram_pixels(self):
+        """Pixels for the shared histogram. In hide-rejected mode restrict to the
+        photo content (the inverted holder would otherwise fake a clipped-whites
+        spike), and set self._clip_stats (drives the clip spikes + clip meter)."""
         self._clip_stats = None
-        if self._display_base_pil is None:
-            return
-        try:
-            arr = np.asarray(self._display_base_pil.convert("RGB"))
-        except Exception:
-            return
+        arr = self._display_base_array()
+        if arr is None:
+            return None
         pixels = arr.reshape(-1, 3)
         if self.mask_view == 2:
             crop = self.annotations[self.images[self.current_idx]["stem"]] \
@@ -2735,7 +2603,7 @@ class NegadoctorDebugUI(DebugUIBase):
                     keep = ~((mask == 1) | (mask == 2))
                     pixels = arr[keep]
         if len(pixels) == 0:
-            return
+            return None
         # clip fractions over the SAME pixel set the histogram covers (content
         # only in hide-rejected mode) — drives the meter + histogram spikes
         total = len(pixels)
@@ -2744,64 +2612,19 @@ class NegadoctorDebugUI(DebugUIBase):
         lo = int(np.count_nonzero((pixels <= self.CLIP_LO_LEVEL).all(axis=1)))
         self._clip_stats = {"hi": hi / total * 100.0,
                             "lo": lo / total * 100.0, "total": total}
-        hists = []
-        for c in range(3):
-            h, _edges = np.histogram(pixels[:, c], bins=self.HIST_BINS,
-                                     range=(0, 255))
-            hists.append(h.astype(np.float64))
-        peak = max(float(h.max()) for h in hists)
-        if peak <= 0:
-            return
-        self._hist_data = [h / peak for h in hists]
-
-    def _draw_histogram(self):
-        if not self.show_histogram or not getattr(self, "_hist_data", None):
-            return
-        cw = self.canvas.winfo_width()
-        pw, ph = 150, 72
-        x0, y0 = cw - pw - 12, 10
-        self.canvas.create_rectangle(x0, y0, x0 + pw, y0 + ph,
-                                     fill="#1c1c1c", outline="#666666",
-                                     tags="histogram")
-        colors = ("#ff6666", "#66dd66", "#7799ff")
-        n = self.HIST_BINS
-        for c in range(3):
-            pts = []
-            for i in range(n):
-                px = x0 + 2 + (pw - 4) * i / (n - 1)
-                py = y0 + ph - 2 - (ph - 6) * min(self._hist_data[c][i], 1.0)
-                pts.extend((px, py))
-            self.canvas.create_line(*pts, fill=colors[c], width=1,
-                                    tags="histogram")
-        # clipping spikes: red at the right edge (blown highlights), blue at
-        # the left edge (crushed shadows), height ~ the clipped fraction
-        stats = getattr(self, "_clip_stats", None)
-        if stats:
-            track = ph - 6
-            for pct, color, ex in ((stats["hi"], "#ff3030", x0 + pw - 2),
-                                   (stats["lo"], "#4080ff", x0 + 2)):
-                if pct <= 0:
-                    continue
-                bh = track * min(1.0, pct / self.CLIP_METER_FULL_PCT)
-                self.canvas.create_line(ex, y0 + ph - 2, ex, y0 + ph - 2 - bh,
-                                        fill=color, width=3, tags="histogram")
-        if self.mask_view == 2:
-            self.canvas.create_text(x0 + 3, y0 + 2, anchor="nw",
-                                    text="content only", fill="#aaaaaa",
-                                    font=("Courier", 7), tags="histogram")
+        return pixels
 
     def _draw_clip_meter(self):
-        """A VU-style clip-level meter top-right (below the histogram): one
-        bar per direction (H = blown highlights, S = crushed shadows) filling
-        to CLIP_METER_FULL_PCT, with a tick at the clip budget and the exact
+        """A VU-style clip-level meter top-right of the canvas: one bar per
+        direction (H = blown highlights, S = crushed shadows) filling to
+        CLIP_METER_FULL_PCT, with a tick at the clip budget and the exact
         percentage. Always shown; (L) additionally tints clipped pixels on the
-        image."""
+        image. (The histogram itself moved to the left panel.)"""
         stats = getattr(self, "_clip_stats", None)
         cw = self.canvas.winfo_width()
         pw, rh, pad = 150, 13, 4
         x0 = cw - pw - 12
-        y0 = (10 + 72 + 8) if (self.show_histogram
-                               and getattr(self, "_hist_data", None)) else 10
+        y0 = 10
         ph = 16 + 2 * (rh + pad)
         self.canvas.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#1c1c1c",
                                      outline="#666666", tags="clipmeter")
@@ -2839,22 +2662,10 @@ class NegadoctorDebugUI(DebugUIBase):
                                     fill="#ff6060" if over else "#cccccc",
                                     font=("Courier", 8), tags="clipmeter")
 
-    # ------------------------------------------------------------------
-    # Hover pixel readout (RGB of the displayed image, near the histogram)
-    # ------------------------------------------------------------------
-
-    def _on_canvas_motion(self, event):
-        self._pointer_xy = (event.x, event.y)
-        self._draw_pixel_readout(event.x, event.y)
-
-    def _on_canvas_leave(self, event):
-        self._pointer_xy = None
-        self.canvas.delete("pixelreadout")
-
     def _display_base_array(self):
-        """Cached HxWx3 uint8 ndarray of the undecorated displayed image (the
-        same pixels the histogram reads — true sRGB, = the export). Rebuilt only
-        when the display base changes, so a per-pixel hover lookup is cheap."""
+        """Cached HxWx3 uint8 ndarray of the undecorated displayed image (true
+        sRGB = the export). Feeds the shared histogram + pipette (via the
+        _display_rgb_array hook). Rebuilt only when the display base changes."""
         pil = getattr(self, "_display_base_pil", None)
         if pil is None:
             return None
@@ -2865,51 +2676,6 @@ class NegadoctorDebugUI(DebugUIBase):
                 self._disp_arr = None
             self._disp_arr_id = id(pil)
         return self._disp_arr
-
-    def _draw_pixel_readout(self, cx=None, cy=None):
-        """Show the displayed image's RGB at the pointer, in a small box stacked
-        under the histogram/clip-meter. Same pixel set as the histogram, so the
-        values match what the histogram and clip meter report."""
-        self.canvas.delete("pixelreadout")
-        if self.pil_image is None:
-            return
-        if cx is None:
-            if self._pointer_xy is None:
-                return
-            cx, cy = self._pointer_xy
-        arr = self._display_base_array()
-        if arr is None:
-            return
-        ix, iy = canvas_to_image(cx, cy, self.offset_x, self.offset_y, self.zoom)
-        ix, iy = int(math.floor(ix)), int(math.floor(iy))
-        ih, iw = arr.shape[:2]
-        cw = self.canvas.winfo_width()
-        # wider than the 150px histogram so the three RGB columns don't crowd
-        # (right edges stay aligned: both end at cw-12)
-        pw = 192
-        x0 = cw - pw - 12
-        hist_shown = self.show_histogram and getattr(self, "_hist_data", None)
-        clip_y0 = (10 + 72 + 8) if hist_shown else 10
-        clip_ph = 16 + 2 * (13 + 4)
-        y0 = clip_y0 + clip_ph + 8
-        ph = 20
-        self.canvas.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#1c1c1c",
-                                     outline="#666666", tags="pixelreadout")
-        cy_text = y0 + ph / 2
-        if not (0 <= ix < iw and 0 <= iy < ih):
-            self.canvas.create_text(x0 + 4, cy_text, anchor="w",
-                                    text="pixel  —", fill="#888888",
-                                    font=("Courier", 8), tags="pixelreadout")
-            return
-        r, g, b = (int(v) for v in arr[iy, ix][:3])
-        seg = (pw - 12) / 3.0
-        for i, (lab, val, color) in enumerate((("R", r, "#ff6666"),
-                                               ("G", g, "#66dd66"),
-                                               ("B", b, "#7799ff"))):
-            self.canvas.create_text(x0 + 8 + i * seg, cy_text, anchor="w",
-                                    text=f"{lab} {val:>3}", fill=color,
-                                    font=("Courier", 8, "bold"),
-                                    tags="pixelreadout")
 
     def _toggle_compare(self):
         """X: flip between the corrected render and the algorithm's default."""
@@ -3143,23 +2909,8 @@ class NegadoctorDebugUI(DebugUIBase):
             text="Src: FITTED" if fitted else "Src: live",
             fg="#9fd0ff" if fitted else "#ffd080")
 
-    def _toggle_histogram(self):
-        self.show_histogram = not self.show_histogram
-        self._update_hist_btn()
-        self._redraw_markers()
-
-    def _toggle_color_manage(self):
-        """P: toggle sRGB->monitor-profile display color management. ON matches
-        darktable's color-managed view; OFF shows raw sRGB bytes (over-saturated
-        on a wide-gamut panel). No effect if no monitor profile was detected."""
-        if not self.color_management_available():
-            messagebox.showinfo(
-                "Display color management",
-                "No monitor ICC profile detected — display is already raw sRGB.\n"
-                "Set NEGA_DISPLAY_ICC=<path> to force one.")
-            return
-        self.color_manage = not self.color_manage
-        self._redraw()
+    # _toggle_histogram is the base's (it flips show_histogram, redraws the
+    # left-panel histogram, and calls _update_hist_btn below for the toolbar btn).
 
     def _update_hist_btn(self):
         if not hasattr(self, "hist_btn"):
@@ -3197,8 +2948,7 @@ class NegadoctorDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def overlay_tags(self):
-        return ("patches", "corrections", "labels", "badges", "histogram",
-                "clipmeter", "pixelreadout")
+        return ("patches", "corrections", "labels", "badges", "clipmeter")
 
     def _draw_rect(self, rect, color, tags, width=2, dash=None, label=None):
         x, y, w, h = rect
@@ -3257,9 +3007,9 @@ class NegadoctorDebugUI(DebugUIBase):
             w, h = img_dict["width"], img_dict["height"]
             self._draw_rect([2, 2, w - 4, h - 4], "#ff4444", "badges", width=3)
 
-        self._draw_histogram()
+        # The histogram + pipette are in the left panel now; only the clip meter
+        # remains on the canvas.
         self._draw_clip_meter()
-        self._draw_pixel_readout()       # re-uses the last hover position
         self._update_canvas_status()
 
     def _redraw(self):

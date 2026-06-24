@@ -27,6 +27,11 @@ local gettext = dt.gettext.gettext
 -- Script directory (for finding auto_negadoctor.py)
 local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
 
+-- Shared darktable-Lua utilities (common/dt_utils.lua) — stateless XMP/binary
+-- helpers shared by all three auto_* plugins.
+package.path = package.path .. ";" .. script_dir .. "../common/?.lua"
+local dtu = require("dt_utils")
+
 -- Set up logging
 --NOTE in event handlers it won't apply and needs to be set up again!
 dlog.log_level(dlog.info)
@@ -164,30 +169,13 @@ end
 -- ===================================================================
 
 -- Helper: Find the highest history item num in XMP content
-local function find_max_history_num(xmp_content)
-  local max_num = -1
-  for num_str in xmp_content:gmatch('darktable:num="(%d+)"') do
-    local num = tonumber(num_str)
-    if num and num > max_num then
-      max_num = num
-    end
-  end
-  return max_num
-end
+local find_max_history_num = dtu.find_max_history_num
 
 -- Helper: Generate a random hex string of given length
-local function generate_random_hex(length)
-  local hex = ""
-  for i = 1, length do
-    hex = hex .. string.format("%x", math.random(0, 15))
-  end
-  return hex
-end
+local generate_random_hex = dtu.generate_random_hex
 
 -- Helper: Generate darktable-format timestamp (microseconds since 0001-01-01)
-local function generate_darktable_timestamp()
-  return (os.time() + 62135596800) * 1000000
-end
+local generate_darktable_timestamp = dtu.generate_darktable_timestamp
 
 -- Iterate all history <rdf:li .../> entries in an XMP. Returns a list of
 -- { s = start_pos, e = end_pos, text, num, operation, enabled }.
@@ -461,10 +449,7 @@ local function finalize_xmp(image, xmp_path, xmp_content, context)
 end
 
 -- Pack a Lua number as a little-endian 32-bit float and hex-encode it.
-local function float_to_le_hex(value)
-  local packed = string.pack("<f", value)
-  return (packed:gsub(".", function(c) return string.format("%02x", string.byte(c)) end))
-end
+local float_to_le_hex = dtu.float_to_le_hex
 
 -- Helper: Create crop module XML entry (modversion 3). params = 4 LE floats
 -- (left, top, right, bottom edge positions in [0,1]) + 8 zero bytes (angle +
@@ -978,16 +963,8 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
 
   -- Write a manifest mapping each exported stem back to its original source
   -- file, so the temp export folder records where the frames came from.
-  local src_file = export_dir .. "/source_paths.txt"
-  local sf = io.open(src_file, "w")
-  if sf then
-    for safe_name, src_path in pairs(source_paths) do
-      sf:write(string.format("%s|%s\n", safe_name, src_path))
-    end
-    sf:close()
-  else
-    dlog.msg(dlog.warn, "export_and_detect",
-      "Could not write source_paths.txt")
+  if not dtu.write_source_paths(export_dir, source_paths) then
+    dlog.msg(dlog.warn, "export_and_detect", "Could not write source_paths.txt")
   end
 
   -- Continuous edit: record the currently-applied params of any re-edited frame

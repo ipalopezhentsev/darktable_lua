@@ -31,274 +31,29 @@ from scipy.spatial import cKDTree
 from skimage.morphology import skeletonize
 from skimage.filters import sato
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tuning
+
+
 
 # ---------------------------------------------------------------------------
-# Detection constants (conservative defaults)
+# Tuning constants (dependency injection of the fittable detection knobs)
 # ---------------------------------------------------------------------------
-LOCAL_BG_KERNEL = 201          # Gaussian blur kernel for local background
-NOISE_THRESHOLD_MULTIPLIER = 3.0  # spots must be this many std devs above background
-MIN_ABSOLUTE_THRESHOLD = 15.0  # minimum brightness difference regardless of noise
-MIN_SPOT_AREA = 6              # minimum pixels (reject subpixel/imperceptible dust)
-MAX_SPOT_AREA = 800            # maximum pixels (~16px radius at full res)
-MIN_ASPECT_RATIO = 0.3         # bounding box aspect ratio (reject elongated fibers)
-MIN_COMPACTNESS = 0.25         # area / bbox_area (reject irregular shapes)
-MIN_SOLIDITY = 0.5             # area / convex_hull_area (reject non-convex shapes like letters)
-MIN_CIRCULARITY = 0.15         # 4*pi*area/perimeter^2 (reject complex shapes like symbols)
-# A large, ELONGATED/irregular blob (e.g. a fragment of a twisted rope/cord) fills its
-# min-enclosing circle poorly, so the circular heal brush (3*enc_r) massively over-covers
-# it — "not a dot by any measure". Reject when the spot is both LARGE (big brush) and has a
-# low circle-fill. Small irregular specks (small brush) and round dots (high fill) are kept.
-# Measured: rope fragments fill 0.15-0.32 at enc_r 19-27; real dots are mostly ~0.9.
-DOT_MIN_CIRCLE_FILL = 0.40     # area / (pi*enc_r^2) below this counts as non-compact
-DOT_IRREGULAR_RADIUS_FRAC = 0.005  # ...and only when enc_r exceeds this * min_dim (~18px @ 3745)
-SHAPE_CHECK_MIN_AREA = 30      # only check solidity/circularity for spots larger than this
-TEXTURE_KERNEL = 31            # neighborhood size for local texture measurement
-MAX_LOCAL_TEXTURE_SMALL = 12.0 # max texture for tiny spots (area near MIN_SPOT_AREA)
-MAX_LOCAL_TEXTURE_LARGE = 8.0  # max texture for large spots (area >= 200px)
-MAX_DARK_BG_TEXTURE = 10.0     # max texture in ring around spot on dark backgrounds (separate from above)
-MIN_CONTRAST_TEXTURE_RATIO = 5.5  # contrast/texture — reject spots hidden in grain
-MAX_BG_GRADIENT_RATIO = 0.09   # max bg_gradient/contrast — reject edge halo artifacts
-MAX_EXCESS_SATURATION = 10     # max (spot_sat - surround_sat) — dust matches local color cast
-MAX_SPOT_SATURATION = 230      # compound check lower bound: spot_sat above this + positive excess_sat
-EMULSION_EXCESS_SAT_THRESHOLD = 9  # excess_sat above this (when spot_sat > 230) = emulsion artifact:
-                               # dust is achromatic → less colorful than surroundings; a spot that is
-                               # both extremely colorful (>230) AND more saturated than its surroundings
-                               # (>9) is a film emulsion feature, not dust
-MAX_CONTEXT_TEXTURE = 9.0      # max median local_std across a 200px radius from spot center.
-                               # Dust sits on smooth backgrounds (sky, walls: median ≈ 2-7).
-                               # Crowd/foliage FPs sit in texured scenes (median ≈ 10-25).
-                               # Threshold at 9 separates smooth-background dust from busy-scene FPs.
-LARGE_SPOT_AREA_THRESHOLD = 300  # spots larger than this require higher contrast
-LARGE_SPOT_MIN_CONTRAST = 60     # min contrast for large spots — avoids pale foggy blobs
-ENC_RADIUS_SCALE = 3          # multiplicative scale factor for enclosing circle radius (helps darktable 
-                                #to correct better while on zoomed out view)
-ISOLATION_RADIUS = 250         # pixel radius for neighbor density check
-MAX_NEARBY_ACCEPTED = 3        # reject if more than this many accepted spots within ISOLATION_RADIUS
-                               # Real dust is sparse; crowd/foliage FPs form dense clusters.
-# Soft voting: require MIN_DUST_VOTES of 3 signals to clearly indicate dust.
-# Catches borderline spots that slip through individual hard filters but fail multiple soft tests.
-SOFT_CONTEXT_VOTE_THRESHOLD = 7.0  # context_texture < this votes "dust" (clear sky/walls: 2-6)
-SOFT_TEXTURE_VOTE_THRESHOLD = 8.0  # local_texture < this votes "dust"
-SOFT_RATIO_VOTE_THRESHOLD = 8.25   # contrast/texture > this votes "dust" (1.5× hard minimum)
-MIN_DUST_VOTES = 2             # require at least this many out of 3 soft votes to accept
-MIN_BRIGHTNESS_FRAC_SMALL = 0.5  # brightness floor for tiny spots (area ~10)
-MIN_BRIGHTNESS_FRAC_LARGE = 0.8  # brightness floor for large spots (area >= 100)
-MIN_LOCAL_BG_FRACTION = 0.5    # local background must be >= this fraction of 95th pct
-MIN_SURROUND_BG_RATIO = 0.7   # immediate surround must be >= this fraction of local bg
-                               # (rejects bright reflections inside dark features like windows)
-MAX_SPOTS = 200                # cap: sort by contrast, take the most obvious ones
-REJECT_LOG_CONTRAST_MIN = 15  # minimum contrast to include in debug reject candidate list
-
-# ---------------------------------------------------------------------------
-# Stroke (thread / scratch) detection constants
-# ---------------------------------------------------------------------------
-# Thread/feather dust and film scratches are elongated defects that the circular
-# spot pipeline rejects (aspect/compactness/solidity filters). They are detected
-# separately and healed with a multi-node brush *stroke* following the centerline.
-# Pixel-sized thresholds are expressed as fractions of min(image_w, image_h) so the
-# algorithm behaves the same across different scan resolutions.
-DETECT_STROKES = True          # master switch for thread/scratch stroke detection (on by default)
-
-STROKE_MIN_LENGTH_FRAC   = 0.005  # min centerline length as fraction of min_dim (~19px @ 3786).
-                                   #   Short, high-contrast fibers are real dust; the ridge-drop,
-                                   #   elongation, texture and context gates are the FP guard, not
-                                   #   length. (0.012/45px was too long — missed clear short threads.)
-STROKE_MIN_ELONGATION    = 3.0    # min length/width — separates strokes from blobs
-STROKE_MAX_WIDTH_FRAC    = 0.0025 # max stroke width as fraction of min_dim (~9.5px @ 3786).
-                                   #   A thread/fiber/hair is THIN: measured real threads are
-                                   #   3-4px, the feather 4.4px. Wider bright elongated marks are
-                                   #   not fibers — printed text/frame numbers (10-19px), signs,
-                                   #   or structural smears. The stroke-width histogram is cleanly
-                                   #   bimodal with a gap at ~9px, so the cap sits in that gap.
-STROKE_MIN_WIDTH_PX      = 1.5    # floor for measured width (avoid div-by-zero on 1px ridges)
-STROKE_DP_EPS_FRAC       = 0.0015 # Douglas-Peucker epsilon as fraction of min_dim (path simplify)
-# Brush border (half-width) sizing. The distance-transform width measures only the
-# above-threshold CORE, which badly underestimates a thick/feathered thread (e.g. a twisted
-# fibre measured 4px but visibly ~14px wide), leaving a whitish leftover after healing. So
-# the brush is sized from the ACTUAL perpendicular brightness profile: how far the thread
-# stays visibly bright from the centerline (see stroke_coverage_halfwidth).
-STROKE_COVERAGE_FRAC     = 0.15   # edge = where diff falls below this fraction of the local peak
-STROKE_COVERAGE_MIN_DIFF = 10.0   # ...but never below this absolute diff (avoid chasing noise)
-STROKE_COVERAGE_PCTL     = 92     # use this percentile of per-sample half-widths — a thread can be
-                                   #   thin most of its length but BUSHY/wide in spots (a feather:
-                                   #   median half-width 2px, max 10px); the brush must cover the
-                                   #   wide spots or darktable leaves a heal artifact there.
-STROKE_COVERAGE_MARGIN_PX = 4.0   # add this margin so the feathered edge is fully covered
-STROKE_BORDER_SCALE      = 1.6    # fallback multiplier on the core half-width if the profile
-                                   #   measurement fails; the larger of the two is used.
-STROKE_MIN_BORDER_PX     = 4.0    # minimum per-node brush border in pixels (darktable floor)
-STROKE_MAX_BORDER_FRAC   = 0.006  # cap brush border at this * min_dim (~22px) — no runaway brushes
-STROKE_MAX_KEYPOINTS     = 24     # cap nodes per stroke (darktable form is fine with many)
-
-# Ridge pass (faint scratches): Hessian-based bright-ridge filter (skimage sato).
-# DISABLED BY DEFAULT. Empirically, scratches faint enough to need this pass (below the
-# global detection threshold) sit at/near the image noise floor, and any sensitivity that
-# catches them floods false positives — the ridge response from genuine fine structure and
-# grain dominates. Threads and scratches bright enough to matter are already caught by the
-# threshold-binary pass (producer a). Truly sub-threshold scratches are added by the human
-# via the debug UI (missed stroke). The implementation is kept (and gated by the shared
-# stroke filters) for future re-enabling once real faint-scratch ground truth is available.
-STROKE_RIDGE_ENABLE      = False
-STROKE_RIDGE_SIGMAS      = (1.0, 2.0, 3.0)  # ridge scales in px (thin scratches/threads)
-STROKE_RIDGE_Z           = 8.0    # keep ridge response above median + this*MAD (robust z-score).
-                                   #   MAD (not global max) so one bright structure can't drown
-                                   #   out faint ridges elsewhere.
-STROKE_RIDGE_MIN_CONTRAST = 6.0   # min mean diff (gray-local_bg) along the ridge to accept
-STROKE_RIDGE_DOWNSCALE   = 0.5    # analyze ridge filter at this scale for speed (full-res too slow);
-                                   #   centerline is mapped back to full-res afterwards
-STROKE_RIDGE_MAX_CANDIDATES = 400 # cap ridge components processed (largest first) to bound cost
-
-# Shared stroke gating (mirrors the circular-dust philosophy, sampled along the path).
-# Texture is only a LOOSE BACKSTOP: dust floats over the whole photo — textured areas
-# included — so a busy background must not by itself reject a real thread. The decisive FP
-# guards are crispness (soft scene wires/reeds) and ridge symmetry (object outlines). An
-# earlier contrast-tiered texture scheme wrongly rejected crisp white threads that were only
-# moderate-contrast on grain/foliage (DSC_0009 A/B/C: band/ctx 6-8, crisp 0.61-0.73). All
-# known FPs are caught by crisp/asym/ridge, NOT texture (deck crisp 0.24, reed 0.28-0.31,
-# wire ridge_drop 3, crane asym 0.21), so the limits are now single and generous.
-STROKE_MAX_BAND_TEXTURE  = 9.0    # max median local_std in the band around the centerline.
-STROKE_MAX_CONTEXT_TEXTURE = 9.0  # max median local_std in a WIDE band. NOT contrast-tiered
-                                   #   anymore: crisp white threads land on grain/foliage too
-                                   #   (DSC_0009 A/B/C/D: band/ctx 5.8-8.1). But a busy STRUCTURE
-                                   #   region (a harbor shoreline of masts/cranes — each a crisp
-                                   #   symmetric ridge that crisp/asym/ridge can't reject) sits at
-                                   #   ctx 9-13, so this still earns its keep as the busy-region
-                                   #   guard. Set just above the real threads (8.1) and below the
-                                   #   structure cluster (9+).
-STROKE_CONTEXT_RADIUS_FRAC = 0.05 # wide-context band outer radius as fraction of min_dim (~190px)
-STROKE_MAX_EXCESS_SAT    = 12     # max (stroke_sat - surround_sat) — dust/scratch is achromatic
-STROKE_MIN_BRIGHTNESS_FRAC = 0.45 # mean stroke brightness >= this * bright_ref (bright bg only)
-# Ridge vs edge: a thread/scratch is a bright RIDGE (brighter than background on BOTH
-# sides) that "floats" over the photo, so its two sides are the SAME background and nearly
-# equal. A structural step-edge (bright winter sky meeting a dark crane/building outline)
-# is bright on one side and dark on the other — strongly ASYMMETRIC — and must be rejected;
-# this is the dominant false-positive mode. Measured: real threads asym 0.01-0.05 &
-# ridge_drop 21-153; a crane sky/structure edge asym 0.25 & ridge_drop 10 — clean gaps.
-STROKE_MIN_RIDGE_DROP    = 12.0   # core crest must beat the BRIGHTER side by this (gray levels)
-STROKE_MAX_SIDE_ASYMMETRY = 0.15  # |left_bg - right_bg| / core — reject one-sided (edge) profiles
-STROKE_SIDE_OFFSET_FACTOR = 1.5   # perpendicular sample offset = width * this + a few px
-# Healing source clearance: darktable's clone produces artifacts when the source overlaps or
-# touches the defect. The perpendicular source offset must leave a real GAP between the source
-# brush edge and the defect brush edge: offset >= 2*brush_radius + GAP, i.e. the source brush
-# (radius brush_radius at offset D) clears the defect brush (radius brush_radius at 0) by
-# D - 2*brush_radius. We require that gap to be at least the brush radius (so offset ~3x).
-STROKE_SOURCE_OFFSET_FACTOR = 3.0  # min source offset = this * brush_radius (gap ~= brush_radius)
-STROKE_SOURCE_MIN_GAP_PX = 10.0    # ...and at least this absolute gap beyond the two brush edges
-# Heal-split: a long stroke (esp. a full-width scratch) can pass through BUSY regions (rigging,
-# funnels) as well as smooth sky. darktable's clone grabs bad patches in busy areas and makes
-# artifacts there — and the defect is nearly invisible over that clutter anyway. So split the
-# healing stroke at busy crossings: heal only the smooth runs, "pausing" the brush over busy
-# parts. Measured along a scratch: sky texture 3.6-6.2 vs funnel/rigging 14-54 — clean gap.
-HEAL_SPLIT_BUSY          = True   # split strokes so the brush skips busy (high-texture) runs
-HEAL_MAX_TEXTURE         = 12.0   # local_std above this along the path counts as "busy" (skip)
-HEAL_BUSY_MARGIN_PX      = 25.0   # also skip this far around each busy run (sources stay clean)
-HEAL_SAMPLE_STEP_PX      = 8.0    # resample the path at this spacing to test texture
-HEAL_MIN_SEGMENT_FRAC    = 0.01   # keep a smooth run only if at least this * min_dim long (~38px)
-# Field-isolation: real dust threads "float" alone over the photo; a crisp bright reed
-# stalk, a yacht mast or a piece of rigging is individually indistinguishable from a thread
-# (same crisp symmetric ridge), but they are embedded in a FIELD of many thin line-like
-# structures. Two signals, EITHER rejects: (1) many elongated bright line-candidates nearby
-# (most are sub-threshold for stroke acceptance); (2) many accepted strokes nearby. The user
-# prioritises PRECISION (few false positives) over recall — missing a thread is fine (handled
-# manually in darktable), an FP is not — so this gate is deliberately kept even though it can
-# also reject a real thread that happens to sit on a busy/dusty frame.
-STROKE_FIELD_RADIUS_FRAC = 0.15   # line-candidate outer annulus radius, fraction of min_dim (~560px)
-STROKE_FIELD_INNER_PX    = 60     # inner annulus radius (excludes the stroke's own fragments)
-STROKE_FIELD_MAX_LINE_CANDS = 24  # reject a stroke with >= this many line-candidates near it
-STROKE_FIELD_CAND_MIN_AREA = 12   # a line-candidate component must be at least this large
-STROKE_FIELD_CAND_MIN_DIM  = 10   # ...and at least this long on its major axis
-STROKE_FIELD_CAND_MAX_FILL = 0.45 # ...and thin (area/bbox below this)
-STROKE_FIELD_CAND_MIN_ELONG = 2.0 # ...and elongated (bbox long/short ratio at least this)
-STROKE_FIELD_NBR_RADIUS_FRAC = 0.12  # accepted-stroke neighbour radius, fraction of min_dim (~450px)
-STROKE_FIELD_MAX_NEIGHBORS = 2    # reject if more than this many accepted strokes are that near.
-                                   #   =2 lets a small cluster of up to 3 real threads survive
-                                   #   (each sees 2 neighbours) — e.g. 2-3 obvious dust threads on
-                                   #   clean sky — while dense fields (reeds, rigging: many more
-                                   #   neighbours each) are still rejected. The line-candidate gate
-                                   #   above is the primary field detector; this is the backstop.
-# Edge crispiness: dust sits ON the negative (in the scanner's focal plane) so its edges
-# are razor-sharp; a wire/hair in the photographed scene is usually slightly defocused
-# (soft, fuzzy edges). stroke_edge_crispness() = median(edge gradient / amplitude) along
-# the centerline: ~1.0 for crisp dust, ~0.3 for a soft wire. Measured: FP wires 0.19/0.28
-# vs real dust 0.50-0.61 (threads, feather, a hand-annotated missed fiber) — clean gap.
-STROKE_MIN_CRISPNESS     = 0.40   # reject strokes softer than this (out-of-focus scene wires)
-# Clipped-white dust: a thread so bright it saturates the sensor (gray ~255) on a non-white
-# background is unambiguous dust. On a BRIGHT, noisy sky its diff stays small (255 is the
-# ceiling) so the global threshold misses it, and the clipped flat plateau + noise make the
-# crispness metric read low — yet a soft scene wire is NEVER blown to 255. So such threads get
-# a dedicated bright seed AND bypass the crispness gate (the ridge/asym/texture/field gates
-# still apply). Sky tops out well below this (measured p99.9 ~251), so it is a clean signal.
-STROKE_CLIP_LEVEL        = 252    # core crest >= this (8-bit) counts as clipped-white dust
-
-# Faint axis-aligned scratches (film TRANSPORT scratches): long, thin, nearly-straight bright
-# lines, often too faint to cross the global threshold. 35mm film travels horizontally, so the
-# scratch is horizontal in the SCAN — but a frame may be rotated in darktable (portrait /
-# perspective), so we scan BOTH axes (the export can be rotated). A horizontal-ridge response
-# (bright vs the rows a few px above AND below) integrated ALONG the line boosts a faint line's
-# SNR while averaging out noise; build_stroke_spot then filters scene lines (only scratches on
-# quiet, achromatic, non-busy areas survive — measured 0 FPs across the test set).
-STREAK_DETECT            = True   # master switch for the faint axis-aligned scratch producer
-STREAK_RIDGE_VGAP        = 7      # px above/below to compare against (ridge, not edge)
-STREAK_INTEG_LEN         = 41     # horizontal integration length (px) — boosts faint line SNR
-STREAK_LEVEL_MULT        = 1.6    # response threshold = max(6, noise * this)
-STREAK_MIN_LEN_FRAC      = 0.04   # min streak length as fraction of min_dim (~150px)
-STREAK_MAX_THICKNESS     = 6      # max component thickness (px) — keeps it thin & near-axis
-STREAK_MIN_ELONG         = 8      # min length/thickness ratio (strongly elongated)
-# Ultra-faint FULL-WIDTH transport scratches (e.g. a faint line across the whole sky, often
-# recurring across frames of a roll): per-pixel at the noise floor AND fragmented with huge
-# gaps, so the per-segment producer (d) cannot link them. A RADON accumulation sums the
-# (smooth-region-restricted) horizontal ridge response along candidate near-horizontal lines,
-# so collinear fragments reinforce. Tuned CONSERVATIVELY: real-streak frames score mean_resp
-# 3.2-5.2, every clean frame <=2.5 — fire only on strong full-width streaks (near-zero FPs).
-STREAK_RADON_DETECT      = True   # master switch for the full-width Radon scratch detector
-STREAK_RADON_MIN_RESP    = 3.0    # min mean ridge response along the best line (gray levels)
-STREAK_RADON_MIN_COV     = 0.35   # min fraction of the width with response present on that line
-STREAK_RADON_MAX_SLOPE   = 0.02   # search slopes in [-this, this] (~1.1 deg) — "almost" axis
-STREAK_RADON_SLOPES      = 21     # number of slope steps to test
-STREAK_RADON_PRESENT     = 1.0    # response above this counts as "scratch present" at a column
-STREAK_RADON_EXT_FACTOR  = 0.35   # endpoint-extension threshold = PRESENT * this (follow fading)
-STREAK_RADON_EXT_GAP     = 120    # stop extending after this many px with no faint signal
-STREAK_RADON_MAX_HALFWIDTH = 9.0  # cap the measured brush half-width for a faint scratch (px)
-# The scratch varies in thickness; darktable's heal only fully clears it where the brush is
-# wide enough, so the scratch brush is deliberately BOLD (covers the thickest pieces + margin).
-# The extra width heals only smooth sky (heal-split already excludes busy crossings), so the
-# over-heal is invisible.
-STREAK_RADON_MIN_BRUSH_R = 8.0    # minimum brush radius (half-width) for a Radon scratch (px)
-STREAK_RADON_BRUSH_MARGIN = 4.0   # added to the measured half-width
-
-# Tail hysteresis: a thread often fades gradually at its ends, so the global detection
-# threshold clips the faint tail and the brush stops short of the real end. After finding
-# a confident seed component (high threshold), we re-threshold a padded window around it
-# at a lower level and keep the part still CONNECTED to the seed (Canny-style edge
-# linking), so the centerline tracks the thread to where it truly fades into background.
-STROKE_HYST_LOW_FACTOR   = 0.55   # tail/extension threshold = main threshold * this
-STROKE_HYST_PAD_FRAC     = 0.008  # search window pad around the seed bbox, fraction of min_dim
-STROKE_HYST_PAD_LEN_FRAC = 0.30   # ...or this fraction of the seed length, whichever is larger
-                                   #   (a long faint scratch continues far past its seed end)
-STROKE_HYST_BRIDGE_PX    = 21     # bridge noise gaps up to this long ALONG the stroke axis
-                                   #   (a faint scratch dips below the low threshold in spots)
-
-# Blob -> stroke "weighing" (spec 1.2a): re-represent an elongated accepted blob as a
-# stroke when a single circle would heal far more clean background than a stroke would.
-STROKE_PREFER_RATIO      = 1.8    # convert if circle_healed_area / stroke_healed_area > this
-STROKE_MAX_FILL_RATIO    = 0.50   # area/bbox_area pre-filter: a thin thread fills little of its
-                                   # bounding box. Compact components above this are not stroke
-                                   # candidates (skips skeletonization cost). This is only a COST
-                                   # gate — build_stroke_spot's elongation/ridge gates are the real
-                                   # filter — so it is set loosely: a short straightish thread fills
-                                   # ~0.4 (a 4px-wide line in a 10px-wide bbox), while a round dot
-                                   # fills ~0.78. NOTE: do NOT use bbox aspect — a curvy thread's
-                                   # bbox is ~square.
-
-# ---------------------------------------------------------------------------
-# ML detection constants
-# ---------------------------------------------------------------------------
-ML_RECOVERY_THRESHOLD_MULT = 2.5  # lower threshold for recovery pass (find missed dust)
-ML_POSTFILTER_THRESHOLD = 0.5     # min ML probability to keep a spot (post-filter)
-ML_RECOVERY_THRESHOLD = 0.85      # higher bar for accepting recovery candidates
-
-# Feature names used by the post-filter ML model (derived from the spot dict).
-# These match what detect_dust_spots() returns — no extra image processing required.
+# The fittable detection thresholds (dust dots, stroke/scratch/streak/radon,
+# sensor dust) were moved OUT of this file: their VALUES live in
+# presets/<name>.json and their per-field docs in tuning.py's FIELDS schema
+# (JSON can't hold comments). They load into the immutable DEFAULT_TUNING and
+# are mirrored back onto module globals (so any bare reference + the
+# calibration registry's getattr/setattr utilities resolve), then read by the
+# detection functions via an explicit `cfg` argument. Adopting calibration
+# results is now 'drop in a new preset', not editing this file. Only NON-tunable
+# correctness facts (brush/mask byte layout, the blendop template, mask
+# versions, the ML feature-name lists) stay below as plain constants.
+Tuning = tuning.Tuning
+_TUNABLE_NAMES = tuple(tuning.FIELDS)   # back-compat for the registry/tests
+DEFAULT_PRESET = os.environ.get("RETOUCH_PRESET", "default")
+DEFAULT_TUNING = tuning.load(DEFAULT_PRESET)
+globals().update(DEFAULT_TUNING._asdict())
 # Must match train_dust_model.py.
 SPOT_FEATURE_NAMES = [
     "contrast",
@@ -351,14 +106,6 @@ MASK_TYPE_BRUSH_CLONE = 72     # DT_MASKS_CLONE | DT_MASKS_BRUSH (8 | 64)
 MASK_TYPE_GROUP_CLONE = 12     # DT_MASKS_GROUP | DT_MASKS_CLONE (4 | 8)
 MASK_VERSION = 6               # DEVELOP_MASKS_VERSION
 
-# ---------------------------------------------------------------------------
-# Source detection constants
-# ---------------------------------------------------------------------------
-SOURCE_SEARCH_INNER_FACTOR = 2.5  # inner exclusion ring = radius * this (avoid the spot itself)
-SOURCE_SEARCH_MAX_RADIUS = 150    # cap search radius in pixels
-SOURCE_SEARCH_MIN_RADIUS = 25     # minimum search radius for tiny spots
-SOURCE_GRID_STEP = 8              # grid step for candidate sampling (pixels)
-
 RETOUCH_ALGO_HEAL = 2
 RETOUCH_MOD_VERSION = 3
 MAX_FORMS = 300                # darktable's maximum form slots
@@ -367,35 +114,11 @@ MAX_FORMS = 300                # darktable's maximum form slots
 # Only the mask_id field at offset 24 needs to be replaced per-image
 BLENDOP_TEMPLATE_ENCODED = "gz08eJxjYGBgYAFiCQYYOOEEIjd6dmXCRFgZMAEjFjEGhgZ7CB6pfOygYtaVAyCMi48L/AcCEA0Ak0kpjg=="
 
-# ---------------------------------------------------------------------------
-# Sensor dust detection constants
-# ---------------------------------------------------------------------------
-SENSOR_SIGMA_INNER_FRAC   = 0.004  # DoG inner Gaussian sigma as fraction of min(w,h)
-SENSOR_SIGMA_OUTER_FRAC   = 0.04   # DoG outer Gaussian sigma (large enough to see around blobs,
-                                    # small enough to stay within the same sky region)
-SENSOR_DOG_MIN_CONTRAST   = 2.0    # minimum DoG peak value; low enough to catch faint dust
-SENSOR_MIN_RADIUS_FRAC    = 0.003  # min blob radius as fraction of min(w,h)
-SENSOR_MAX_BLOB_RADIUS_FRAC = 0.01 # maximum accepted blob radius (% of min_dim); sensor dust is small
-SENSOR_CLUSTER_RADIUS_NORM = 0.01  # cluster radius in normalized full-frame coords
-SENSOR_DUST_MIN_FRAMES    = 2      # min frames a cluster must appear in to confirm sensor dust
-SENSOR_BRUSH_SCALE        = 1.0    # brush_radius_px = max(MIN_BRUSH_PX, radius_px * this)
-SENSOR_MAX_CANDIDATE_TEXTURE = 12.0   # pre-filter: reject candidates in busy areas before consensus
-                                       # Uses local-std in a 3×max_blob_r neighborhood at the peak.
-                                       # Sky/smooth areas: texture ≈ 2-7; busy content: 15-40.
-                                       # 12.0 keeps slightly-textured sky while excluding clearly-busy areas.
-SENSOR_MAX_CANDIDATES_FOR_CONSENSUS = 300  # per-frame cap before union-find; frames with more candidates
-                                           # keep only the top-N by DoG contrast. Limits chain-clustering:
-                                           # weak-contrast smooth-area peaks propagate long chains that merge
-                                           # distinct dust clusters into one diffuse super-cluster.
-SENSOR_MAX_CORRECTION_TEXTURE = 8.0   # skip correction if dust spot lands on a busy area in this frame
-SENSOR_MAX_SOURCE_TEXTURE = 8.0       # skip correction if no clean healing source found in any direction
-
-
 # ===================================================================
 # Dust detection
 # ===================================================================
 
-def detect_dust_spots(image_path, collect_rejects=False):
+def detect_dust_spots(image_path, collect_rejects=False, cfg=None):
     """Detect bright dust spots in an image.
 
     Returns (spots, rejected_candidates, error_msg).
@@ -403,6 +126,62 @@ def detect_dust_spots(image_path, collect_rejects=False):
     rejected_candidates: list of structured reject dicts (only populated when collect_rejects=True).
     error_msg: string on failure, None on success.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    LOCAL_BG_KERNEL = cfg.LOCAL_BG_KERNEL
+    NOISE_THRESHOLD_MULTIPLIER = cfg.NOISE_THRESHOLD_MULTIPLIER
+    MIN_ABSOLUTE_THRESHOLD = cfg.MIN_ABSOLUTE_THRESHOLD
+    REJECT_LOG_CONTRAST_MIN = cfg.REJECT_LOG_CONTRAST_MIN
+    MIN_SPOT_AREA = cfg.MIN_SPOT_AREA
+    MAX_SPOT_AREA = cfg.MAX_SPOT_AREA
+    MIN_ASPECT_RATIO = cfg.MIN_ASPECT_RATIO
+    MIN_COMPACTNESS = cfg.MIN_COMPACTNESS
+    MIN_SOLIDITY = cfg.MIN_SOLIDITY
+    MIN_CIRCULARITY = cfg.MIN_CIRCULARITY
+    DOT_MIN_CIRCLE_FILL = cfg.DOT_MIN_CIRCLE_FILL
+    DOT_IRREGULAR_RADIUS_FRAC = cfg.DOT_IRREGULAR_RADIUS_FRAC
+    SHAPE_CHECK_MIN_AREA = cfg.SHAPE_CHECK_MIN_AREA
+    TEXTURE_KERNEL = cfg.TEXTURE_KERNEL
+    MAX_LOCAL_TEXTURE_SMALL = cfg.MAX_LOCAL_TEXTURE_SMALL
+    MAX_LOCAL_TEXTURE_LARGE = cfg.MAX_LOCAL_TEXTURE_LARGE
+    MAX_DARK_BG_TEXTURE = cfg.MAX_DARK_BG_TEXTURE
+    MIN_CONTRAST_TEXTURE_RATIO = cfg.MIN_CONTRAST_TEXTURE_RATIO
+    MAX_BG_GRADIENT_RATIO = cfg.MAX_BG_GRADIENT_RATIO
+    MAX_CONTEXT_TEXTURE = cfg.MAX_CONTEXT_TEXTURE
+    LARGE_SPOT_AREA_THRESHOLD = cfg.LARGE_SPOT_AREA_THRESHOLD
+    LARGE_SPOT_MIN_CONTRAST = cfg.LARGE_SPOT_MIN_CONTRAST
+    MAX_EXCESS_SATURATION = cfg.MAX_EXCESS_SATURATION
+    MAX_SPOT_SATURATION = cfg.MAX_SPOT_SATURATION
+    EMULSION_EXCESS_SAT_THRESHOLD = cfg.EMULSION_EXCESS_SAT_THRESHOLD
+    SOFT_CONTEXT_VOTE_THRESHOLD = cfg.SOFT_CONTEXT_VOTE_THRESHOLD
+    SOFT_TEXTURE_VOTE_THRESHOLD = cfg.SOFT_TEXTURE_VOTE_THRESHOLD
+    SOFT_RATIO_VOTE_THRESHOLD = cfg.SOFT_RATIO_VOTE_THRESHOLD
+    MIN_DUST_VOTES = cfg.MIN_DUST_VOTES
+    MIN_BRIGHTNESS_FRAC_SMALL = cfg.MIN_BRIGHTNESS_FRAC_SMALL
+    MIN_BRIGHTNESS_FRAC_LARGE = cfg.MIN_BRIGHTNESS_FRAC_LARGE
+    MIN_LOCAL_BG_FRACTION = cfg.MIN_LOCAL_BG_FRACTION
+    MIN_SURROUND_BG_RATIO = cfg.MIN_SURROUND_BG_RATIO
+    ISOLATION_RADIUS = cfg.ISOLATION_RADIUS
+    MAX_NEARBY_ACCEPTED = cfg.MAX_NEARBY_ACCEPTED
+    ENC_RADIUS_SCALE = cfg.ENC_RADIUS_SCALE
+    DETECT_STROKES = cfg.DETECT_STROKES
+    STROKE_MIN_LENGTH_FRAC = cfg.STROKE_MIN_LENGTH_FRAC
+    STROKE_MIN_WIDTH_PX = cfg.STROKE_MIN_WIDTH_PX
+    STROKE_MAX_FILL_RATIO = cfg.STROKE_MAX_FILL_RATIO
+    STROKE_PREFER_RATIO = cfg.STROKE_PREFER_RATIO
+    STROKE_RIDGE_MIN_CONTRAST = cfg.STROKE_RIDGE_MIN_CONTRAST
+    STROKE_CLIP_LEVEL = cfg.STROKE_CLIP_LEVEL
+    HEAL_SPLIT_BUSY = cfg.HEAL_SPLIT_BUSY
+    STROKE_FIELD_RADIUS_FRAC = cfg.STROKE_FIELD_RADIUS_FRAC
+    STROKE_FIELD_INNER_PX = cfg.STROKE_FIELD_INNER_PX
+    STROKE_FIELD_MAX_LINE_CANDS = cfg.STROKE_FIELD_MAX_LINE_CANDS
+    STROKE_FIELD_CAND_MIN_AREA = cfg.STROKE_FIELD_CAND_MIN_AREA
+    STROKE_FIELD_CAND_MIN_DIM = cfg.STROKE_FIELD_CAND_MIN_DIM
+    STROKE_FIELD_CAND_MAX_FILL = cfg.STROKE_FIELD_CAND_MAX_FILL
+    STROKE_FIELD_CAND_MIN_ELONG = cfg.STROKE_FIELD_CAND_MIN_ELONG
+    STROKE_FIELD_NBR_RADIUS_FRAC = cfg.STROKE_FIELD_NBR_RADIUS_FRAC
+    STROKE_FIELD_MAX_NEIGHBORS = cfg.STROKE_FIELD_MAX_NEIGHBORS
+    STREAK_DETECT = cfg.STREAK_DETECT
+    STREAK_RADON_DETECT = cfg.STREAK_RADON_DETECT
     img = cv2.imread(str(image_path))
     if img is None:
         return None, [], f"Failed to load image: {image_path}", None
@@ -884,20 +663,20 @@ def detect_dust_spots(image_path, collect_rejects=False):
             bx = stats[lid, cv2.CC_STAT_LEFT]
             by = stats[lid, cv2.CC_STAT_TOP]
             comp = labels[by:by + bh, bx:bx + bw] == lid
-            cl = extract_stroke_centerline(comp, bx, by, min_dim)
+            cl = extract_stroke_centerline(comp, bx, by, min_dim, cfg=cfg)
             if cl is None:
                 continue
             # Validate on the confident high-threshold SEED (crispness/color/ridge are
             # judged on the sharp core, not the faint, often colour-fringed tail).
             spot, _reason = build_stroke_spot(
                 cl["path"], cl["width_px"], cl["length_px"],
-                gray, diff, local_std, saturation, bright_ref, min_dim, "thread")
+                gray, diff, local_std, saturation, bright_ref, min_dim, "thread", cfg=cfg)
             if spot is None:
                 continue
             # Accepted: grow the faint tail at a lower threshold purely to lengthen the
             # healing brush so it covers the thread to its true end.
-            _extend_stroke_tail(spot, comp, bx, by, diff, threshold, min_dim, cl["length_px"])
-            _widen_brush_to_cover(spot, comp, bx, by, min_dim)
+            _extend_stroke_tail(spot, comp, bx, by, diff, threshold, min_dim, cl["length_px"], cfg=cfg)
+            _widen_brush_to_cover(spot, comp, bx, by, min_dim, cfg=cfg)
             if is_dot:
                 # Weighing (spec 1.2a): convert dot -> stroke only when a single
                 # circle would heal much more clean area than the stroke.
@@ -914,13 +693,13 @@ def detect_dust_spots(image_path, collect_rejects=False):
         # Producer (b): faint scratches via the ridge filter (below threshold).
         existing_centers = list(spots) + stroke_spots
         min_sep = max(STROKE_MIN_LENGTH_FRAC * min_dim * 0.5, 20)
-        for comp, cx_off, cy_off in detect_scratch_ridges(diff, min_dim):
-            cl = extract_stroke_centerline(comp, cx_off, cy_off, min_dim)
+        for comp, cx_off, cy_off in detect_scratch_ridges(diff, min_dim, cfg=cfg):
+            cl = extract_stroke_centerline(comp, cx_off, cy_off, min_dim, cfg=cfg)
             if cl is None:
                 continue
             spot, _reason = build_stroke_spot(
                 cl["path"], cl["width_px"], cl["length_px"],
-                gray, diff, local_std, saturation, bright_ref, min_dim, "scratch")
+                gray, diff, local_std, saturation, bright_ref, min_dim, "scratch", cfg=cfg)
             if spot is None or spot["contrast"] < STROKE_RIDGE_MIN_CONTRAST:
                 continue
             if _stroke_overlaps_existing(spot, existing_centers, min_sep):
@@ -946,18 +725,18 @@ def detect_dust_spots(image_path, collect_rejects=False):
             bx = cstats[lid, cv2.CC_STAT_LEFT]
             by = cstats[lid, cv2.CC_STAT_TOP]
             comp = clabels[by:by + bh, bx:bx + bw] == lid
-            cl = extract_stroke_centerline(comp, bx, by, min_dim)
+            cl = extract_stroke_centerline(comp, bx, by, min_dim, cfg=cfg)
             if cl is None:
                 continue
             spot, _reason = build_stroke_spot(
                 cl["path"], cl["width_px"], cl["length_px"],
-                gray, diff, local_std, saturation, bright_ref, min_dim, "thread")
+                gray, diff, local_std, saturation, bright_ref, min_dim, "thread", cfg=cfg)
             if spot is None:
                 continue
             if _stroke_overlaps_existing(spot, existing_centers, min_sep):
                 continue
-            _extend_stroke_tail(spot, comp, bx, by, diff, threshold, min_dim, cl["length_px"])
-            _widen_brush_to_cover(spot, comp, bx, by, min_dim)
+            _extend_stroke_tail(spot, comp, bx, by, diff, threshold, min_dim, cl["length_px"], cfg=cfg)
+            _widen_brush_to_cover(spot, comp, bx, by, min_dim, cfg=cfg)
             stroke_spots.append(spot)
             existing_centers.append(spot)
 
@@ -965,19 +744,19 @@ def detect_dust_spots(image_path, collect_rejects=False):
         # Too faint for the global threshold; seeded by an integrated horizontal/vertical
         # ridge response. build_stroke_spot rejects scene lines (busy/coloured backgrounds).
         if STREAK_DETECT:
-            for comp, sx, sy in detect_axis_streaks(diff, min_dim):
-                cl = extract_stroke_centerline(comp, sx, sy, min_dim)
+            for comp, sx, sy in detect_axis_streaks(diff, min_dim, cfg=cfg):
+                cl = extract_stroke_centerline(comp, sx, sy, min_dim, cfg=cfg)
                 if cl is None:
                     continue
                 spot, _reason = build_stroke_spot(
                     cl["path"], cl["width_px"], cl["length_px"],
-                    gray, diff, local_std, saturation, bright_ref, min_dim, "scratch")
+                    gray, diff, local_std, saturation, bright_ref, min_dim, "scratch", cfg=cfg)
                 if spot is None:
                     continue
                 if _stroke_overlaps_existing(spot, existing_centers, min_sep):
                     continue
                 _extend_stroke_tail(spot, comp, sx, sy, diff, threshold, min_dim, cl["length_px"],
-                                    bridge=True)
+                                    bridge=True, cfg=cfg)
                 stroke_spots.append(spot)
                 existing_centers.append(spot)
 
@@ -986,8 +765,8 @@ def detect_dust_spots(image_path, collect_rejects=False):
         # the Radon accumulation across the whole frame IS the (conservative) validation, so
         # the spot is built directly. See detect_radon_streaks / STREAK_RADON_* constants.
         if STREAK_RADON_DETECT:
-            for path, rx0, rx1 in detect_radon_streaks(diff, local_std):
-                spot = _make_radon_streak_spot(path, diff, min_dim)
+            for path, rx0, rx1 in detect_radon_streaks(diff, local_std, cfg=cfg):
+                spot = _make_radon_streak_spot(path, diff, min_dim, cfg=cfg)
                 if spot is None:
                     continue
                 if _stroke_overlaps_existing(spot, existing_centers, min_sep):
@@ -1070,7 +849,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
             split = []
             for s in stroke_spots:
                 if s.get("source") == "scratch":
-                    split.extend(split_stroke_at_busy(s, local_std, min_dim))
+                    split.extend(split_stroke_at_busy(s, local_std, min_dim, cfg=cfg))
                 else:
                     split.append(s)
             stroke_spots = split
@@ -1092,11 +871,11 @@ def detect_dust_spots(image_path, collect_rejects=False):
             if spot.get("kind") == "stroke":
                 src_cx, src_cy = find_stroke_healing_source(
                     spot["path"], spot["stroke_width_px"], spot["brush_radius_px"],
-                    local_std, spots, width, height)
+                    local_std, spots, width, height, cfg=cfg)
             else:
                 src_cx, src_cy = find_healing_source(
                     spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
-                    img_lab, L_f32, local_std, spots, width, height)
+                    img_lab, L_f32, local_std, spots, width, height, cfg=cfg)
             spot["src_cx"] = src_cx
             spot["src_cy"] = src_cy
 
@@ -1107,7 +886,7 @@ def detect_dust_spots(image_path, collect_rejects=False):
 # Source point detection
 # ===================================================================
 
-def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, local_std, all_spots, width, height):
+def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, local_std, all_spots, width, height, cfg=None):
     """Find the best healing source position using NCC template matching.
 
     Extracts a template from the clean surroundings of the dust spot (a patch
@@ -1121,6 +900,10 @@ def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, loca
 
     Returns (src_cx, src_cy) in pixel coordinates.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    SOURCE_SEARCH_INNER_FACTOR = cfg.SOURCE_SEARCH_INNER_FACTOR
+    SOURCE_SEARCH_MAX_RADIUS = cfg.SOURCE_SEARCH_MAX_RADIUS
+    SOURCE_SEARCH_MIN_RADIUS = cfg.SOURCE_SEARCH_MIN_RADIUS
     icx = max(0, min(int(round(cx)), width - 1))
     icy = max(0, min(int(round(cy)), height - 1))
 
@@ -1274,7 +1057,7 @@ def _skeleton_longest_path(skel):
 
 
 def hysteresis_extend_component(comp_bool, bx, by, diff, threshold, min_dim, pad=None,
-                                bridge_kernel=None):
+                                bridge_kernel=None, cfg=None):
     """Grow a stroke seed component into its faint tail via local hysteresis.
 
     A thread frequently fades below the global threshold at its ends, so the seed
@@ -1289,6 +1072,9 @@ def hysteresis_extend_component(comp_bool, bx, by, diff, threshold, min_dim, pad
         scratch can continue 100+px, so the caller passes a length-scaled pad.
     Returns (extended_mask_bool, new_x_off, new_y_off).
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_HYST_LOW_FACTOR = cfg.STROKE_HYST_LOW_FACTOR
+    STROKE_HYST_PAD_FRAC = cfg.STROKE_HYST_PAD_FRAC
     h, w = diff.shape
     bh, bw = comp_bool.shape
     if pad is None:
@@ -1317,7 +1103,7 @@ def hysteresis_extend_component(comp_bool, bx, by, diff, threshold, min_dim, pad
 
 
 def _extend_stroke_tail(spot, seed_comp, bx, by, diff, threshold, min_dim, seed_length,
-                        bridge=False):
+                        bridge=False, cfg=None):
     """Replace an accepted stroke's path with a tail-extended centerline (in place).
 
     The stroke has already passed all gates on its confident seed; this only lengthens the
@@ -1330,6 +1116,10 @@ def _extend_stroke_tail(spot, seed_comp, bx, by, diff, threshold, min_dim, seed_
     horizontal than vertical, that horizontal close connects spurious pixels and bends the
     centerline to the axis. So threads extend WITHOUT it.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_HYST_PAD_FRAC = cfg.STROKE_HYST_PAD_FRAC
+    STROKE_HYST_PAD_LEN_FRAC = cfg.STROKE_HYST_PAD_LEN_FRAC
+    STROKE_HYST_BRIDGE_PX = cfg.STROKE_HYST_BRIDGE_PX
     pad = max(STROKE_HYST_PAD_FRAC * min_dim, seed_length * STROKE_HYST_PAD_LEN_FRAC)
     bridge_kernel = None
     if bridge:
@@ -1339,8 +1129,8 @@ def _extend_stroke_tail(spot, seed_comp, bx, by, diff, threshold, min_dim, seed_
         else:
             bridge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, STROKE_HYST_BRIDGE_PX))
     ext, ex0, ey0 = hysteresis_extend_component(seed_comp, bx, by, diff, threshold, min_dim,
-                                                pad, bridge_kernel)
-    cl = extract_stroke_centerline(ext, ex0, ey0, min_dim)
+                                                pad, bridge_kernel, cfg=cfg)
+    cl = extract_stroke_centerline(ext, ex0, ey0, min_dim, cfg=cfg)
     if cl is None:
         return
     if cl["length_px"] <= seed_length * 1.02 or cl["length_px"] > seed_length * 2.5:
@@ -1353,13 +1143,17 @@ def _extend_stroke_tail(spot, seed_comp, bx, by, diff, threshold, min_dim, seed_
     spot["cy"] = float(mid[1])
 
 
-def extract_stroke_centerline(component_mask, x_off, y_off, min_dim):
+def extract_stroke_centerline(component_mask, x_off, y_off, min_dim, cfg=None):
     """Extract a simplified centerline path and width from a binary component mask.
 
     component_mask: bool 2D array cropped to the component bounding box.
     x_off, y_off: bbox origin in full-image pixel coords.
     Returns dict {path (full-image [x,y] key points), length_px, width_px} or None.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_MIN_WIDTH_PX = cfg.STROKE_MIN_WIDTH_PX
+    STROKE_DP_EPS_FRAC = cfg.STROKE_DP_EPS_FRAC
+    STROKE_MAX_KEYPOINTS = cfg.STROKE_MAX_KEYPOINTS
     if int(component_mask.sum()) < 3:
         return None
     skel = skeletonize(component_mask)
@@ -1394,7 +1188,7 @@ def extract_stroke_centerline(component_mask, x_off, y_off, min_dim):
     return {"path": path_full, "length_px": length_px, "width_px": width_px}
 
 
-def _stroke_band_masks(path_full, width_px, shape):
+def _stroke_band_masks(path_full, width_px, shape, cfg=None):
     """Rasterize a stroke into (core, ring) boolean masks within a cropped bbox.
 
     core: the stroke band (polyline of given width) — used for contrast/brightness.
@@ -1403,6 +1197,8 @@ def _stroke_band_masks(path_full, width_px, shape):
     sampling background texture/saturation.
     Returns (core_bool, ring_bool, (x0, y0, x1, y1)) — masks are bbox-local.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    TEXTURE_KERNEL = cfg.TEXTURE_KERNEL
     h, w = shape
     xs = [p[0] for p in path_full]
     ys = [p[1] for p in path_full]
@@ -1430,13 +1226,16 @@ def _stroke_band_masks(path_full, width_px, shape):
     return core > 0, ring > 0, (x0, y0, x1, y1)
 
 
-def _stroke_context_texture(path_full, width_px, local_std, min_dim):
+def _stroke_context_texture(path_full, width_px, local_std, min_dim, cfg=None):
     """Median local_std in a WIDE band around the centerline (excluding the near zone).
 
     Measures how busy the broader surroundings are — a real hair sits in a genuinely
     non-busy region, while a mark on locally-smooth-but-globally-busy structure does not.
     Returns the median texture (lower = smoother), or 0.0 if no samples.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    TEXTURE_KERNEL = cfg.TEXTURE_KERNEL
+    STROKE_CONTEXT_RADIUS_FRAC = cfg.STROKE_CONTEXT_RADIUS_FRAC
     h, w = local_std.shape
     xs = [p[0] for p in path_full]
     ys = [p[1] for p in path_full]
@@ -1465,13 +1264,15 @@ def _stroke_context_texture(path_full, width_px, local_std, min_dim):
     return float(np.median(local_std[y0:y1, x0:x1][ring]))
 
 
-def _stroke_side_brightness(path_full, width_px, gray):
+def _stroke_side_brightness(path_full, width_px, gray, cfg=None):
     """Sample mean brightness along the centerline and in two parallel bands offset
     perpendicular to it (left/right). Used to tell a bright ridge (dust/scratch:
     darker background on both sides) from a structural step-edge (bright on one side).
 
     Returns (core_med, left_med, right_med) or None.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_SIDE_OFFSET_FACTOR = cfg.STROKE_SIDE_OFFSET_FACTOR
     h, w = gray.shape
     pts = np.array(path_full, dtype=np.float64)
     if len(pts) < 2:
@@ -1607,16 +1408,19 @@ def component_cover_radius(path_full, comp, bx, by):
     return float(np.percentile(mind, 99.5))
 
 
-def _widen_brush_to_cover(spot, comp, bx, by, min_dim):
+def _widen_brush_to_cover(spot, comp, bx, by, min_dim, cfg=None):
     """Grow the brush radius (in place) so the stroke covers the whole detected component —
     e.g. the off-centerline branch of a hooked dust blob the centerline misses. Capped."""
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_COVERAGE_MARGIN_PX = cfg.STROKE_COVERAGE_MARGIN_PX
+    STROKE_MAX_BORDER_FRAC = cfg.STROKE_MAX_BORDER_FRAC
     cover_r = component_cover_radius(spot["path"], comp, bx, by)
     if cover_r > 0:
         r = max(spot["brush_radius_px"], cover_r + STROKE_COVERAGE_MARGIN_PX)
         spot["brush_radius_px"] = float(min(r, STROKE_MAX_BORDER_FRAC * min_dim))
 
 
-def stroke_coverage_halfwidth(path_full, diff):
+def stroke_coverage_halfwidth(path_full, diff, cfg=None):
     """Measure how far the thread stays visibly bright from its centerline, from the actual
     perpendicular diff profile — the radius a heal brush must reach to avoid a whitish
     leftover. The distance-transform width only sees the above-threshold core and badly
@@ -1627,6 +1431,10 @@ def stroke_coverage_halfwidth(path_full, diff):
     the two sides' distances FROM THE CENTERLINE (handles off-centre skeletons). Returns the
     STROKE_COVERAGE_PCTL percentile over samples (covers the thicker stretches).
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_COVERAGE_FRAC = cfg.STROKE_COVERAGE_FRAC
+    STROKE_COVERAGE_MIN_DIFF = cfg.STROKE_COVERAGE_MIN_DIFF
+    STROKE_COVERAGE_PCTL = cfg.STROKE_COVERAGE_PCTL
     pts = np.array(path_full, dtype=np.float64)
     if len(pts) < 2:
         return 0.0
@@ -1674,11 +1482,28 @@ def stroke_coverage_halfwidth(path_full, diff):
 
 
 def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
-                      saturation, bright_ref, min_dim, source_tag):
+                      saturation, bright_ref, min_dim, source_tag, cfg=None):
     """Apply stroke acceptance gating and build a stroke spot dict.
 
     Returns (spot_dict, None) on accept or (None, reason) on reject.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_MIN_LENGTH_FRAC = cfg.STROKE_MIN_LENGTH_FRAC
+    STROKE_MIN_ELONGATION = cfg.STROKE_MIN_ELONGATION
+    STROKE_MAX_WIDTH_FRAC = cfg.STROKE_MAX_WIDTH_FRAC
+    STROKE_COVERAGE_MARGIN_PX = cfg.STROKE_COVERAGE_MARGIN_PX
+    STROKE_BORDER_SCALE = cfg.STROKE_BORDER_SCALE
+    STROKE_MIN_BORDER_PX = cfg.STROKE_MIN_BORDER_PX
+    STROKE_MAX_BORDER_FRAC = cfg.STROKE_MAX_BORDER_FRAC
+    STROKE_RIDGE_MIN_CONTRAST = cfg.STROKE_RIDGE_MIN_CONTRAST
+    STROKE_MAX_BAND_TEXTURE = cfg.STROKE_MAX_BAND_TEXTURE
+    STROKE_MAX_CONTEXT_TEXTURE = cfg.STROKE_MAX_CONTEXT_TEXTURE
+    STROKE_MAX_EXCESS_SAT = cfg.STROKE_MAX_EXCESS_SAT
+    STROKE_MIN_BRIGHTNESS_FRAC = cfg.STROKE_MIN_BRIGHTNESS_FRAC
+    STROKE_MIN_RIDGE_DROP = cfg.STROKE_MIN_RIDGE_DROP
+    STROKE_MAX_SIDE_ASYMMETRY = cfg.STROKE_MAX_SIDE_ASYMMETRY
+    STROKE_MIN_CRISPNESS = cfg.STROKE_MIN_CRISPNESS
+    STROKE_CLIP_LEVEL = cfg.STROKE_CLIP_LEVEL
     if length_px < STROKE_MIN_LENGTH_FRAC * min_dim:
         return None, "short"
     if width_px > STROKE_MAX_WIDTH_FRAC * min_dim:
@@ -1686,7 +1511,7 @@ def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
     if width_px > 0 and (length_px / width_px) < STROKE_MIN_ELONGATION:
         return None, "stubby"
 
-    core, ring, (x0, y0, x1, y1) = _stroke_band_masks(path_full, width_px, gray.shape)
+    core, ring, (x0, y0, x1, y1) = _stroke_band_masks(path_full, width_px, gray.shape, cfg=cfg)
     if core is None or not core.any():
         return None, "empty"
 
@@ -1709,7 +1534,7 @@ def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
     if band_texture > STROKE_MAX_BAND_TEXTURE:
         return None, "texture"
 
-    context_texture = _stroke_context_texture(path_full, width_px, local_std, min_dim)
+    context_texture = _stroke_context_texture(path_full, width_px, local_std, min_dim, cfg=cfg)
     if context_texture > STROKE_MAX_CONTEXT_TEXTURE:
         return None, "context"
 
@@ -1720,7 +1545,7 @@ def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
         return None, "color"
 
     # Ridge vs edge: reject structural step-edges (bright on one side only).
-    sides = _stroke_side_brightness(path_full, width_px, gray)
+    sides = _stroke_side_brightness(path_full, width_px, gray, cfg=cfg)
     if sides is not None:
         core_med, left_med, right_med = sides
         bright_side = max(left_med, right_med)
@@ -1742,7 +1567,7 @@ def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
     mid = path_full[len(path_full) // 2]
     # Size the brush from the measured visible half-width (covers thick/feathered/off-centre
     # threads), falling back to the core-width estimate; cap to avoid runaway brushes.
-    cover_hw = stroke_coverage_halfwidth(path_full, diff)
+    cover_hw = stroke_coverage_halfwidth(path_full, diff, cfg=cfg)
     brush_radius_px = max(STROKE_MIN_BORDER_PX,
                           cover_hw + STROKE_COVERAGE_MARGIN_PX,
                           width_px / 2.0 * STROKE_BORDER_SCALE)
@@ -1770,7 +1595,7 @@ def build_stroke_spot(path_full, width_px, length_px, gray, diff, local_std,
 
 
 def find_stroke_healing_source(path_full, width_px, brush_radius_px,
-                               local_std, all_spots, width, height):
+                               local_std, all_spots, width, height, cfg=None):
     """Find a single translation offset placing the whole stroke on clean background.
 
     Searches a fan of directions (not just the chord perpendicular — a curved hair has no
@@ -1779,6 +1604,11 @@ def find_stroke_healing_source(path_full, width_px, brush_radius_px,
     gap from the (possibly curved) defect so darktable's clone never smears across an overlap.
     Returns (src_cx, src_cy) = first key point + best offset, in pixel coords.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_MAX_BAND_TEXTURE = cfg.STROKE_MAX_BAND_TEXTURE
+    STROKE_SOURCE_OFFSET_FACTOR = cfg.STROKE_SOURCE_OFFSET_FACTOR
+    STROKE_SOURCE_MIN_GAP_PX = cfg.STROKE_SOURCE_MIN_GAP_PX
+    HEAL_SAMPLE_STEP_PX = cfg.HEAL_SAMPLE_STEP_PX
     path_arr = np.array(path_full, dtype=np.float64)
     p0 = path_arr[0]
 
@@ -1861,7 +1691,7 @@ def find_stroke_healing_source(path_full, width_px, brush_radius_px,
     return src_x, src_y
 
 
-def detect_axis_streaks(diff, min_dim):
+def detect_axis_streaks(diff, min_dim, cfg=None):
     """Detect faint, long, thin, nearly axis-aligned bright lines (film transport scratches).
 
     For each axis (horizontal, then vertical via transpose): build a ridge response
@@ -1869,8 +1699,15 @@ def detect_axis_streaks(diff, min_dim):
     excluded), integrate it ALONG the line with a box filter to lift the faint line above
     noise, threshold, and keep components that are long, thin and strongly elongated.
     Yields (component_mask, x_off, y_off) in full-image coords; the caller validates each
-    with build_stroke_spot (which rejects scene lines on busy/coloured backgrounds).
+    with build_stroke_spot (which rejects scene lines on busy/coloured backgrounds, cfg=cfg).
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STREAK_RIDGE_VGAP = cfg.STREAK_RIDGE_VGAP
+    STREAK_INTEG_LEN = cfg.STREAK_INTEG_LEN
+    STREAK_LEVEL_MULT = cfg.STREAK_LEVEL_MULT
+    STREAK_MIN_LEN_FRAC = cfg.STREAK_MIN_LEN_FRAC
+    STREAK_MAX_THICKNESS = cfg.STREAK_MAX_THICKNESS
+    STREAK_MIN_ELONG = cfg.STREAK_MIN_ELONG
     noise = float(np.median(np.abs(diff)) * 1.4826)
     level = max(6.0, noise * STREAK_LEVEL_MULT)
     min_len = STREAK_MIN_LEN_FRAC * min_dim
@@ -1896,7 +1733,7 @@ def detect_axis_streaks(diff, min_dim):
                 yield comp.T, by, bx
 
 
-def detect_radon_streaks(diff, local_std):
+def detect_radon_streaks(diff, local_std, cfg=None):
     """Find ultra-faint, fragmented, near-horizontal full-width scratches via Radon accumulation.
 
     Restrict the horizontal ridge response to SMOOTH regions (scene structure is excluded),
@@ -1906,6 +1743,17 @@ def detect_radon_streaks(diff, local_std):
     Returns a list of (path, x0, x1) for accepted streaks (path = full-image [x,y] key points).
     Conservative: only the strongest full-width lines pass (see STREAK_RADON_* constants).
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_MAX_CONTEXT_TEXTURE = cfg.STROKE_MAX_CONTEXT_TEXTURE
+    STREAK_RIDGE_VGAP = cfg.STREAK_RIDGE_VGAP
+    STREAK_INTEG_LEN = cfg.STREAK_INTEG_LEN
+    STREAK_RADON_MIN_RESP = cfg.STREAK_RADON_MIN_RESP
+    STREAK_RADON_MIN_COV = cfg.STREAK_RADON_MIN_COV
+    STREAK_RADON_MAX_SLOPE = cfg.STREAK_RADON_MAX_SLOPE
+    STREAK_RADON_SLOPES = cfg.STREAK_RADON_SLOPES
+    STREAK_RADON_PRESENT = cfg.STREAK_RADON_PRESENT
+    STREAK_RADON_EXT_FACTOR = cfg.STREAK_RADON_EXT_FACTOR
+    STREAK_RADON_EXT_GAP = cfg.STREAK_RADON_EXT_GAP
     h, w = diff.shape
     up = np.roll(diff, STREAK_RIDGE_VGAP, axis=0)
     down = np.roll(diff, -STREAK_RIDGE_VGAP, axis=0)
@@ -1985,7 +1833,7 @@ def detect_radon_streaks(diff, local_std):
     return [(pts, x0, x1)]
 
 
-def split_stroke_at_busy(spot, local_std, min_dim):
+def split_stroke_at_busy(spot, local_std, min_dim, cfg=None):
     """Split a stroke into the smooth-background runs of its path, dropping busy crossings.
 
     A long stroke (especially a full-width scratch) may pass through busy regions (rigging,
@@ -1995,6 +1843,12 @@ def split_stroke_at_busy(spot, local_std, min_dim):
     least HEAL_MIN_SEGMENT_FRAC*min_dim long. Returns the list of sub-spots (possibly just the
     original if it is entirely smooth, or empty if entirely busy).
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_DP_EPS_FRAC = cfg.STROKE_DP_EPS_FRAC
+    HEAL_MAX_TEXTURE = cfg.HEAL_MAX_TEXTURE
+    HEAL_BUSY_MARGIN_PX = cfg.HEAL_BUSY_MARGIN_PX
+    HEAL_SAMPLE_STEP_PX = cfg.HEAL_SAMPLE_STEP_PX
+    HEAL_MIN_SEGMENT_FRAC = cfg.HEAL_MIN_SEGMENT_FRAC
     path = np.array(spot["path"], dtype=np.float64)
     if len(path) < 2:
         return [spot]
@@ -2046,11 +1900,17 @@ def split_stroke_at_busy(spot, local_std, min_dim):
     return subs
 
 
-def _make_radon_streak_spot(path_full, diff, min_dim):
+def _make_radon_streak_spot(path_full, diff, min_dim, cfg=None):
     """Build a stroke spot dict directly for a Radon-detected full-width scratch (it bypasses
     build_stroke_spot because it is, by design, too faint per-point). Brush width comes from
     the measured visible half-width of the (faint) line, floored so it still covers the streak.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_RIDGE_MIN_CONTRAST = cfg.STROKE_RIDGE_MIN_CONTRAST
+    STREAK_MIN_LEN_FRAC = cfg.STREAK_MIN_LEN_FRAC
+    STREAK_RADON_MAX_HALFWIDTH = cfg.STREAK_RADON_MAX_HALFWIDTH
+    STREAK_RADON_MIN_BRUSH_R = cfg.STREAK_RADON_MIN_BRUSH_R
+    STREAK_RADON_BRUSH_MARGIN = cfg.STREAK_RADON_BRUSH_MARGIN
     pts = np.array(path_full, dtype=np.float64)
     length = float(sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
                        for i in range(len(pts) - 1)))
@@ -2059,7 +1919,7 @@ def _make_radon_streak_spot(path_full, diff, min_dim):
     # A faint scratch varies in thickness; the brush must be BOLD enough to fully clear the
     # thickest pieces in darktable (over-heal is on smooth sky → invisible). Cap the (noisy)
     # measurement, then floor with a bold minimum and a generous margin.
-    cover_hw = min(stroke_coverage_halfwidth(path_full, diff), STREAK_RADON_MAX_HALFWIDTH)
+    cover_hw = min(stroke_coverage_halfwidth(path_full, diff, cfg=cfg), STREAK_RADON_MAX_HALFWIDTH)
     brush_radius_px = max(STREAK_RADON_MIN_BRUSH_R, cover_hw + STREAK_RADON_BRUSH_MARGIN)
     width_px = max(3.0, 2.0 * cover_hw)
     mid = path_full[len(path_full) // 2]
@@ -2084,13 +1944,20 @@ def _make_radon_streak_spot(path_full, diff, min_dim):
     }
 
 
-def detect_scratch_ridges(diff, min_dim):
+def detect_scratch_ridges(diff, min_dim, cfg=None):
     """Ridge pass for faint scratches/threads using a Hessian bright-ridge filter.
 
     Runs skimage.filters.sato on a downscaled background-subtracted image (full-res
     is too slow), thresholds the response, and returns connected curvilinear masks
     mapped back to full resolution as (component_mask_bool, x_off, y_off) tuples.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    STROKE_MIN_LENGTH_FRAC = cfg.STROKE_MIN_LENGTH_FRAC
+    STROKE_RIDGE_ENABLE = cfg.STROKE_RIDGE_ENABLE
+    STROKE_RIDGE_SIGMAS = cfg.STROKE_RIDGE_SIGMAS
+    STROKE_RIDGE_Z = cfg.STROKE_RIDGE_Z
+    STROKE_RIDGE_DOWNSCALE = cfg.STROKE_RIDGE_DOWNSCALE
+    STROKE_RIDGE_MAX_CANDIDATES = cfg.STROKE_RIDGE_MAX_CANDIDATES
     if not STROKE_RIDGE_ENABLE:
         return []
     s = STROKE_RIDGE_DOWNSCALE
@@ -2152,7 +2019,7 @@ def _stroke_overlaps_existing(spot, existing, min_sep):
 
 def _compute_candidate_features(label_id, labels, stats, centroids,
                                  diff, gray, local_bg, bg_gradient, local_std, saturation,
-                                 threshold, bright_ref, width, height):
+                                 threshold, bright_ref, width, height, cfg=None):
     """Compute all features for a single connected component without soft-filter decisions.
 
     Applies only hard gates (size 6-800, shape aspect/compactness/solidity/circularity,
@@ -2164,6 +2031,23 @@ def _compute_candidate_features(label_id, labels, stats, centroids,
     threshold/contrast/excess_sat/spot_sat/context_texture/texture), or None on hard-filter
     rejection.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    MIN_SPOT_AREA = cfg.MIN_SPOT_AREA
+    MAX_SPOT_AREA = cfg.MAX_SPOT_AREA
+    MIN_ASPECT_RATIO = cfg.MIN_ASPECT_RATIO
+    MIN_COMPACTNESS = cfg.MIN_COMPACTNESS
+    MIN_SOLIDITY = cfg.MIN_SOLIDITY
+    MIN_CIRCULARITY = cfg.MIN_CIRCULARITY
+    SHAPE_CHECK_MIN_AREA = cfg.SHAPE_CHECK_MIN_AREA
+    TEXTURE_KERNEL = cfg.TEXTURE_KERNEL
+    MAX_EXCESS_SATURATION = cfg.MAX_EXCESS_SATURATION
+    MAX_SPOT_SATURATION = cfg.MAX_SPOT_SATURATION
+    EMULSION_EXCESS_SAT_THRESHOLD = cfg.EMULSION_EXCESS_SAT_THRESHOLD
+    SOFT_CONTEXT_VOTE_THRESHOLD = cfg.SOFT_CONTEXT_VOTE_THRESHOLD
+    SOFT_TEXTURE_VOTE_THRESHOLD = cfg.SOFT_TEXTURE_VOTE_THRESHOLD
+    SOFT_RATIO_VOTE_THRESHOLD = cfg.SOFT_RATIO_VOTE_THRESHOLD
+    MIN_LOCAL_BG_FRACTION = cfg.MIN_LOCAL_BG_FRACTION
+    ENC_RADIUS_SCALE = cfg.ENC_RADIUS_SCALE
     area = stats[label_id, cv2.CC_STAT_AREA]
     w = stats[label_id, cv2.CC_STAT_WIDTH]
     h = stats[label_id, cv2.CC_STAT_HEIGHT]
@@ -2358,7 +2242,7 @@ def _spot_to_features(spot):
     ]
 
 
-def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False):
+def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False, cfg=None):
     """ML-assisted dust detection (post-filter mode).
 
     Strategy:
@@ -2369,11 +2253,13 @@ def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False):
          user-annotated FPs (label=0) and confirmed dust (label=1).
 
     Returns (spots, rejected_candidates, error_msg, local_std) — same signature as
-    detect_dust_spots().  Healing source positions are NOT set here;
-    process_one_image() adds them.
+    detect_dust_spots(cfg=cfg).  Healing source positions are NOT set here;
+    process_one_image(cfg=cfg) adds them.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    ML_POSTFILTER_THRESHOLD = cfg.ML_POSTFILTER_THRESHOLD
     # --- Phase 1: standard rule-based detection ---
-    std_spots, std_rejects, error, local_std = detect_dust_spots(image_path, collect_rejects)
+    std_spots, std_rejects, error, local_std = detect_dust_spots(image_path, collect_rejects, cfg=cfg)
     if error:
         return None, std_rejects, error, local_std
     if std_spots is None:
@@ -2418,20 +2304,21 @@ def load_ml_model(path=None):
     return bundle["model"], bundle["scaler"]
 
 
-def detect(image_path, collect_rejects=False, ml_model_path=None):
+def detect(image_path, collect_rejects=False, ml_model_path=None, cfg=None):
     """Unified detection entry point — uses ML post-filter by default.
 
     If ml_model_path is given, loads that model.  Otherwise loads the default
     dust_ml_model.pkl next to this script.  Falls back to pure rule-based
-    detection when no model file exists.
+    detection when no model file exists. `cfg` (a tuning.Tuning) overrides the
+    detection constants for a calibration trial (default = DEFAULT_TUNING).
 
     Returns (spots, rejected_candidates, error_msg, local_std).
     """
     model, scaler = load_ml_model(ml_model_path)
     if model is not None:
         return detect_dust_spots_ml(image_path, model, scaler,
-                                    collect_rejects=collect_rejects)
-    return detect_dust_spots(image_path, collect_rejects=collect_rejects)
+                                    collect_rejects=collect_rejects, cfg=cfg)
+    return detect_dust_spots(image_path, collect_rejects=collect_rejects, cfg=cfg)
 
 
 # ===================================================================
@@ -3064,6 +2951,26 @@ def write_debug_spots_json(results, image_paths_by_stem, output_dir, mode=None,
     print(f"Debug spots written to: {output_dir} ({len(results)} file(s))")
 
 
+def parse_source_paths(src_file):
+    """Parse source_paths.txt written by the Lua side (stem|/full/source/path).
+
+    Returns {stem: source_path}. Mirrors auto_negadoctor.parse_source_paths — lets a
+    frame be keyed by its full source path (so same-named stems from different rolls,
+    e.g. every roll's DSC_0013, never collide) instead of the bare stem.
+    """
+    out = {}
+    if not os.path.exists(src_file):
+        return out
+    with open(src_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or "|" not in line:
+                continue
+            stem, path = line.split("|", 1)
+            out[stem.strip()] = path.strip()
+    return out
+
+
 def load_debug_spots_dir(directory):
     """Load all per-image {stem}_debug_spots.json files from a directory.
 
@@ -3187,7 +3094,7 @@ def _sensor_spot_texture(gray, cx_px, cy_px, radius_px):
     return float(np.percentile(local_std[ring_mask], 90))
 
 
-def _sensor_find_source(gray, cx_px, cy_px, radius_px):
+def _sensor_find_source(gray, cx_px, cy_px, radius_px, cfg=None):
     """Find the smoothest healing source for a sensor dust spot.
 
     Samples 8 directions at 2.5× radius distance from the spot centre and
@@ -3196,6 +3103,8 @@ def _sensor_find_source(gray, cx_px, cy_px, radius_px):
     Returns (src_cx, src_cy, texture) or None if every direction exceeds
     SENSOR_MAX_SOURCE_TEXTURE (no clean source available).
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    SENSOR_MAX_SOURCE_TEXTURE = cfg.SENSOR_MAX_SOURCE_TEXTURE
     h, w = gray.shape
     step = max(int(radius_px * 2.5), 15)
     patch_r = max(int(radius_px), 5)
@@ -3228,7 +3137,7 @@ def _sensor_find_source(gray, cx_px, cy_px, radius_px):
     return best_src[0], best_src[1], best_tex
 
 
-def detect_sensor_dust_candidates(image_path):
+def detect_sensor_dust_candidates(image_path, cfg=None):
     """Find sensor-dust candidate blobs using Difference-of-Gaussians + local maxima.
 
     DoG cancels smooth background gradients (sky, bokeh) while preserving blob-scale
@@ -3238,6 +3147,14 @@ def detect_sensor_dust_candidates(image_path):
     Returns (candidates, error_msg) where candidates is a list of dicts with keys:
       cx, cy (export pixels), radius_px, brush_radius_px, contrast, area, circularity.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    SENSOR_SIGMA_INNER_FRAC = cfg.SENSOR_SIGMA_INNER_FRAC
+    SENSOR_SIGMA_OUTER_FRAC = cfg.SENSOR_SIGMA_OUTER_FRAC
+    SENSOR_DOG_MIN_CONTRAST = cfg.SENSOR_DOG_MIN_CONTRAST
+    SENSOR_MIN_RADIUS_FRAC = cfg.SENSOR_MIN_RADIUS_FRAC
+    SENSOR_MAX_BLOB_RADIUS_FRAC = cfg.SENSOR_MAX_BLOB_RADIUS_FRAC
+    SENSOR_MAX_CANDIDATE_TEXTURE = cfg.SENSOR_MAX_CANDIDATE_TEXTURE
+    SENSOR_BRUSH_SCALE = cfg.SENSOR_BRUSH_SCALE
     img = cv2.imread(str(image_path))
     if img is None:
         return [], f"Cannot read {image_path}"
@@ -3353,7 +3270,7 @@ def detect_sensor_dust_candidates(image_path):
     return candidates, None
 
 
-def find_sensor_dust_consensus(per_image_results, transforms):
+def find_sensor_dust_consensus(per_image_results, transforms, cfg=None):
     """Identify dust positions common across multiple frames (sensor dust signature).
 
     per_image_results: list of (stem, candidates, img_w, img_h)
@@ -3365,6 +3282,10 @@ def find_sensor_dust_consensus(per_image_results, transforms):
 
     Returns list of dicts: {cx_norm, cy_norm, radius_norm, n_frames} in full-frame space.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    SENSOR_CLUSTER_RADIUS_NORM = cfg.SENSOR_CLUSTER_RADIUS_NORM
+    SENSOR_DUST_MIN_FRAMES = cfg.SENSOR_DUST_MIN_FRAMES
+    SENSOR_MAX_CANDIDATES_FOR_CONSENSUS = cfg.SENSOR_MAX_CANDIDATES_FOR_CONSENSUS
     from collections import defaultdict
 
     stems = [r[0] for r in per_image_results]
@@ -3520,7 +3441,7 @@ def _compute_frame_pairwise_overlap(consensus_spots):
     return pairwise
 
 
-def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
+def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False, cfg=None):
     """Full sensor dust pipeline: per-image candidates → cross-frame consensus → XMP data.
 
     When debug_ui is True, also writes a per-image debug session
@@ -3528,6 +3449,10 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
 
     Returns True if any errors occurred.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    SENSOR_BRUSH_SCALE = cfg.SENSOR_BRUSH_SCALE
+    SENSOR_MAX_CORRECTION_TEXTURE = cfg.SENSOR_MAX_CORRECTION_TEXTURE
+    SENSOR_MAX_SOURCE_TEXTURE = cfg.SENSOR_MAX_SOURCE_TEXTURE
     n_workers = min(cpu_count(), len(image_paths))
     print(f"Sensor dust mode: {len(image_paths)} image(s), {n_workers} worker(s)", flush=True)
 
@@ -3547,7 +3472,7 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
             times_by_stem[filename] = elapsed
             print(f"PROGRESS|{i}|{len(image_paths)}", flush=True)
 
-    consensus_spots = find_sensor_dust_consensus(per_image_results, transforms)
+    consensus_spots = find_sensor_dust_consensus(per_image_results, transforms, cfg=cfg)
     print(f"\nSensor dust consensus: {len(consensus_spots)} spot(s) confirmed across frames")
 
     for sd in consensus_spots:
@@ -3662,7 +3587,7 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
                     })
                     continue
 
-                src_result = _sensor_find_source(gray_export, cx_px, cy_px, radius_px)
+                src_result = _sensor_find_source(gray_export, cx_px, cy_px, radius_px, cfg=cfg)
                 if src_result is None:
                     skipped_no_source += 1
                     print(f"  [{stem}] skip ({cx_px:.0f},{cy_px:.0f}) "
@@ -3725,12 +3650,14 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False):
 # Per-image worker (top-level so it's picklable on Windows spawn)
 # ===================================================================
 
-def process_one_image(args):
+def process_one_image(args, cfg=None):
     """Detect dust in one image and return results + captured log output.
 
     Must be a top-level function (not nested inside main) so multiprocessing
     can pickle it on Windows, which uses the 'spawn' start method.
     """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    MAX_SPOTS = cfg.MAX_SPOTS
     image_path, transforms, collect_rejects, ml_model_path = args
     filename = Path(image_path).stem
 
@@ -3750,7 +3677,7 @@ def process_one_image(args):
 
             spots, rejected_candidates, error, local_std = detect(
                 image_path, collect_rejects=collect_rejects,
-                ml_model_path=ml_model_path)
+                ml_model_path=ml_model_path, cfg=cfg)
             if error:
                 print(f"  ERROR: {error}")
                 elapsed = time.perf_counter() - t0
@@ -3778,11 +3705,11 @@ def process_one_image(args):
                     if spot.get("kind") == "stroke":
                         src_cx, src_cy = find_stroke_healing_source(
                             spot["path"], spot["stroke_width_px"], spot["brush_radius_px"],
-                            local_std, spots, width, height)
+                            local_std, spots, width, height, cfg=cfg)
                     else:
                         src_cx, src_cy = find_healing_source(
                             spot["cx"], spot["cy"], spot["radius_px"], spot["brush_radius_px"],
-                            img_lab, L_f32, local_std, spots, width, height)
+                            img_lab, L_f32, local_std, spots, width, height, cfg=cfg)
                     spot["src_cx"] = src_cx
                     spot["src_cy"] = src_cy
 
@@ -3882,6 +3809,24 @@ def main():
                                           debug_ui=debug_ui)
         sys.exit(1 if had_errors else 0)
 
+    # Debug UI (film dust): launch the UI IMMEDIATELY and let it run detection
+    # itself, streaming each frame's spots in as it finalizes (the same UI-first +
+    # progress-bar experience as auto_negadoctor's --run). The old path detected the
+    # whole batch here and only THEN opened the UI, so the window appeared minutes
+    # late. The UI detects the export-dir JPGs in a background pool; no debug_spots
+    # batch is written (review-only). (Sensor dust is multi-frame consensus — it
+    # can't stream per-frame — so it keeps the batch-then-launch path below.)
+    if debug_ui:
+        import subprocess
+        debug_ui_script = Path(__file__).parent / "debug_ui.py"
+        env = dict(os.environ)
+        if ml_model_path:
+            env["RETOUCH_ML_MODEL"] = ml_model_path
+        print(f"Launching debug UI (it runs detection itself, streaming): "
+              f"{debug_ui_script}", flush=True)
+        subprocess.Popen([sys.executable, str(debug_ui_script), output_dir], env=env)
+        sys.exit(0)
+
     image_paths_by_stem = {Path(p).stem: p for p in image_paths}
     results = []
     times_by_stem = {}
@@ -3911,17 +3856,9 @@ def main():
     wall_time = time.perf_counter() - wall_t0
     print(f"\nTotal wall time: {wall_time:.1f}s for {len(image_paths)} image(s)")
 
-    # Write results file
+    # Write results file (non-debug path: the InPlace/apply flow parses this)
     results_path = write_dust_results(results, output_dir)
     print(f"\nResults written to: {results_path}")
-
-    if debug_ui:
-        write_debug_spots_json(results, image_paths_by_stem, output_dir,
-                               times_by_stem=times_by_stem, wall_time_s=wall_time)
-        import subprocess
-        debug_ui_script = Path(__file__).parent / "debug_ui.py"
-        print(f"Launching debug UI: {debug_ui_script}", flush=True)
-        subprocess.Popen([sys.executable, str(debug_ui_script), output_dir])
 
     sys.exit(1 if any_errors else 0)
 

@@ -151,34 +151,40 @@ class CropDebugUI(DebugUIBase):
     # Layout / text hooks
     # ------------------------------------------------------------------
 
-    def build_left_info(self, parent):
-        self.add_legend(parent, [
-            ("│", "#00cc44", "Detected edge (conf ≥ 0.7)"),
-            ("│", "#ffcc00", "Detected edge (conf ≥ 0.4)"),
-            ("│", "#ff4444", "Detected edge (low conf)"),
-            ("│", "#ffff00", "Selected edge"),
-            ("┊", "#00ddff", "Corrected position"),
-        ])
-        self.add_hints(parent, (
-            "Mouse:\n"
-            "  Scroll — zoom in/out\n"
-            "  Scroll (edge sel'd) —\n"
-            "    nudge edge 1px (Shift=10)\n"
-            "  Middle drag — pan\n"
-            "  Click — select edge\n"
-            "  Ctrl+click — place edge\n"
-            "  Ctrl+drag — zoom to rect\n"
-            "Keys:\n"
-            "  Space/B — next/prev image\n"
-            "  1/2/3/4 — select L/T/R/B\n"
-            "  C — clear correction\n"
-            "  Note box — comment on sel.\n"
-            "    edge (saves as you type)\n"
-            "  H — hide/show edges\n"
-            "  +/- — zoom ×2 / ÷2\n"
-            "  Arrows — pan  (Shift=fast)\n"
-            "  F — fit to window"
-        ))
+    # Marker legend + the full mouse/key reference live on the Help menu (popup /
+    # dialog), NOT in the left panel — same as auto_negadoctor / auto_retouch.
+    _LEGEND_ENTRIES = [
+        ("│", "#00cc44", "Detected edge (conf ≥ 0.7)"),
+        ("│", "#ffcc00", "Detected edge (conf ≥ 0.4)"),
+        ("│", "#ff4444", "Detected edge (low conf)"),
+        ("│", "#ffff00", "Selected edge"),
+        ("┊", "#00ddff", "Corrected position"),
+    ]
+
+    def extend_help_menu(self, helpm):
+        # _show_legend / _show_shortcuts (both non-modal popups) live in the base.
+        helpm.add_command(label="Marker legend…", command=self._show_legend)
+        helpm.add_command(label="Mouse & keyboard shortcuts…",
+                          command=self._show_shortcuts)
+
+    _SHORTCUTS_TEXT = (
+        "MOUSE\n"
+        "  Scroll                zoom in / out\n"
+        "  Scroll (edge sel'd)   nudge edge 1 px (Shift = 10 px)\n"
+        "  Middle drag           pan\n"
+        "  Click                 select edge\n"
+        "  Ctrl+click            place edge\n"
+        "  Ctrl+drag             zoom to rectangle\n\n"
+        "KEYS\n"
+        "  Space / B   next / previous image\n"
+        "  1 / 2 / 3 / 4   select left / top / right / bottom edge\n"
+        "  C           clear the correction\n"
+        "  Note box    comment on the selected edge (saves as you type)\n"
+        "  H           hide / show edges\n"
+        "  P           display color management on / off (sRGB->monitor)\n"
+        "  + / -       zoom ×2 / ÷2     Arrows pan (Shift = fast)\n"
+        "  F           fit to window"
+    )
 
     def build_feature_buttons(self, btn_frame, btn_cfg):
         self.count_label = tk.Label(btn_frame, text="Corrected edges: 0/4",

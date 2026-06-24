@@ -36,8 +36,13 @@ Fast vs full path (the runner dispatches automatically):
     evaluator always re-runs just that (fast) on the cached per-frame buffer.
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import auto_negadoctor as an
 import nega_model as nm
+from common.calibration.registry import Registry
 
 _MODULES = {"auto_negadoctor": an, "nega_model": nm}
 
@@ -168,107 +173,18 @@ REGISTRY = {
 }
 
 
-def fittable(kind):
-    """The {name: spec} the given kind may fit (copy; safe to mutate)."""
-    return {n: dict(s) for n, s in REGISTRY.get(kind, {}).items()}
-
-
-def _find(name):
-    for kind in REGISTRY.values():
-        if name in kind:
-            return kind[name]
-    raise KeyError(f"{name!r} is not a registered fittable constant")
-
-
-def kind_of(name):
-    for kind, params in REGISTRY.items():
-        if name in params:
-            return kind
-    raise KeyError(name)
-
-
-def _parse(name):
-    """('WB_HIGH_PRIOR[0]') -> ('WB_HIGH_PRIOR', 0); ('P_LOW') -> ('P_LOW', None)."""
-    if name.endswith("]") and "[" in name:
-        base, idx = name[:-1].split("[", 1)
-        return base, int(idx)
-    return name, None
-
-
-def _coerce(val, spec):
-    return int(round(val)) if spec.get("int") else float(val)
-
-
-def current(name):
-    """The constant's LIVE value on its module (the search start / init).
-    For an indexed name, the addressed tuple element."""
-    spec = _find(name)
-    base, idx = _parse(name)
-    val = getattr(_MODULES[spec["module"]], base)
-    return float(val[idx]) if idx is not None else float(val)
-
-
-def snapshot(names):
-    """Capture the live value of each name's BASE attribute (whole tuple for
-    indexed names) so it can be restored intact. Keyed by (module, base)."""
-    snap = {}
-    for name in names:
-        spec = _find(name)
-        base, _ = _parse(name)
-        key = (spec["module"], base)
-        if key not in snap:
-            snap[key] = getattr(_MODULES[spec["module"]], base)
-    return snap
-
-
-def apply(overrides):
-    """Set each name on its module. Indexed names of the same tuple are gathered
-    and the tuple is rebuilt once (tuples are immutable)."""
-    tuples = {}   # (module, base) -> {idx: value}
-    for name, val in overrides.items():
-        spec = _find(name)
-        base, idx = _parse(name)
-        if idx is None:
-            setattr(_MODULES[spec["module"]], base, _coerce(val, spec))
-        else:
-            tuples.setdefault((spec["module"], base), {})[idx] = _coerce(val, spec)
-    for (modname, base), idxvals in tuples.items():
-        cur = list(getattr(_MODULES[modname], base))
-        for i, v in idxvals.items():
-            cur[i] = v
-        setattr(_MODULES[modname], base, tuple(cur))
-
-
-def restore(snap):
-    """Inverse of apply(): write the snapshotted base values back."""
-    for (modname, base), val in snap.items():
-        setattr(_MODULES[modname], base, val)
-
-
-def to_tuning(overrides, base=None):
-    """Build an immutable `an.Tuning` = `base` (default an.DEFAULT_TUNING) with
-    `overrides` applied — the THREAD-SAFE alternative to apply()/restore(): the
-    runner gives each trial its OWN cfg to pass into the analysis functions
-    instead of mutating shared module globals, so independent trials can run in
-    parallel. Indexed names (NAME[i]) patch the addressed tuple element; ints are
-    rounded. Every fittable constant lives in auto_negadoctor (asserted), so it
-    is a Tuning field."""
-    base = base if base is not None else an.DEFAULT_TUNING
-    fields = base._asdict()
-    tuples = {}   # base name -> {idx: value}
-    for name, val in overrides.items():
-        spec = _find(name)
-        if spec["module"] != "auto_negadoctor":
-            raise ValueError(f"{name!r} is not in auto_negadoctor; cfg only "
-                             "covers auto_negadoctor constants")
-        b, idx = _parse(name)
-        if idx is None:
-            fields[b] = _coerce(val, spec)
-        else:
-            tuples.setdefault(b, {})[idx] = _coerce(val, spec)
-    for b, idxvals in tuples.items():
-        cur = list(fields[b])
-        for i, v in idxvals.items():
-            cur[i] = v
-        fields[b] = tuple(cur)
-    return an.Tuning(**fields)
+# The generic registry operations (fittable / current / snapshot / apply / restore
+# / to_tuning) live in common/calibration/registry.py; this module owns only the
+# REGISTRY menu + the fast-path tuples above. Bind the operations at module level so
+# existing callers (`reg.fittable`, `reg.to_tuning`, …) are unchanged. `an._tuning`
+# is duck-typed as the schema (its `.Tuning` is the per-trial cfg type).
+_reg = Registry(REGISTRY, _MODULES, an._tuning, "auto_negadoctor")
+fittable = _reg.fittable
+kind_of = _reg.kind_of
+current = _reg.current
+snapshot = _reg.snapshot
+apply = _reg.apply
+restore = _reg.restore
+to_tuning = _reg.to_tuning
+_find = _reg._find
+_parse = _reg._parse

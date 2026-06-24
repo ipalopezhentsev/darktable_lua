@@ -1,0 +1,17 @@
+{
+  "kind": "stroke",
+  "rolls": [],
+  "fit": {
+    "method": "random_search",
+    "n_trials": 30,
+    "seed": 0,
+    "tolerances": {"w_fp": 3.0, "w_miss": 1.0},
+    "params": {
+      "STROKE_MIN_CRISPNESS": {},
+      "STROKE_MIN_RIDGE_DROP": {},
+      "STROKE_MAX_SIDE_ASYMMETRY": {},
+      "STROKE_MAX_CONTEXT_TEXTURE": {},
+      "STREAK_RADON_MIN_RESP": {}
+    }
+  }
+}

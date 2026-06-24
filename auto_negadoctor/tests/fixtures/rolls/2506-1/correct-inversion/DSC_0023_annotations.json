@@ -1,7 +1,12 @@
 {
   "stem": "DSC_0023",
   "patch_corrections": {},
-  "print_overrides": {},
+  "print_overrides": {
+    "gamma": {
+      "applied": 4.53125,
+      "corrected": 4.53
+    }
+  },
   "wb_overrides": {
     "highlights": {
       "applied": [

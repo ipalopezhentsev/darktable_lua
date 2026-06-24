@@ -1,0 +1,3 @@
+# Roll images are regenerable exports — keep them out of git (annotations are tracked).
+*.jpg
+*.jpeg

@@ -1,0 +1,16 @@
+{
+  "kind": "vignette",
+  "rolls": [
+    "2506-1",
+    "2510-11-1",
+    "2511-12-1",
+    "2512-2601-1"
+  ],
+  "fit": {
+    "method": "none",
+    "params": {}
+  },
+  "metric": "vignette_fit_rejected_count + median_residual",
+  "created": "2026-06-23T15:51:09",
+  "git_commit": "9b6ca96"
+}

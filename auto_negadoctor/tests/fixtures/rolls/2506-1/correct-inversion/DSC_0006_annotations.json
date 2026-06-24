@@ -1,7 +1,12 @@
 {
   "stem": "DSC_0006",
   "patch_corrections": {},
-  "print_overrides": {},
+  "print_overrides": {
+    "offset": {
+      "applied": 0.006250000000000007,
+      "corrected": 0.006
+    }
+  },
   "wb_overrides": {
     "highlights": {
       "applied": [
@@ -22,9 +27,9 @@
         1.0
       ],
       "corrected": [
-        0.694,
-        0.506,
-        1.0
+        0.804,
+        1.0,
+        0.623
       ]
     }
   },

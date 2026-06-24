@@ -20,6 +20,11 @@ local gettext = dt.gettext.gettext
 -- Script directory (for finding detect_dust.py)
 local script_dir = debug.getinfo(1).source:match("@?(.*[/\\])")
 
+-- Shared darktable-Lua utilities (common/dt_utils.lua) — stateless XMP/binary
+-- helpers shared by all three auto_* plugins.
+package.path = package.path .. ";" .. script_dir .. "../common/?.lua"
+local dtu = require("dt_utils")
+
 -- Set up logging
 --NOTE in event handlers it won't apply and needs to be set up again!
 dlog.log_level(dlog.info)
@@ -167,40 +172,16 @@ local function add_instance_to_iop_order(xmp_content, operation, multi_priority)
 end
 
 -- Find the highest history item num in XMP content
-local function find_max_history_num(xmp_content)
-  local max_num = -1
-  for num_str in xmp_content:gmatch('darktable:num="(%d+)"') do
-    local num = tonumber(num_str)
-    if num and num > max_num then
-      max_num = num
-    end
-  end
-  dlog.msg(dlog.info, "find_max_history_num", string.format("Found max history num=%d", max_num))
-  return max_num
-end
+local find_max_history_num = dtu.find_max_history_num
 
 -- Generate a random hex string of given length
-local function generate_random_hex(length)
-  local hex = ""
-  for i = 1, length do
-    hex = hex .. string.format("%x", math.random(0, 15))
-  end
-  return hex
-end
+local generate_random_hex = dtu.generate_random_hex
 
 -- Generate darktable-format timestamp (microseconds since 0001-01-01)
-local function generate_darktable_timestamp()
-  return (os.time() + 62135596800) * 1000000
-end
+local generate_darktable_timestamp = dtu.generate_darktable_timestamp
 
 -- Decode 8-char little-endian hex string to float
-local function le_hex_to_float(hex_str)
-  local bytes = {}
-  for i = 1, #hex_str, 2 do
-    bytes[#bytes + 1] = string.char(tonumber(hex_str:sub(i, i + 1), 16))
-  end
-  return string.unpack("<f", table.concat(bytes))
-end
+local le_hex_to_float = dtu.le_hex_to_float
 
 -- Find the last enabled history entry for a given operation.
 -- Returns the params hex string, or nil if not found.
@@ -630,6 +611,7 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
   -- Export each selected image at full resolution
   local exported_files = {}
   local filename_to_image = {}
+  local source_paths = {}
 
   for i, image in ipairs(images) do
     format.max_width = image.width
@@ -647,6 +629,11 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
     if success then
       table.insert(exported_files, filename)
       filename_to_image[safe_name] = image
+      -- Record the original source path so the temp export folder isn't
+      -- anonymous (and a per-roll calibration GT can be keyed by source path,
+      -- not the stem — every roll has a DSC_0013). image.path is the directory
+      -- holding the original raw/file.
+      source_paths[safe_name] = image.path .. "/" .. image.filename
       dt.print(string.format(_("  Exported: %s"), filename))
     else
       dt.print(string.format(_("  Failed to export: %s"), image.filename))
@@ -697,6 +684,13 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
       tf:write(line .. "\n")
     end
     tf:close()
+  end
+
+  -- Write a manifest mapping each exported stem back to its original source
+  -- file (same as auto_negadoctor; lets calibration GT be keyed by source path
+  -- rather than the collision-prone stem).
+  if not dtu.write_source_paths(export_dir, source_paths) then
+    dlog.msg(dlog.warn, "export_and_detect", "Could not write source_paths.txt")
   end
 
   -- Call Python script

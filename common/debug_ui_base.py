@@ -38,6 +38,7 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import messagebox
 
+import numpy as np
 from PIL import Image, ImageTk
 
 
@@ -231,6 +232,17 @@ class DebugUIBase:
         # On by default; the transform itself is built lazily/cached on first use.
         self.color_manage = True
 
+        # Histogram + pipette (shared; rendered in the left panel, above the
+        # thumbnails — NOT on the canvas). _clip_stats is optional (a feature may
+        # set it from _histogram_pixels to draw clip spikes); _disp_arr caches the
+        # ndarray of the displayed image for the per-pixel hover readout.
+        self.show_histogram = True
+        self._hist_data = None
+        self._clip_stats = None
+        self._pointer_xy = None
+        self._disp_arr = None
+        self._disp_arr_id = None
+
         # Rubber-band drag
         self.drag_start: "tuple | None" = None
         self.is_dragging = False
@@ -348,12 +360,89 @@ class DebugUIBase:
         item table's draggable sash (only used when HAS_ITEM_PANEL_FOOTER)."""
 
     def build_menus(self, menubar):
-        """Feature cascades for the window menu bar (optional). The menu bar is
-        only attached when at least one cascade is added here."""
+        """Build the window menu bar: a generic View / Navigate / Help skeleton
+        shared by every feature UI. Feature UIs normally override the HOOKS
+        (extend_view_menu / build_feature_menus / extend_help_menu) rather than
+        this method, so they inherit the common items (fit/zoom/hide/colour-
+        management, next/previous image) for free."""
+        view = tk.Menu(menubar, tearoff=0)
+        self.extend_view_menu(view)              # feature view toggles first
+        if view.index("end") is not None:
+            view.add_separator()
+        view.add_command(label="Fit to window", accelerator="F",
+                         command=self._fit_to_window)
+        view.add_command(label="Zoom in", accelerator="+",
+                         command=lambda: self._zoom_step(2.0))
+        view.add_command(label="Zoom out", accelerator="-",
+                         command=lambda: self._zoom_step(0.5))
+        view.add_separator()
+        view.add_command(label="Hide / show markers", accelerator="H",
+                         command=self._toggle_hide_markers)
+        view.add_command(label="Display color management on / off",
+                         accelerator="P", command=self._toggle_color_manage)
+        menubar.add_cascade(label="View", menu=view)
+
+        self.build_feature_menus(menubar)        # feature cascades (Select/Adjust/…)
+
+        nav = tk.Menu(menubar, tearoff=0)
+        nav.add_command(label="Next image", accelerator="Space",
+                        command=lambda: self._nav_image(+1))
+        nav.add_command(label="Previous image", accelerator="B",
+                        command=lambda: self._nav_image(-1))
+        menubar.add_cascade(label="Navigate", menu=nav)
+
+        helpm = tk.Menu(menubar, tearoff=0)
+        self.extend_help_menu(helpm)
+        if helpm.index("end") is not None:
+            menubar.add_cascade(label="Help", menu=helpm)
+
+    def extend_view_menu(self, view):
+        """Feature-specific items prepended to the shared View menu (optional)."""
+
+    def build_feature_menus(self, menubar):
+        """Feature-specific menu cascades, inserted after View (optional)."""
+
+    def extend_help_menu(self, helpm):
+        """Feature-specific Help-menu items; the Help cascade is only shown when
+        this adds at least one (optional)."""
+
+    # Shared toolbar button style (flat dark buttons, like the menu-driven UIs).
+    TOOLBAR_BTN_STYLE = {"bg": "#585858", "fg": "white", "relief": "flat",
+                         "padx": 6, "pady": 3, "highlightthickness": 0, "bd": 0}
 
     def build_toolbar(self, parent):
-        """Feature buttons for a horizontal toolbar across the top of the
-        center panel (optional; only shown when widgets are added here)."""
+        """Top toolbar across the center panel: the COMMON navigation + zoom
+        buttons (◀ ▶ | － ＋ Fit) every UI shares, then the feature's own widgets
+        via the build_feature_toolbar hook. Subclasses normally override the
+        HOOK, not this method, so they inherit the common buttons for free."""
+        row = tk.Frame(parent, bg="#3f3f3f")
+        row.pack(side=tk.TOP, fill=tk.X)
+        self._toolbar_row = row
+        self.toolbar_button(row, "◀", lambda: self._nav_image(-1))
+        self.toolbar_button(row, "▶", lambda: self._nav_image(+1))
+        self.toolbar_separator(row)
+        self.toolbar_button(row, "－", lambda: self._zoom_step(0.5))
+        self.toolbar_button(row, "＋", lambda: self._zoom_step(2.0))
+        self.toolbar_button(row, "Fit", self._fit_to_window)
+        self.build_feature_toolbar(parent, row)
+
+    def toolbar_button(self, row, text, command, **kw):
+        """Add a flat toolbar button to `row` (left-packed) and return it."""
+        cfg = dict(self.TOOLBAR_BTN_STYLE)
+        cfg.update(kw)
+        b = tk.Button(row, text=text, command=command, **cfg)
+        b.pack(side=tk.LEFT, padx=1, pady=2)
+        return b
+
+    def toolbar_separator(self, row):
+        """Add a thin vertical separator to the toolbar `row`."""
+        tk.Frame(row, width=1, bg="#6a6a6a").pack(
+            side=tk.LEFT, fill=tk.Y, padx=5, pady=3)
+
+    def build_feature_toolbar(self, toolbar, row):
+        """Feature toolbar widgets: left-pack buttons onto `row` (use
+        toolbar_button / toolbar_separator), right-pack with side=RIGHT, or add a
+        second strip to `toolbar`. Optional."""
 
     def bind_feature_keys(self):
         """Feature keyboard shortcuts (root.bind)."""
@@ -480,6 +569,10 @@ class DebugUIBase:
         paned.add(left, minsize=160, stretch="never")
         self.left_pane = left
 
+        # Histogram + pipette section at the very top of the left panel (above
+        # the thumbnails), shared by every UI.
+        self._build_histogram_panel(left)
+
         tk.Label(left, text="Images:", bg="#484848", fg="white",
                  font=("", 10, "bold")).pack(anchor="w", padx=6, pady=(6, 2))
 
@@ -551,6 +644,8 @@ class DebugUIBase:
         self.canvas.bind("<ButtonPress-2>", self._on_pan_start)
         self.canvas.bind("<B2-Motion>", self._on_pan_move)
         self.canvas.bind("<ButtonRelease-2>", self._on_pan_end)
+        self.canvas.bind("<Motion>", self._on_canvas_motion)         # pipette
+        self.canvas.bind("<Leave>", self._on_canvas_leave)
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)       # Windows
         self.canvas.bind("<Button-4>", self._on_mousewheel)          # Linux scroll up
         self.canvas.bind("<Button-5>", self._on_mousewheel)          # Linux scroll down
@@ -575,6 +670,8 @@ class DebugUIBase:
         self.bind_key("<space>",         lambda e: self._nav_image(+1))
         self.bind_key("<b>",             lambda e: self._nav_image(-1))
         self.bind_key("<B>",             lambda e: self._nav_image(-1))
+        self.bind_key("<p>",             lambda e: self._toggle_color_manage())
+        self.bind_key("<P>",             lambda e: self._toggle_color_manage())
         self.bind_feature_keys()
 
         # Bottom panel
@@ -812,6 +909,210 @@ class DebugUIBase:
             anchor="w", padx=6, pady=(8, 4))
 
     # ------------------------------------------------------------------
+    # Help popups (shared) — the marker legend and the mouse/key reference,
+    # both NON-MODAL Toplevels (no blocking messagebox). A feature supplies the
+    # content via the _LEGEND_ENTRIES / _SHORTCUTS_TEXT class attributes and
+    # wires the two items in its extend_help_menu hook.
+    # ------------------------------------------------------------------
+
+    _LEGEND_ENTRIES = []     # [(symbol, color, label), …]
+    _SHORTCUTS_TEXT = ""     # monospace mouse/keyboard reference
+
+    def _show_popup(self, key, title, build_body):
+        """Open (or re-focus) a single non-modal Toplevel per `key`, with a
+        Close button. `build_body(win)` packs the window's content."""
+        cache = getattr(self, "_popups", None)
+        if cache is None:
+            cache = self._popups = {}
+        win = cache.get(key)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            return
+        win = tk.Toplevel(self.root, bg="#484848")
+        win.title(title)
+        win.transient(self.root)
+        cache[key] = win
+        build_body(win)
+        tk.Button(win, text="Close", command=win.destroy, bg="#585858",
+                  fg="white", relief=tk.FLAT, padx=10, pady=4).pack(pady=8)
+
+    def _show_legend(self):
+        """Marker-legend popup (non-modal), rendered from _LEGEND_ENTRIES."""
+        self._show_popup("legend", "Marker legend",
+                         lambda win: self.add_legend(win, self._LEGEND_ENTRIES))
+
+    def _show_shortcuts(self):
+        """Mouse/keyboard reference popup (non-modal), from _SHORTCUTS_TEXT."""
+        self._show_popup(
+            "shortcuts", "Mouse & keyboard shortcuts",
+            lambda win: tk.Label(win, text=self._SHORTCUTS_TEXT, bg="#484848",
+                                 fg="white", font=("Courier", 9),
+                                 justify=tk.LEFT).pack(anchor="w", padx=12,
+                                                       pady=10))
+
+    # ------------------------------------------------------------------
+    # Histogram + pipette (shared; live in the top-left panel, not the canvas)
+    #
+    # A feature can override two hooks:
+    #   _display_rgb_array() -> HxWx3 uint8 of the displayed image (the pixels
+    #       the histogram + pipette read). Default: the on-canvas pil_image.
+    #   _histogram_pixels()  -> Nx3 uint8 subset to histogram (and the place to
+    #       set self._clip_stats for the optional clip spikes). Default: every
+    #       pixel of _display_rgb_array().
+    # ------------------------------------------------------------------
+
+    HIST_BINS = 128
+    HIST_PANEL_H = 78
+
+    def _build_histogram_panel(self, parent):
+        sec = tk.Frame(parent, bg="#484848")
+        sec.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 2))
+        self._hist_section = sec
+        tk.Label(sec, text="Histogram:", bg="#484848", fg="white",
+                 font=("", 9, "bold")).pack(anchor="w")
+        self.hist_canvas = tk.Canvas(sec, height=self.scaled(self.HIST_PANEL_H),
+                                     bg="#1c1c1c", highlightthickness=1,
+                                     highlightbackground="#666666")
+        self.hist_canvas.pack(fill=tk.X, pady=(2, 2))
+        self.hist_canvas.bind("<Configure>", lambda e: self._draw_histogram())
+        self.pipette_canvas = tk.Canvas(sec, height=self.scaled(20),
+                                        bg="#1c1c1c", highlightthickness=1,
+                                        highlightbackground="#666666")
+        self.pipette_canvas.pack(fill=tk.X)
+        self._set_pipette(None)
+
+    def _display_rgb_array(self):
+        """HxWx3 uint8 ndarray of the displayed image, cached by PIL identity.
+        Default = the on-canvas pil_image; a feature whose canvas image is
+        DECORATED (overlays/masks) overrides this to return the honest pixels."""
+        pil = self.pil_image
+        if pil is None:
+            return None
+        if self._disp_arr_id != id(pil):
+            try:
+                self._disp_arr = np.asarray(pil.convert("RGB"))
+            except Exception:
+                self._disp_arr = None
+            self._disp_arr_id = id(pil)
+        return self._disp_arr
+
+    def _histogram_pixels(self):
+        """Nx3 uint8 pixels to histogram. Default = all of _display_rgb_array()."""
+        arr = self._display_rgb_array()
+        return None if arr is None else arr.reshape(-1, 3)
+
+    def _refresh_histogram(self):
+        """Recompute the per-channel histogram from _histogram_pixels() and
+        redraw it. Safe to call before the panel exists (it just skips drawing)."""
+        self._hist_data = None
+        px = self._histogram_pixels()
+        if px is not None and len(px):
+            hists = []
+            for c in range(3):
+                h, _e = np.histogram(px[:, c], bins=self.HIST_BINS, range=(0, 255))
+                hists.append(h.astype(np.float64))
+            peak = max(float(h.max()) for h in hists)
+            if peak > 0:
+                self._hist_data = [h / peak for h in hists]
+        self._draw_histogram()
+        self._draw_pipette()        # keep the readout consistent with the image
+
+    def _draw_histogram(self):
+        c = getattr(self, "hist_canvas", None)
+        if c is None:
+            return
+        c.delete("all")
+        w = max(c.winfo_width(), 1)
+        h = max(c.winfo_height(), 1)
+        data = self._hist_data if self.show_histogram else None
+        if not data:
+            c.create_text(w / 2, h / 2,
+                          text=("—" if self.show_histogram else "(hidden)"),
+                          fill="#666666", font=("Courier", 8))
+            return
+        colors = ("#ff6666", "#66dd66", "#7799ff")
+        n = self.HIST_BINS
+        for ch in range(3):
+            pts = []
+            for i in range(n):
+                px = 2 + (w - 4) * i / (n - 1)
+                py = h - 2 - (h - 6) * min(data[ch][i], 1.0)
+                pts.extend((px, py))
+            c.create_line(*pts, fill=colors[ch], width=1)
+        # Optional clip spikes (red = blown highlights at the right edge, blue =
+        # crushed shadows at the left) when a feature supplies _clip_stats +
+        # CLIP_METER_FULL_PCT.
+        stats = getattr(self, "_clip_stats", None)
+        full = getattr(self, "CLIP_METER_FULL_PCT", None)
+        if stats and full:
+            track = h - 6
+            for pct, color, ex in ((stats.get("hi", 0), "#ff3030", w - 2),
+                                   (stats.get("lo", 0), "#4080ff", 2)):
+                if pct and pct > 0:
+                    bh = track * min(1.0, pct / full)
+                    c.create_line(ex, h - 2, ex, h - 2 - bh, fill=color, width=3)
+
+    def _toggle_histogram(self):
+        self.show_histogram = not self.show_histogram
+        self._draw_histogram()
+        if hasattr(self, "_update_hist_btn"):
+            self._update_hist_btn()
+
+    # --- pipette (per-pixel RGB readout of the displayed image) ---
+
+    def _on_canvas_motion(self, event):
+        self._pointer_xy = (event.x, event.y)
+        self._draw_pipette(event.x, event.y)
+
+    def _on_canvas_leave(self, event):
+        self._pointer_xy = None
+        self._set_pipette(None)
+
+    def _draw_pipette(self, cx=None, cy=None):
+        """Update the pipette readout for the pointer position (or the last one)."""
+        if getattr(self, "pipette_canvas", None) is None:
+            return
+        if cx is None:
+            if self._pointer_xy is None:
+                self._set_pipette(None)
+                return
+            cx, cy = self._pointer_xy
+        if self.pil_image is None:
+            self._set_pipette(None)
+            return
+        arr = self._display_rgb_array()
+        if arr is None:
+            self._set_pipette(None)
+            return
+        ix, iy = canvas_to_image(cx, cy, self.offset_x, self.offset_y, self.zoom)
+        ix, iy = int(math.floor(ix)), int(math.floor(iy))
+        ih, iw = arr.shape[:2]
+        if 0 <= ix < iw and 0 <= iy < ih:
+            self._set_pipette(tuple(int(v) for v in arr[iy, ix][:3]))
+        else:
+            self._set_pipette(None)
+
+    def _set_pipette(self, rgb):
+        """Draw the RGB readout (coloured R/G/B columns) into the pipette canvas."""
+        c = getattr(self, "pipette_canvas", None)
+        if c is None:
+            return
+        c.delete("all")
+        w = max(c.winfo_width(), 1)
+        h = max(c.winfo_height(), 1)
+        if rgb is None:
+            c.create_text(6, h / 2, anchor="w", text="pixel  —", fill="#888888",
+                          font=("Courier", 8))
+            return
+        r, g, b = rgb
+        seg = (w - 8) / 3.0
+        for i, (lab, val, color) in enumerate((("R", r, "#ff6666"),
+                                               ("G", g, "#66dd66"),
+                                               ("B", b, "#7799ff"))):
+            c.create_text(6 + i * seg, h / 2, anchor="w", text=f"{lab} {val:>3}",
+                          fill=color, font=("Courier", 8, "bold"))
+
+    # ------------------------------------------------------------------
     # Info text helper
     # ------------------------------------------------------------------
 
@@ -875,6 +1176,7 @@ class DebugUIBase:
         self.update_counts()
         self._populate_items_list()
         self._refresh_note_entry()
+        self._refresh_histogram()
 
         # Highlight selected row and scroll to it
         self._highlight_lb_row(idx)
@@ -940,6 +1242,19 @@ class DebugUIBase:
         if not hasattr(self, "_cms_xform"):
             self._cms_xform = build_srgb_to_display_transform()
         return self._cms_xform is not None
+
+    def _toggle_color_manage(self):
+        """P: toggle sRGB->monitor-profile display color management. ON matches
+        darktable's color-managed view; OFF shows raw sRGB bytes (over-saturated
+        on a wide-gamut panel). No effect if no monitor profile was detected."""
+        if not self.color_management_available():
+            messagebox.showinfo(
+                "Display color management",
+                "No monitor ICC profile detected — display is already raw sRGB.\n"
+                "Set NEGA_DISPLAY_ICC=<path> to force one.")
+            return
+        self.color_manage = not self.color_manage
+        self._redraw()
 
     def _redraw_markers(self):
         self.canvas.delete(*self.overlay_tags(), "rubberband")
@@ -1131,9 +1446,95 @@ class DebugUIBase:
 
     def _on_canvas_configure(self, event):
         """Canvas resized: re-fit image if we were at fit zoom."""
+        if getattr(self, "_analyzing", False):
+            # While a progress overlay is up the canvas may have no image; keep
+            # the overlay centered on resize (the re-fit path needs an image).
+            self._draw_analyzing_overlay()
+            return
         if self.at_fit_zoom and self.pil_image is not None:
             # Use after() to let the resize settle before measuring
             self.root.after(50, self._fit_to_window)
+
+    # ------------------------------------------------------------------
+    # Canvas progress overlay (SHARED — used while a subclass runs a slow
+    # analysis: a centered message + a progress bar drawn ON the canvas, so it
+    # stays visible at any window size and re-centers on resize. The bar EASES
+    # toward the real target + gently trickles, so staged/bursty real updates
+    # read as smooth motion. negadoctor uses it for process_roll / preset
+    # switches; the dust UI for on-demand detection.)
+    # ------------------------------------------------------------------
+
+    def _show_canvas_message(self, text):
+        """Start the centered analyzing overlay (label + animated progress bar)."""
+        self._analyzing = True
+        self._analyzing_text = text
+        self._analyzing_pct = 0.0       # displayed (animated)
+        self._prog_target = 0.0         # latest REAL progress
+        self._draw_analyzing_overlay()
+        self._start_progress_anim()
+
+    def _set_analyzing_pct(self, pct):
+        # record the real target; the animator eases the displayed value to it
+        self._prog_target = max(getattr(self, "_prog_target", 0.0),
+                                max(0.0, min(100.0, pct)))
+
+    def _start_progress_anim(self):
+        if getattr(self, "_prog_anim_job", None) is None:
+            self._prog_anim_job = self.root.after(60, self._animate_progress)
+
+    def _animate_progress(self):
+        self._prog_anim_job = None
+        if not getattr(self, "_analyzing", False):
+            return
+        disp, tgt = self._analyzing_pct, self._prog_target
+        # ease up toward the real target (a jump becomes a ~0.5s glide); never back
+        disp = max(disp, disp + (tgt - disp) * 0.25)
+        # once caught up, trickle slowly so a long opaque stage never looks frozen
+        # — but stay within a small margin of real progress (and < 99)
+        cap = min(99.0, tgt + 12.0)
+        if disp < cap:
+            disp = min(cap, disp + (cap - disp) * 0.04)
+        self._analyzing_pct = disp
+        self._draw_analyzing_overlay()
+        self._prog_anim_job = self.root.after(60, self._animate_progress)
+
+    def _clear_canvas_message(self):
+        self._analyzing = False
+        if getattr(self, "_prog_anim_job", None) is not None:
+            try:
+                self.root.after_cancel(self._prog_anim_job)
+            except Exception:
+                pass
+            self._prog_anim_job = None
+        self.canvas.delete("analyzing_msg")
+
+    def _draw_analyzing_overlay(self):
+        """(Re)draw the centered analyzing label + progress bar on the canvas."""
+        c = self.canvas
+        c.delete("analyzing_msg")
+        if not getattr(self, "_analyzing", False):
+            return
+        cw, ch = max(c.winfo_width(), 1), max(c.winfo_height(), 1)
+        cx, cy = cw / 2, ch / 2
+        pct = getattr(self, "_analyzing_pct", 0.0)
+        # dim whatever is behind (a frame during a preset/detect switch) so the
+        # label + bar stay readable; stipple fakes alpha. First item -> behind.
+        c.create_rectangle(0, 0, cw, ch, fill="#000000", stipple="gray50",
+                           outline="", tags="analyzing_msg")
+        c.create_text(cx, cy - self.scaled(24),
+                      text=getattr(self, "_analyzing_text", "Working…"),
+                      fill="#ffffff", font=("", 14), justify="center",
+                      tags="analyzing_msg")
+        bar_w = min(cw * 0.6, self.scaled(420))
+        bar_h = self.scaled(22)
+        x0, y0 = cx - bar_w / 2, cy + self.scaled(8)
+        c.create_rectangle(x0, y0, x0 + bar_w, y0 + bar_h, fill="#333333",
+                           outline="#555555", tags="analyzing_msg")
+        if pct > 0:
+            c.create_rectangle(x0, y0, x0 + bar_w * pct / 100.0, y0 + bar_h,
+                               fill="#4a90d9", outline="", tags="analyzing_msg")
+        c.create_text(cx, y0 + bar_h / 2, text=f"{pct:.0f}%", fill="#ffffff",
+                      font=("", 10, "bold"), tags="analyzing_msg")
 
     def _on_root_configure(self, event):
         """Window resized/maximized: debounce, then reflow panes + re-fit."""

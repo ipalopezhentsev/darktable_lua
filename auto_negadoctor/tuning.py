@@ -19,16 +19,11 @@ facts, not taste knobs (a "different" value means a corrupt sidecar, not a
 different look), so they stay as plain constants in auto_negadoctor.py.
 """
 import collections
-import json
 import os
+import sys
 
-_Field = collections.namedtuple("_Field", "kind doc")
-
-
-def _F(doc, kind="float"):
-    """A schema entry. `kind` drives load-time coercion so a JSON `2` stays an
-    int and a JSON `[5, 30]` becomes the `(5.0, 30.0)` tuple the code expects."""
-    return _Field(kind, doc)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from common.calibration.schema import TuningSchema, _F  # noqa: E402
 
 
 # Order matches the historical _TUNABLE_NAMES so Tuning._fields is unchanged.
@@ -224,8 +219,10 @@ FIELDS = collections.OrderedDict([
     ("VIG_TAIL_CUT_REL", _F("outward from the envelope peak, cut the falling corner-leak tail once a bin drops below this fraction of the running max")),
 ])
 
-INT_FIELDS = frozenset(n for n, f in FIELDS.items() if f.kind == "int")
-TUPLE_FIELDS = frozenset(n for n, f in FIELDS.items() if f.kind == "tuple")
+# The generic machinery (coerce / flatten / load / dump / the Tuning namedtuple)
+# lives in common/calibration/schema.py; this module owns only the FIELDS docs +
+# the GROUPS layout above. The module-level names below are kept for back-compat.
+PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
 
 # Nested layout a preset JSON is written in: top level = the three calibration
 # KINDS (so the file mirrors how you run/tune), each split into pipeline
@@ -272,101 +269,16 @@ GROUPS = collections.OrderedDict([
     ])),
 ])
 
-# Guard: the grouping must cover EXACTLY the field set, once each (so a new
-# constant can't be silently dropped from presets).
-_grouped = [n for kind in GROUPS.values() for grp in kind.values() for n in grp]
-assert sorted(_grouped) == sorted(FIELDS) and len(_grouped) == len(FIELDS), (
-    "GROUPS must partition FIELDS exactly: "
-    f"missing {sorted(set(FIELDS) - set(_grouped))}, "
-    f"extra/dup {sorted([n for n in _grouped if _grouped.count(n) > 1 or n not in FIELDS])}")
-
-Tuning = collections.namedtuple("Tuning", list(FIELDS))
-Tuning.__doc__ = (
-    "Immutable tuning configuration (one field per fittable constant; values "
-    "loaded from a preset JSON). Field docs:\n\n"
-    + "\n".join(f"  {n}: {f.doc}" for n, f in FIELDS.items()))
-
-PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
-
-
-def preset_path(preset):
-    """Resolve a preset selector to a JSON path. A bare NAME -> presets/NAME.json;
-    a value containing a path separator or ending in .json is used verbatim."""
-    if os.sep in preset or (os.altsep and os.altsep in preset) or preset.endswith(".json"):
-        return preset
-    return os.path.join(PRESETS_DIR, preset + ".json")
-
-
-def _coerce(name, val):
-    if name in INT_FIELDS:
-        return int(round(val)) if isinstance(val, float) else int(val)
-    if name in TUPLE_FIELDS:
-        return tuple(float(x) for x in val)
-    return float(val)
-
-
-def from_mapping(raw, source="<mapping>"):
-    """Build a Tuning from a flat name->value mapping, validating it covers
-    EXACTLY the schema (no missing or unknown keys) and coercing types."""
-    missing = [n for n in FIELDS if n not in raw]
-    unknown = [n for n in raw if n not in FIELDS]
-    if missing or unknown:
-        raise ValueError(
-            f"preset {source}: missing {missing or '[]'}, unknown {unknown or '[]'}")
-    return Tuning(**{n: _coerce(n, raw[n]) for n in FIELDS})
-
-
-def _flatten(tree, source, _flat=None):
-    """Collapse a (possibly nested) preset mapping to a flat name->value dict.
-    Any key that is a field name is a leaf; any other key must map to a nested
-    dict (a group) and is recursed into. Accepts the OLD flat layout unchanged
-    (every key is a leaf). Raises on a stray/unknown key."""
-    flat = {} if _flat is None else _flat
-    for k, v in tree.items():
-        if k in FIELDS:
-            if k in flat:
-                raise ValueError(f"preset {source}: field {k!r} appears twice")
-            flat[k] = v
-        elif isinstance(v, dict):
-            _flatten(v, source, flat)
-        else:
-            raise ValueError(
-                f"preset {source}: {k!r} is neither a tuning field nor a group")
-    return flat
-
-
-def load(preset="default"):
-    """Load + validate a preset (NAME or path) into an immutable Tuning. The
-    JSON may be nested by GROUPS or a flat name->value map (both accepted)."""
-    path = preset_path(preset)
-    with open(path, encoding="utf-8") as fh:
-        raw = json.load(fh)
-    return from_mapping(_flatten(raw, path), source=path)
-
-
-def to_mapping(cfg):
-    """Tuning -> a FLAT JSON-ready dict (tuples become lists)."""
-    out = collections.OrderedDict()
-    for n in FIELDS:
-        v = getattr(cfg, n)
-        out[n] = list(v) if isinstance(v, tuple) else v
-    return out
-
-
-def to_nested(cfg):
-    """Tuning -> a NESTED JSON-ready dict grouped by GROUPS (tuples -> lists)."""
-    flat = to_mapping(cfg)
-    out = collections.OrderedDict()
-    for kind, subs in GROUPS.items():
-        out[kind] = collections.OrderedDict(
-            (sub, collections.OrderedDict((n, flat[n]) for n in names))
-            for sub, names in subs.items())
-    return out
-
-
-def dump(cfg, path):
-    """Write a Tuning as a NESTED preset JSON (values only; docs live in this
-    module). Used by the calibration runner to emit a fitted preset directly."""
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(to_nested(cfg), fh, indent=2)
-        fh.write("\n")
+# Build the shared schema from this feature's FIELDS + GROUPS (validates that
+# GROUPS partitions FIELDS exactly) and expose its API at module level so existing
+# callers (`tuning.load`, `tuning.Tuning`, `tuning.dump`, …) are unchanged.
+_schema = TuningSchema(FIELDS, GROUPS, PRESETS_DIR)
+Tuning = _schema.Tuning
+INT_FIELDS = _schema.INT_FIELDS
+TUPLE_FIELDS = _schema.TUPLE_FIELDS
+preset_path = _schema.preset_path
+from_mapping = _schema.from_mapping
+load = _schema.load
+to_mapping = _schema.to_mapping
+to_nested = _schema.to_nested
+dump = _schema.dump

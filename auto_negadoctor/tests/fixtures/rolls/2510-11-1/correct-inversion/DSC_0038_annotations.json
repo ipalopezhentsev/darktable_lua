@@ -1,0 +1,39 @@
+{
+  "stem": "DSC_0038",
+  "patch_corrections": {},
+  "print_overrides": {
+    "gamma": {
+      "applied": 4.53125,
+      "corrected": 5.2
+    }
+  },
+  "wb_overrides": {
+    "highlights": {
+      "applied": [
+        1.1672757470982007,
+        1.0,
+        2.0
+      ],
+      "corrected": [
+        1.532,
+        1.212,
+        1.0
+      ]
+    },
+    "shadows": {
+      "applied": [
+        0.25,
+        0.25,
+        1.0
+      ],
+      "corrected": [
+        0.375,
+        0.682,
+        1.0
+      ]
+    }
+  },
+  "patch_notes": {},
+  "bad_inversion": false,
+  "bad_inversion_note": ""
+}

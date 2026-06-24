@@ -1,0 +1,1975 @@
+{
+  "wall_seconds": 31949.79,
+  "prep_seconds": 118.24,
+  "prep_seconds_by_roll": {
+    "2506-1": 57.16,
+    "2510-11-1": 61.08
+  },
+  "trial_count": 1,
+  "objective_initial": 0.05564801092702923,
+  "objective_final": 0.05564801092702923,
+  "trace": {
+    "method": "none",
+    "trials": 1,
+    "best_objective": 0.05564801092702923,
+    "improvements": [
+      {
+        "trial": 1,
+        "objective": 0.05564801092702923
+      }
+    ]
+  },
+  "principal_components": {
+    "f0": 0.05564801092702923,
+    "n_evals": 595,
+    "components": [
+      {
+        "eigenvalue": 0.020034028974947528,
+        "variance_pct": 17.80783146531442,
+        "top_loadings": [
+          {
+            "param": "PATCH_STRIDE_DIV",
+            "weight": 0.47
+          },
+          {
+            "param": "WB_HIGH_PRIOR[2]",
+            "weight": 0.371
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[1]",
+            "weight": 0.354
+          },
+          {
+            "param": "PRINT_HI_CEIL",
+            "weight": 0.346
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": 0.304
+          },
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": 0.243
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.017157979489605343,
+        "variance_pct": 15.251370925853106,
+        "top_loadings": [
+          {
+            "param": "HIGHLIGHT_BAND_PCT[1]",
+            "weight": -0.509
+          },
+          {
+            "param": "PATCH_STRIDE_DIV",
+            "weight": -0.507
+          },
+          {
+            "param": "PATCH_WIN_FRAC",
+            "weight": 0.336
+          },
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": 0.32
+          },
+          {
+            "param": "WB_HIGH_PRIOR[1]",
+            "weight": 0.301
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": 0.228
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.01542586172979605,
+        "variance_pct": 13.711727493005242,
+        "top_loadings": [
+          {
+            "param": "PATCH_WIN_FRAC",
+            "weight": -0.762
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": 0.372
+          },
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": 0.363
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[1]",
+            "weight": -0.25
+          },
+          {
+            "param": "PATCH_STRIDE_DIV",
+            "weight": 0.141
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": -0.116
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.011712730907656257,
+        "variance_pct": 10.411202772190665,
+        "top_loadings": [
+          {
+            "param": "PATCH_STRIDE_DIV",
+            "weight": -0.639
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[1]",
+            "weight": 0.612
+          },
+          {
+            "param": "WB_HIGH_PRIOR[2]",
+            "weight": 0.26
+          },
+          {
+            "param": "PATCH_WIN_FRAC",
+            "weight": -0.254
+          },
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": 0.216
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[0]",
+            "weight": -0.135
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.007337764625753268,
+        "variance_pct": 6.5223862834062,
+        "top_loadings": [
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": 0.566
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": -0.509
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": -0.387
+          },
+          {
+            "param": "P_HIGH",
+            "weight": 0.295
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": 0.223
+          },
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": 0.2
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.005452278083423009,
+        "variance_pct": 4.846416531244872,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_PRIOR[2]",
+            "weight": -0.47
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": -0.385
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": 0.376
+          },
+          {
+            "param": "PRINT_HI_CEIL",
+            "weight": 0.266
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[0]",
+            "weight": -0.242
+          },
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": -0.233
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.005116591757026312,
+        "variance_pct": 4.548031941047953,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_PRIOR[2]",
+            "weight": 0.568
+          },
+          {
+            "param": "WB_HIGH_PRIOR[1]",
+            "weight": -0.472
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": -0.384
+          },
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": -0.283
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": 0.243
+          },
+          {
+            "param": "PRINT_CLIP_BUDGET",
+            "weight": -0.204
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.004695050046175849,
+        "variance_pct": 4.1733322861850946,
+        "top_loadings": [
+          {
+            "param": "HIGHLIGHT_BAND_PCT[0]",
+            "weight": 0.763
+          },
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": -0.244
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": 0.23
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": 0.229
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[1]",
+            "weight": 0.226
+          },
+          {
+            "param": "WB_HIGH_PRIOR[1]",
+            "weight": -0.206
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.004363312173847004,
+        "variance_pct": 3.8784573946452348,
+        "top_loadings": [
+          {
+            "param": "PRINT_HI_CEIL",
+            "weight": 0.557
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": -0.455
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": -0.38
+          },
+          {
+            "param": "P_HIGH",
+            "weight": -0.269
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": 0.248
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[0]",
+            "weight": 0.206
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.00396685006415974,
+        "variance_pct": 3.5260504753719095,
+        "top_loadings": [
+          {
+            "param": "PRINT_HI_CEIL",
+            "weight": 0.574
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": 0.537
+          },
+          {
+            "param": "WB_HIGH_DESAT",
+            "weight": -0.34
+          },
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": -0.272
+          },
+          {
+            "param": "PATCH_WIN_FRAC",
+            "weight": -0.168
+          },
+          {
+            "param": "WB_HIGH_PRIOR[2]",
+            "weight": -0.164
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.003888348255316109,
+        "variance_pct": 3.45627185104438,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_DESAT",
+            "weight": 0.702
+          },
+          {
+            "param": "P_HIGH",
+            "weight": 0.297
+          },
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": -0.283
+          },
+          {
+            "param": "P_LOW",
+            "weight": -0.27
+          },
+          {
+            "param": "PRINT_HI_CEIL",
+            "weight": 0.242
+          },
+          {
+            "param": "PRINT_GAMMA",
+            "weight": -0.189
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.0033616474061629845,
+        "variance_pct": 2.9880984264134316,
+        "top_loadings": [
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": -0.708
+          },
+          {
+            "param": "WB_HIGH_PRIOR[0]",
+            "weight": 0.39
+          },
+          {
+            "param": "WB_HIGH_PRIOR[1]",
+            "weight": 0.328
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": -0.26
+          },
+          {
+            "param": "WB_HIGH_DESAT",
+            "weight": -0.198
+          },
+          {
+            "param": "P_LOW",
+            "weight": -0.183
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.003124077027002627,
+        "variance_pct": 2.7769270600083584,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_PRIOR[1]",
+            "weight": -0.617
+          },
+          {
+            "param": "HIGHLIGHT_BAND_PCT[0]",
+            "weight": -0.423
+          },
+          {
+            "param": "WB_HIGH_PRIOR[0]",
+            "weight": 0.378
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": 0.362
+          },
+          {
+            "param": "WB_HIGH_PRIOR[2]",
+            "weight": -0.182
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": 0.155
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.0018812989499656712,
+        "variance_pct": 1.6722474884485587,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_PRIOR[0]",
+            "weight": 0.5
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": -0.476
+          },
+          {
+            "param": "WB_HIGH_BAND_PCT[0]",
+            "weight": 0.367
+          },
+          {
+            "param": "P_HIGH",
+            "weight": -0.28
+          },
+          {
+            "param": "WB_HIGH_BAND_PCT[1]",
+            "weight": 0.237
+          },
+          {
+            "param": "WB_HIGH_PRIOR[1]",
+            "weight": -0.224
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.0013409841486590995,
+        "variance_pct": 1.1919729050427774,
+        "top_loadings": [
+          {
+            "param": "P_HIGH",
+            "weight": 0.547
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": -0.495
+          },
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": 0.382
+          },
+          {
+            "param": "PRINT_HI_PCT",
+            "weight": -0.348
+          },
+          {
+            "param": "P_LOW",
+            "weight": 0.262
+          },
+          {
+            "param": "PATCH_UNIFORMITY_MAX",
+            "weight": -0.227
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.0007570775107464065,
+        "variance_pct": 0.6729504451855813,
+        "top_loadings": [
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": -0.575
+          },
+          {
+            "param": "P_LOW",
+            "weight": 0.536
+          },
+          {
+            "param": "PRINT_CLIP_BUDGET",
+            "weight": 0.398
+          },
+          {
+            "param": "P_HIGH",
+            "weight": 0.235
+          },
+          {
+            "param": "WB_HIGH_BAND_PCT[1]",
+            "weight": 0.206
+          },
+          {
+            "param": "WB_HIGH_DESAT",
+            "weight": -0.191
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.000755692679860929,
+        "variance_pct": 0.6717194978285925,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_BAND_PCT[0]",
+            "weight": -0.499
+          },
+          {
+            "param": "P_LOW",
+            "weight": -0.33
+          },
+          {
+            "param": "DMAX_DEFAULT",
+            "weight": -0.317
+          },
+          {
+            "param": "P_HIGH",
+            "weight": 0.316
+          },
+          {
+            "param": "PRINT_CLIP_BUDGET",
+            "weight": 0.267
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": 0.267
+          }
+        ]
+      },
+      {
+        "eigenvalue": -0.0006185903400363795,
+        "variance_pct": 0.5498520809376156,
+        "top_loadings": [
+          {
+            "param": "PRINT_CLIP_BUDGET",
+            "weight": 0.628
+          },
+          {
+            "param": "P_LOW",
+            "weight": -0.476
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": -0.394
+          },
+          {
+            "param": "WB_HIGH_BAND_PCT[1]",
+            "weight": 0.228
+          },
+          {
+            "param": "WB_HIGH_BAND_PCT[0]",
+            "weight": 0.2
+          },
+          {
+            "param": "WB_HIGH_PRIOR[0]",
+            "weight": -0.178
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.0006025841159714266,
+        "variance_pct": 0.5356244814417189,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_BAND_PCT[0]",
+            "weight": -0.685
+          },
+          {
+            "param": "P_HIGH",
+            "weight": -0.331
+          },
+          {
+            "param": "P_LOW",
+            "weight": 0.304
+          },
+          {
+            "param": "PRINT_CLIP_BUDGET",
+            "weight": 0.264
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": -0.231
+          },
+          {
+            "param": "WB_HIGH_DESAT",
+            "weight": 0.226
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.00040449286204814587,
+        "variance_pct": 0.3595452879340224,
+        "top_loadings": [
+          {
+            "param": "WB_HIGH_BAND_PCT[1]",
+            "weight": -0.851
+          },
+          {
+            "param": "PRINT_CLIP_BUDGET",
+            "weight": 0.342
+          },
+          {
+            "param": "WB_HIGH_BAND_PCT[0]",
+            "weight": 0.186
+          },
+          {
+            "param": "P_LOW",
+            "weight": 0.184
+          },
+          {
+            "param": "P_HIGH",
+            "weight": -0.136
+          },
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": -0.096
+          }
+        ]
+      },
+      {
+        "eigenvalue": 0.00038573951255119,
+        "variance_pct": 0.3428758258068816,
+        "top_loadings": [
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": 0.47
+          },
+          {
+            "param": "WB_HIGH_PRIOR[0]",
+            "weight": -0.461
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": 0.391
+          },
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": -0.321
+          },
+          {
+            "param": "P_LOW",
+            "weight": 0.222
+          },
+          {
+            "param": "WB_LOW_DESAT",
+            "weight": -0.222
+          }
+        ]
+      },
+      {
+        "eigenvalue": -9.743518797708074e-05,
+        "variance_pct": 0.08660811105229163,
+        "top_loadings": [
+          {
+            "param": "WB_LOW_DESAT",
+            "weight": -0.958
+          },
+          {
+            "param": "OFFSET_DEFAULT",
+            "weight": 0.136
+          },
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": -0.122
+          },
+          {
+            "param": "WB_LOW_BAND_PCT[1]",
+            "weight": -0.095
+          },
+          {
+            "param": "WB_HIGH_PRIOR[0]",
+            "weight": 0.092
+          },
+          {
+            "param": "PATCH_CHROMA_MAX",
+            "weight": -0.079
+          }
+        ]
+      },
+      {
+        "eigenvalue": 1.9654737141113352e-05,
+        "variance_pct": 0.01747068684694857,
+        "top_loadings": [
+          {
+            "param": "WB_LOW_BAND_PCT[1]",
+            "weight": -0.98
+          },
+          {
+            "param": "WB_LOW_DESAT",
+            "weight": 0.125
+          },
+          {
+            "param": "WB_LOW_BAND_PCT[0]",
+            "weight": -0.108
+          },
+          {
+            "param": "PRINT_TUNE_ITERS",
+            "weight": -0.057
+          }
+        ]
+      },
+      {
+        "eigenvalue": -8.744733434908885e-07,
+        "variance_pct": 0.0007773011580081603,
+        "top_loadings": [
+          {
+            "param": "WB_LOW_BAND_PCT[0]",
+            "weight": -0.99
+          },
+          {
+            "param": "WB_LOW_BAND_PCT[1]",
+            "weight": 0.12
+          },
+          {
+            "param": "WB_LOW_DESAT",
+            "weight": 0.054
+          }
+        ]
+      },
+      {
+        "eigenvalue": -2.0960558947271212e-07,
+        "variance_pct": 0.00018631404677439404,
+        "top_loadings": [
+          {
+            "param": "WB_LOW_PRIOR[0]",
+            "weight": 0.869
+          },
+          {
+            "param": "WB_LOW_PRIOR[1]",
+            "weight": -0.495
+          }
+        ]
+      },
+      {
+        "eigenvalue": -5.16081527130256e-08,
+        "variance_pct": 4.5873413026356876e-05,
+        "top_loadings": [
+          {
+            "param": "WB_LOW_PRIOR[1]",
+            "weight": 0.731
+          },
+          {
+            "param": "WB_LOW_PRIOR[2]",
+            "weight": -0.543
+          },
+          {
+            "param": "WB_LOW_PRIOR[0]",
+            "weight": 0.414
+          }
+        ]
+      },
+      {
+        "eigenvalue": 2.1144747833055835e-08,
+        "variance_pct": 1.87951263452047e-05,
+        "top_loadings": [
+          {
+            "param": "WB_LOW_PRIOR[2]",
+            "weight": 0.839
+          },
+          {
+            "param": "WB_LOW_PRIOR[1]",
+            "weight": 0.47
+          },
+          {
+            "param": "WB_LOW_PRIOR[0]",
+            "weight": 0.272
+          }
+        ]
+      },
+      {
+        "eigenvalue": -6.862347553051783e-19,
+        "variance_pct": 6.099797940492847e-16,
+        "top_loadings": [
+          {
+            "param": "PATCH_LUMA_FLOOR",
+            "weight": -0.761
+          },
+          {
+            "param": "SHADOW_MIN_LUMA",
+            "weight": -0.59
+          },
+          {
+            "param": "PATCH_CHROMA_FLOOR",
+            "weight": -0.179
+          },
+          {
+            "param": "MIN_PATCH_DENSITY",
+            "weight": -0.161
+          },
+          {
+            "param": "HIGHLIGHT_CLIP_FRAC_MAX",
+            "weight": -0.121
+          }
+        ]
+      },
+      {
+        "eigenvalue": -4.568934540944927e-19,
+        "variance_pct": 4.061230837938032e-16,
+        "top_loadings": [
+          {
+            "param": "SHADOW_MIN_LUMA",
+            "weight": 0.799
+          },
+          {
+            "param": "PATCH_LUMA_FLOOR",
+            "weight": -0.548
+          },
+          {
+            "param": "HIGHLIGHT_CLIP_FRAC_MAX",
+            "weight": -0.205
+          },
+          {
+            "param": "MIN_PATCH_DENSITY",
+            "weight": -0.13
+          },
+          {
+            "param": "PATCH_CHROMA_FLOOR",
+            "weight": -0.051
+          }
+        ]
+      },
+      {
+        "eigenvalue": 4.432800306950969e-19,
+        "variance_pct": 3.940223950174437e-16,
+        "top_loadings": [
+          {
+            "param": "PATCH_CHROMA_FLOOR",
+            "weight": -0.973
+          },
+          {
+            "param": "PATCH_LUMA_FLOOR",
+            "weight": 0.166
+          },
+          {
+            "param": "MIN_PATCH_DENSITY",
+            "weight": 0.134
+          },
+          {
+            "param": "HIGHLIGHT_CLIP_FRAC_MAX",
+            "weight": -0.059
+          },
+          {
+            "param": "SHADOW_MIN_LUMA",
+            "weight": 0.058
+          }
+        ]
+      },
+      {
+        "eigenvalue": 1.5157624777973287e-19,
+        "variance_pct": 1.3473297248304953e-16,
+        "top_loadings": [
+          {
+            "param": "HIGHLIGHT_CLIP_FRAC_MAX",
+            "weight": -0.858
+          },
+          {
+            "param": "MIN_PATCH_DENSITY",
+            "weight": 0.486
+          },
+          {
+            "param": "PATCH_CHROMA_FLOOR",
+            "weight": 0.126
+          },
+          {
+            "param": "SHADOW_MIN_LUMA",
+            "weight": -0.085
+          },
+          {
+            "param": "PATCH_LUMA_FLOOR",
+            "weight": 0.07
+          }
+        ]
+      },
+      {
+        "eigenvalue": -5.587856273914262e-20,
+        "variance_pct": 4.9669291635096884e-17,
+        "top_loadings": [
+          {
+            "param": "MIN_PATCH_DENSITY",
+            "weight": 0.835
+          },
+          {
+            "param": "HIGHLIGHT_CLIP_FRAC_MAX",
+            "weight": 0.452
+          },
+          {
+            "param": "PATCH_LUMA_FLOOR",
+            "weight": -0.297
+          },
+          {
+            "param": "WB_REGION_MIN_FRAC",
+            "weight": -0.077
+          },
+          {
+            "param": "SHADOW_MIN_LUMA",
+            "weight": 0.05
+          }
+        ]
+      },
+      {
+        "eigenvalue": 1.7894211235040978e-20,
+        "variance_pct": 1.590579200403598e-17,
+        "top_loadings": [
+          {
+            "param": "WB_REGION_MIN_FRAC",
+            "weight": 0.997
+          },
+          {
+            "param": "MIN_PATCH_DENSITY",
+            "weight": 0.075
+          }
+        ]
+      }
+    ],
+    "sensitivity": [
+      {
+        "param": "PATCH_WIN_FRAC",
+        "h": 0.01,
+        "gradient": 0.003427347387963995,
+        "curvature": -0.011022577335592261,
+        "max_step_delta": 0.008938636055760125
+      },
+      {
+        "param": "PATCH_STRIDE_DIV",
+        "h": 1.0,
+        "gradient": -0.0035841813826807123,
+        "curvature": -0.0052702091895528436,
+        "max_step_delta": 0.006219285977457134
+      },
+      {
+        "param": "PRINT_HI_PCT",
+        "h": 0.1,
+        "gradient": -0.0029697504250476604,
+        "curvature": -0.00594871584545751,
+        "max_step_delta": 0.005944108347776415
+      },
+      {
+        "param": "HIGHLIGHT_BAND_PCT[1]",
+        "h": 1.0,
+        "gradient": -0.0020745408540582613,
+        "curvature": -0.007033992477390991,
+        "max_step_delta": 0.005591537092753757
+      },
+      {
+        "param": "PRINT_GAMMA",
+        "h": 0.25,
+        "gradient": -0.003130115358220331,
+        "curvature": -0.004303045924990201,
+        "max_step_delta": 0.005281638320715432
+      },
+      {
+        "param": "WB_HIGH_PRIOR[2]",
+        "h": 0.05,
+        "gradient": -0.003816321704991934,
+        "curvature": 0.00209782871380277,
+        "max_step_delta": 0.004865236061893319
+      },
+      {
+        "param": "PRINT_HI_CEIL",
+        "h": 0.01,
+        "gradient": 0.002377369345899806,
+        "curvature": -0.0011237492656950426,
+        "max_step_delta": 0.0029392439787473273
+      },
+      {
+        "param": "OFFSET_DEFAULT",
+        "h": 0.01,
+        "gradient": -0.0019959411860372943,
+        "curvature": 0.00176663612326982,
+        "max_step_delta": 0.0028792592476722043
+      },
+      {
+        "param": "WB_HIGH_PRIOR[0]",
+        "h": 0.05,
+        "gradient": 0.0013522119786619838,
+        "curvature": 0.0007931453893512547,
+        "max_step_delta": 0.0017487846733376111
+      },
+      {
+        "param": "WB_HIGH_DESAT",
+        "h": 0.05,
+        "gradient": -0.0007797428063933062,
+        "curvature": -0.0015594856127866125,
+        "max_step_delta": 0.0015594856127866125
+      },
+      {
+        "param": "HIGHLIGHT_BAND_PCT[0]",
+        "h": 2.0,
+        "gradient": 0.0,
+        "curvature": 0.0030489225301977285,
+        "max_step_delta": 0.0015244612650988643
+      },
+      {
+        "param": "PATCH_UNIFORMITY_MAX",
+        "h": 0.05,
+        "gradient": -0.00025401333276982643,
+        "curvature": -0.002332704360165007,
+        "max_step_delta": 0.0014203655128523299
+      },
+      {
+        "param": "PRINT_TUNE_ITERS",
+        "h": 2.0,
+        "gradient": 0.0007353967637293082,
+        "curvature": -0.0010183429507537728,
+        "max_step_delta": 0.0012445682391061946
+      },
+      {
+        "param": "DMAX_DEFAULT",
+        "h": 0.05,
+        "gradient": -0.0005386978205316126,
+        "curvature": -0.0013524609040354435,
+        "max_step_delta": 0.0012149282725493343
+      },
+      {
+        "param": "WB_HIGH_PRIOR[1]",
+        "h": 0.05,
+        "gradient": -0.00010163889006389523,
+        "curvature": 0.0021048643430696193,
+        "max_step_delta": 0.0011540710615987049
+      },
+      {
+        "param": "P_HIGH",
+        "h": 0.1,
+        "gradient": 0.00045032942911576654,
+        "curvature": -0.00099660801087071,
+        "max_step_delta": 0.0009486334345511216
+      },
+      {
+        "param": "PRINT_CLIP_BUDGET",
+        "h": 0.002,
+        "gradient": -0.0007960705148510466,
+        "curvature": -0.00023253666492326075,
+        "max_step_delta": 0.000912338847312677
+      },
+      {
+        "param": "WB_HIGH_BAND_PCT[0]",
+        "h": 2.0,
+        "gradient": -0.0003041809682002086,
+        "curvature": 0.0006740857957303198,
+        "max_step_delta": 0.0006412238660653685
+      },
+      {
+        "param": "P_LOW",
+        "h": 0.5,
+        "gradient": -0.00017334056244676377,
+        "curvature": -0.00034668112489352754,
+        "max_step_delta": 0.00034668112489352754
+      },
+      {
+        "param": "WB_HIGH_BAND_PCT[1]",
+        "h": 1.0,
+        "gradient": -0.00014540065586446035,
+        "curvature": 0.0003538643801997074,
+        "max_step_delta": 0.00032233284596431405
+      },
+      {
+        "param": "WB_LOW_DESAT",
+        "h": 0.05,
+        "gradient": -2.951126508221949e-05,
+        "curvature": -5.902253016443898e-05,
+        "max_step_delta": 5.902253016443898e-05
+      },
+      {
+        "param": "WB_LOW_BAND_PCT[1]",
+        "h": 2.0,
+        "gradient": 1.0784551477190096e-05,
+        "curvature": 2.1569102954380193e-05,
+        "max_step_delta": 2.1569102954380193e-05
+      },
+      {
+        "param": "WB_LOW_PRIOR[0]",
+        "h": 0.05,
+        "gradient": 1.0581425192654481e-06,
+        "curvature": -1.6049973410037222e-07,
+        "max_step_delta": 1.1383923863156342e-06
+      },
+      {
+        "param": "WB_LOW_PRIOR[2]",
+        "h": 0.05,
+        "gradient": -4.5951778234257223e-07,
+        "curvature": 1.2691799347597232e-09,
+        "max_step_delta": 4.601523723099521e-07
+      },
+      {
+        "param": "WB_LOW_PRIOR[1]",
+        "h": 0.05,
+        "gradient": -2.4862013454571286e-07,
+        "curvature": -7.427195373305162e-08,
+        "max_step_delta": 2.8575611141223867e-07
+      },
+      {
+        "param": "WB_LOW_BAND_PCT[0]",
+        "h": 1.0,
+        "gradient": -9.834627952287622e-09,
+        "curvature": -1.9669255904575245e-08,
+        "max_step_delta": 1.9669255904575245e-08
+      },
+      {
+        "param": "SHADOW_MIN_LUMA",
+        "h": 0.001,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      },
+      {
+        "param": "PATCH_CHROMA_MAX",
+        "h": 0.05,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      },
+      {
+        "param": "PATCH_CHROMA_FLOOR",
+        "h": 0.005,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      },
+      {
+        "param": "PATCH_LUMA_FLOOR",
+        "h": 0.005,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      },
+      {
+        "param": "MIN_PATCH_DENSITY",
+        "h": 0.01,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      },
+      {
+        "param": "HIGHLIGHT_CLIP_FRAC_MAX",
+        "h": 0.005,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      },
+      {
+        "param": "WB_REGION_MIN_FRAC",
+        "h": 0.0001,
+        "gradient": 0.0,
+        "curvature": 0.0,
+        "max_step_delta": 0.0
+      }
+    ]
+  },
+  "init": {
+    "P_LOW": 0.5,
+    "P_HIGH": 99.72265625000001,
+    "OFFSET_DEFAULT": 0.006250000000000007,
+    "DMAX_DEFAULT": 1.7217812499999998,
+    "PATCH_WIN_FRAC": 0.049375,
+    "PATCH_STRIDE_DIV": 2.0,
+    "HIGHLIGHT_BAND_PCT[0]": 73.75,
+    "HIGHLIGHT_BAND_PCT[1]": 96.75,
+    "SHADOW_MIN_LUMA": 0.005,
+    "PATCH_CHROMA_MAX": 0.35,
+    "PATCH_CHROMA_FLOOR": 0.02,
+    "PATCH_UNIFORMITY_MAX": 0.45,
+    "PATCH_LUMA_FLOOR": 0.02,
+    "MIN_PATCH_DENSITY": 0.05,
+    "HIGHLIGHT_CLIP_FRAC_MAX": 0.02,
+    "WB_LOW_BAND_PCT[0]": 0.0,
+    "WB_LOW_BAND_PCT[1]": 20.0,
+    "WB_HIGH_BAND_PCT[0]": 70.0,
+    "WB_HIGH_BAND_PCT[1]": 95.0,
+    "WB_LOW_DESAT": 0.0,
+    "WB_HIGH_DESAT": 0.0,
+    "WB_REGION_MIN_FRAC": 0.0001,
+    "WB_HIGH_PRIOR[0]": 1.758984375,
+    "WB_HIGH_PRIOR[1]": 1.365625,
+    "WB_HIGH_PRIOR[2]": 1.0640625,
+    "WB_LOW_PRIOR[0]": 1.0890625,
+    "WB_LOW_PRIOR[1]": 0.74609375,
+    "WB_LOW_PRIOR[2]": 0.694140625,
+    "PRINT_HI_PCT": 99.91546875,
+    "PRINT_HI_CEIL": 0.9692578125,
+    "PRINT_CLIP_BUDGET": 0.003,
+    "PRINT_TUNE_ITERS": 11.0,
+    "PRINT_GAMMA": 4.53125
+  },
+  "fitted": {
+    "P_LOW": 0.5,
+    "P_HIGH": 99.72265625000001,
+    "OFFSET_DEFAULT": 0.006250000000000007,
+    "DMAX_DEFAULT": 1.7217812499999998,
+    "PATCH_WIN_FRAC": 0.049375,
+    "PATCH_STRIDE_DIV": 2.0,
+    "HIGHLIGHT_BAND_PCT[0]": 73.75,
+    "HIGHLIGHT_BAND_PCT[1]": 96.75,
+    "SHADOW_MIN_LUMA": 0.005,
+    "PATCH_CHROMA_MAX": 0.35,
+    "PATCH_CHROMA_FLOOR": 0.02,
+    "PATCH_UNIFORMITY_MAX": 0.45,
+    "PATCH_LUMA_FLOOR": 0.02,
+    "MIN_PATCH_DENSITY": 0.05,
+    "HIGHLIGHT_CLIP_FRAC_MAX": 0.02,
+    "WB_LOW_BAND_PCT[0]": 0.0,
+    "WB_LOW_BAND_PCT[1]": 20.0,
+    "WB_HIGH_BAND_PCT[0]": 70.0,
+    "WB_HIGH_BAND_PCT[1]": 95.0,
+    "WB_LOW_DESAT": 0.0,
+    "WB_HIGH_DESAT": 0.0,
+    "WB_REGION_MIN_FRAC": 0.0001,
+    "WB_HIGH_PRIOR[0]": 1.758984375,
+    "WB_HIGH_PRIOR[1]": 1.365625,
+    "WB_HIGH_PRIOR[2]": 1.0640625,
+    "WB_LOW_PRIOR[0]": 1.0890625,
+    "WB_LOW_PRIOR[1]": 0.74609375,
+    "WB_LOW_PRIOR[2]": 0.694140625,
+    "PRINT_HI_PCT": 99.91546875,
+    "PRINT_HI_CEIL": 0.9692578125,
+    "PRINT_CLIP_BUDGET": 0.003,
+    "PRINT_TUNE_ITERS": 11.0,
+    "PRINT_GAMMA": 4.53125
+  },
+  "aggregate": {
+    "median_total": 0.05564801092702923,
+    "median_luma": 0.04156157030907029,
+    "median_color": 0.02284959353593643,
+    "median_hi999": 0.009105790982864126,
+    "max_clip": 0.0021438853327616306,
+    "frames_over_clip_budget": 0,
+    "clip_budget": 0.01,
+    "n_frames": 76
+  },
+  "per_roll": {
+    "2506-1": {
+      "n": 38,
+      "median_total": 0.037454973548976284,
+      "worst_frames": [
+        {
+          "stem": "DSC_0029",
+          "total": 0.1679245452312731
+        },
+        {
+          "stem": "DSC_0008",
+          "total": 0.09963872845935766
+        },
+        {
+          "stem": "DSC_0021",
+          "total": 0.09486635146714395
+        },
+        {
+          "stem": "DSC_0032",
+          "total": 0.08291340119666447
+        },
+        {
+          "stem": "DSC_0013",
+          "total": 0.08254123741892964
+        }
+      ]
+    },
+    "2510-11-1": {
+      "n": 38,
+      "median_total": 0.06534409427451787,
+      "worst_frames": [
+        {
+          "stem": "DSC_0010",
+          "total": 0.15698151204551092
+        },
+        {
+          "stem": "DSC_0015",
+          "total": 0.11770949030372335
+        },
+        {
+          "stem": "DSC_0005",
+          "total": 0.11219006945725163
+        },
+        {
+          "stem": "DSC_0019",
+          "total": 0.10204023328304701
+        },
+        {
+          "stem": "DSC_0007",
+          "total": 0.10180463181848938
+        }
+      ]
+    }
+  },
+  "per_frame": [
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0002",
+      "total": 0.020380729441110433,
+      "luma": 0.023815523236782585,
+      "color": 0.0084807900421276,
+      "hi999": 0.0082833736686172,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0003",
+      "total": 0.05830534976412518,
+      "luma": 0.061221504868170754,
+      "color": 0.044640871048815665,
+      "hi999": 0.01514034672964415,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0004",
+      "total": 0.03640539784009058,
+      "luma": 0.03673824769156492,
+      "color": 0.021460152930734878,
+      "hi999": 0.00853095839937057,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0005",
+      "total": 0.05466799231511333,
+      "luma": 0.002378380717366523,
+      "color": 0.061335426820309354,
+      "hi999": 0.002574101396688011,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0006",
+      "total": 0.014253710256493897,
+      "luma": 0.0012572223743150465,
+      "color": 0.015485075356121598,
+      "hi999": 0.000570378187387921,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0007",
+      "total": 0.03231292376082344,
+      "luma": 0.026044557209257593,
+      "color": 0.017083848248479094,
+      "hi999": 0.008345584701248021,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0008",
+      "total": 0.09963872845935766,
+      "luma": 0.08696240774219216,
+      "color": 0.024589815599491138,
+      "hi999": 0.006865565081678904,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0009",
+      "total": 0.025929812397205165,
+      "luma": 0.008271800370065589,
+      "color": 0.02215600181032494,
+      "hi999": 7.850761303596077e-05,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0010",
+      "total": 0.047006658212167575,
+      "luma": 0.041393873972231196,
+      "color": 0.03133335072628104,
+      "hi999": 0.002688549120055672,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0011",
+      "total": 0.06505623612363798,
+      "luma": 0.056554343929450926,
+      "color": 0.022677220568647724,
+      "hi999": 0.00284165276841708,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0012",
+      "total": 0.02341780920064397,
+      "luma": 0.013769956857102325,
+      "color": 0.019362466100897032,
+      "hi999": 0.005521611106055202,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0013",
+      "total": 0.08254123741892964,
+      "luma": 0.08208182013437254,
+      "color": 0.020383919444916923,
+      "hi999": 0.011660503732745076,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0014",
+      "total": 0.009818141910251484,
+      "luma": 0.000967699312037489,
+      "color": 0.010668182515225944,
+      "hi999": 2.482546469684266e-05,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0015",
+      "total": 0.008640202261530065,
+      "luma": 0.002727575116752364,
+      "color": 0.008327292620115568,
+      "hi999": 0.0005710372119897,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0016",
+      "total": 0.026258277448698002,
+      "luma": 0.023866823381133873,
+      "color": 0.012494426543743367,
+      "hi999": 0.019608030747551908,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0017",
+      "total": 0.013713663449761075,
+      "luma": 0.011514346695359334,
+      "color": 0.00914316214891099,
+      "hi999": 0.004900634512929991,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0018",
+      "total": 0.02559966076436944,
+      "luma": 0.0231148254730937,
+      "color": 0.016936952448927296,
+      "hi999": 0.0034658258675548392,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0019",
+      "total": 0.04376026780389496,
+      "luma": 0.04005678303776789,
+      "color": 0.02395811519039137,
+      "hi999": 0.006236595891778163,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0020",
+      "total": 0.014410196859651912,
+      "luma": 0.005114588586033059,
+      "color": 0.013766139997695307,
+      "hi999": 0.0014196073649380692,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0021",
+      "total": 0.09486635146714395,
+      "luma": 0.0929540398473589,
+      "color": 0.019821419622069316,
+      "hi999": 0.022025923031144035,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0022",
+      "total": 0.016851348184808854,
+      "luma": 0.0037514957724522923,
+      "color": 0.013327544249996751,
+      "hi999": 0.0029984061429365605,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0023",
+      "total": 0.010878973431958858,
+      "luma": 0.01441113218916399,
+      "color": 0.012111138087038972,
+      "hi999": 0.003700591322544522,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0024",
+      "total": 0.07312725021470497,
+      "luma": 0.06104024299783945,
+      "color": 0.020523271799553083,
+      "hi999": 0.010154203427721442,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0025",
+      "total": 0.06892163025655869,
+      "luma": 0.0632870476810515,
+      "color": 0.016547808541666546,
+      "hi999": 0.02886416342673437,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0026",
+      "total": 0.03850454925786199,
+      "luma": 0.03463475864889811,
+      "color": 0.012724042240876051,
+      "hi999": 0.009266198801204273,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0027",
+      "total": 0.046912413889204786,
+      "luma": 0.04172926664590939,
+      "color": 0.01570025348661925,
+      "hi999": 0.011173549736874011,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0028",
+      "total": 0.04947745418597476,
+      "luma": 0.04326638028825472,
+      "color": 0.011863507453099546,
+      "hi999": 0.002156909897146231,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0029",
+      "total": 0.1679245452312731,
+      "luma": 0.18123722061463304,
+      "color": 0.02006740273877694,
+      "hi999": 0.07437135667832051,
+      "clip": 0.00019621752977223674
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0030",
+      "total": 0.010802177761218106,
+      "luma": 0.013064208965134907,
+      "color": 0.007937168919915928,
+      "hi999": 0.003480155358508208,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0031",
+      "total": 0.013682751219412948,
+      "luma": 0.013362888248181173,
+      "color": 0.01283781042925178,
+      "hi999": 0.002108134270173423,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0032",
+      "total": 0.08291340119666447,
+      "luma": 0.10016881386366852,
+      "color": 0.030125766742350457,
+      "hi999": 0.015397918942547495,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0033",
+      "total": 0.06188584619192513,
+      "luma": 0.06232597137696994,
+      "color": 0.03526985282459185,
+      "hi999": 0.009180551292092942,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0034",
+      "total": 0.02644187996488422,
+      "luma": 0.019333883743928505,
+      "color": 0.024615391165263647,
+      "hi999": 0.0010719721838733376,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0035",
+      "total": 0.004319471152473609,
+      "luma": 0.0025524092042322906,
+      "color": 0.004767556825395172,
+      "hi999": 0.0002852802312222069,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0036",
+      "total": 0.03611844978867445,
+      "luma": 0.029849302866259832,
+      "color": 0.02759772670124287,
+      "hi999": 0.011212111793115986,
+      "clip": 3.0043563166591557e-05
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0037",
+      "total": 0.05785227437451751,
+      "luma": 0.050063351737250836,
+      "color": 0.014579081698140447,
+      "hi999": 0.011758927870447633,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0038",
+      "total": 0.060956022995670676,
+      "luma": 0.051495380322572865,
+      "color": 0.019438385532492785,
+      "hi999": 0.0074157251522462,
+      "clip": 0.0
+    },
+    {
+      "roll": "2506-1",
+      "stem": "DSC_0039",
+      "total": 0.04809736915198035,
+      "luma": 0.03336078239317197,
+      "color": 0.02269628225253258,
+      "hi999": 0.0003888173366344283,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0002",
+      "total": 0.01686549918361468,
+      "luma": 0.020470421756241766,
+      "color": 0.012485286431137466,
+      "hi999": 0.004467993440883222,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0003",
+      "total": 0.04538105733243606,
+      "luma": 0.05005438945132448,
+      "color": 0.03393395442908099,
+      "hi999": 0.008838718204823848,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0004",
+      "total": 0.063095900298574,
+      "luma": 0.07012698295735628,
+      "color": 0.01057812468283983,
+      "hi999": 0.010384739364031836,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0005",
+      "total": 0.11219006945725163,
+      "luma": 0.13438353031913328,
+      "color": 0.05831326809351047,
+      "hi999": 0.01565897638839897,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0006",
+      "total": 0.026485323172406993,
+      "luma": 0.022521706437284426,
+      "color": 0.022219217805709013,
+      "hi999": 0.003781410566612964,
+      "clip": 1.5141420870934528e-05
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0007",
+      "total": 0.10180463181848938,
+      "luma": 0.12212247636641543,
+      "color": 0.04817872268366008,
+      "hi999": 0.011530365028622924,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0008",
+      "total": 0.08184030060706149,
+      "luma": 0.1100436211637296,
+      "color": 0.05346750956276199,
+      "hi999": 0.01277353360735678,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0009",
+      "total": 0.06957352356069034,
+      "luma": 0.08071415013787243,
+      "color": 0.05097668737819331,
+      "hi999": 0.01507348631530192,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0010",
+      "total": 0.15698151204551092,
+      "luma": 0.16715017479517008,
+      "color": 0.10846367980483203,
+      "hi999": 0.021301820823051543,
+      "clip": 0.0021438853327616306
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0011",
+      "total": 0.10036663060720913,
+      "luma": 0.0713595440187682,
+      "color": 0.08841904069996802,
+      "hi999": 0.02238760412368168,
+      "clip": 0.0003980891719745223
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0012",
+      "total": 0.04535374194275963,
+      "luma": 0.024434218667500993,
+      "color": 0.03172690684806508,
+      "hi999": 0.02294440084755711,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0013",
+      "total": 0.07832181906398487,
+      "luma": 0.07790859929801072,
+      "color": 0.03060281177171938,
+      "hi999": 0.01890790243653251,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0014",
+      "total": 0.05480335184431978,
+      "luma": 0.04480976515512829,
+      "color": 0.01811219982790187,
+      "hi999": 0.04212217025959464,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0015",
+      "total": 0.11770949030372335,
+      "luma": 0.04728648022279927,
+      "color": 0.11733218657958737,
+      "hi999": 0.012459246166822036,
+      "clip": 0.0016682843969910216
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0016",
+      "total": 0.07797043717646092,
+      "luma": 0.06341447435472755,
+      "color": 0.02384106558294595,
+      "hi999": 0.04056027844738297,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0017",
+      "total": 0.06466289968157544,
+      "luma": 0.05964038410741328,
+      "color": 0.054713527210231476,
+      "hi999": 0.026511334479896398,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0018",
+      "total": 0.025851431450730617,
+      "luma": 0.02415134407381641,
+      "color": 0.011583736688927851,
+      "hi999": 0.017038945940926253,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0019",
+      "total": 0.10204023328304701,
+      "luma": 0.0939983863299519,
+      "color": 0.030504081311156058,
+      "hi999": 0.04081684872717828,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0020",
+      "total": 0.09929281120341042,
+      "luma": 0.10500503655163745,
+      "color": 0.07057304112613266,
+      "hi999": 0.032846322234659664,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0021",
+      "total": 0.04219518822648769,
+      "luma": 0.0382786059565838,
+      "color": 0.015206353462533913,
+      "hi999": 0.022605606053218263,
+      "clip": 1.4999025063370882e-05
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0022",
+      "total": 0.06819100792082723,
+      "luma": 0.05259868670475916,
+      "color": 0.03149950482023223,
+      "hi999": 0.01706554412035277,
+      "clip": 1.516622179082747e-05
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0023",
+      "total": 0.027431522225781265,
+      "luma": 0.008370015834483008,
+      "color": 0.024836006896576657,
+      "hi999": 0.00024490829948775605,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0024",
+      "total": 0.06512987200894328,
+      "luma": 0.03739915454638687,
+      "color": 0.040644517257036,
+      "hi999": 0.00903103067363531,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0025",
+      "total": 0.08057380320015638,
+      "luma": 0.018221548131290035,
+      "color": 0.08366780568099293,
+      "hi999": 0.003429212316453767,
+      "clip": 0.0003645477329687856
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0026",
+      "total": 0.0857639575177193,
+      "luma": 0.018142666373951233,
+      "color": 0.0913368418174153,
+      "hi999": 0.007411794093496016,
+      "clip": 0.0018775361879958816
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0027",
+      "total": 0.07087139276217268,
+      "luma": 0.06377989795539685,
+      "color": 0.013115652179602666,
+      "hi999": 0.03678634099446931,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0029",
+      "total": 0.06305820350351095,
+      "luma": 0.040488626350256476,
+      "color": 0.05774487059474479,
+      "hi999": 0.0034835265351675915,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0030",
+      "total": 0.048044973279590925,
+      "luma": 0.04465900417892428,
+      "color": 0.03622740860065591,
+      "hi999": 0.006698622608508953,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0031",
+      "total": 0.0855198837721615,
+      "luma": 0.07969654716114931,
+      "color": 0.028229611833960274,
+      "hi999": 0.046066837459627696,
+      "clip": 1.5141420870934528e-05
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0032",
+      "total": 0.058367649059544065,
+      "luma": 0.025428464963798775,
+      "color": 0.03626906689726544,
+      "hi999": 0.004801012515635583,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0033",
+      "total": 0.06372118005949184,
+      "luma": 0.0502297060625332,
+      "color": 0.049380808795465934,
+      "hi999": 0.02039424787310795,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0034",
+      "total": 0.05063549348257618,
+      "luma": 0.0456622926169295,
+      "color": 0.02300290481934028,
+      "hi999": 0.039303991655709636,
+      "clip": 1.5141420870934528e-05
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0035",
+      "total": 0.08654462405159769,
+      "luma": 0.08639765930960813,
+      "color": 0.05402580952095559,
+      "hi999": 0.06394244396127147,
+      "clip": 3.0428432327166505e-05
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0036",
+      "total": 0.024770727958437082,
+      "luma": 0.030151261096132885,
+      "color": 0.009959553089320764,
+      "hi999": 0.0011944940885755262,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0037",
+      "total": 0.02926071449563393,
+      "luma": 0.03594642580074704,
+      "color": 0.01084932213078682,
+      "hi999": 0.002389797431558871,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0038",
+      "total": 0.06555831654009246,
+      "luma": 0.022096544390117663,
+      "color": 0.06285870558254507,
+      "hi999": 0.05080360100009773,
+      "clip": 0.0
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0039",
+      "total": 0.05649267000973868,
+      "luma": 0.04634627283441478,
+      "color": 0.047711597639835374,
+      "hi999": 0.10066107212420772,
+      "clip": 0.0018133057020083504
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "DSC_0040",
+      "total": 0.07006002598366921,
+      "luma": 0.07723788436411047,
+      "color": 0.038575439713605386,
+      "hi999": 0.0032753067662051327,
+      "clip": 0.0
+    }
+  ]
+}

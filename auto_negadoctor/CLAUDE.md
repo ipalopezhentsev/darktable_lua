@@ -520,23 +520,26 @@ analysis-crop view**: normal → red tint on the rejected outside-crop area
 out — for auditing the content-crop detection. The mask view PERSISTS across image navigation
 (roll review workflow), and while it is active any rubber-band drag defines
 the crop even without selecting "crop" first (an earlier session lost the
-user's crop because the drag was silently ignored in this mode). A small **RGB histogram** of
-the displayed converted image sits top-right (T toggles); in hide-rejected
-mode it is computed over photo content only, so the inverted holder can't
-fake a clipped-whites spike. **Clipping indication** (added 2026-06-15): the
-displayed 8-bit sRGB render is checked per pixel for blown highlights (any
-channel == 255 → linear >= 1.0) and crushed shadows (any channel == 0); a
-VU-style **clip meter** sits top-right under the histogram (always on: an H bar
-for highlights with a gold tick at the clip budget `PRINT_CLIP_BUDGET`=0.3% and
-an S bar for shadows, each full at `CLIP_METER_FULL_PCT`=2%, with the exact %),
-red/blue **spikes** on the histogram edges show the same fractions, and **L**
-toggles an **on-image overlay** (default OFF) tinting clipped pixels red
-(highlights) / blue (shadows). Clip fractions use the SAME pixel set as the
-histogram (content-only in hide-rejected mode); the overlay masks are captured
-from the true render BEFORE mask-blanking so a blanked holder can't read as
-shadow clipping. Driven by `_clip_stats` (in `_refresh_histogram`),
-`_draw_clip_meter`, the clip branch of `_decorate`; smoke-tested
-(`clipping` step). Keys: 1/3 select patch kind (film base / highlights — no
+user's crop because the drag was silently ignored in this mode). A small **RGB histogram**
+plus a **pipette** (per-pixel RGB hover readout) live in the **shared left-panel
+section above the thumbnails** (moved OFF the canvas 2026-06-24; `common/debug_ui_base.py`
+owns `_build_histogram_panel` / `_refresh_histogram` / the `<Motion>` pipette and the
+`_display_rgb_array` / `_histogram_pixels` hooks). This class supplies the two hooks:
+`_display_rgb_array` returns the UNDECORATED true-sRGB image (`_display_base_array`) and
+`_histogram_pixels` restricts to photo content in hide-rejected mode (so the inverted
+holder can't fake a clipped-whites spike) AND sets `self._clip_stats`. T toggles the
+histogram. **Clipping indication** (added 2026-06-15): the displayed 8-bit sRGB render is
+checked per pixel for blown highlights (any channel == 255 → linear >= 1.0) and crushed
+shadows (any channel == 0); a VU-style **clip meter** stays **top-right ON THE CANVAS**
+(an H bar for highlights with a gold tick at the clip budget `PRINT_CLIP_BUDGET`=0.3% and
+an S bar for shadows, each full at `CLIP_METER_FULL_PCT`=2%, with the exact %), red/blue
+**spikes** on the histogram edges (drawn by the base when `_clip_stats` is set) show the
+same fractions, and **L** toggles an **on-image overlay** (default OFF) tinting clipped
+pixels red (highlights) / blue (shadows). Clip fractions use the SAME pixel set as the
+histogram (content-only in hide-rejected mode); the overlay masks are captured from the
+true render BEFORE mask-blanking so a blanked holder can't read as shadow clipping. Driven
+by `_clip_stats` (set in `_histogram_pixels`), `_draw_clip_meter`, the clip branch of
+`_decorate`; smoke-tested (`clipping` step). Keys: 1/3 select patch kind (film base / highlights — no
 shadows patch), **drag a patch rect to MOVE it** (`_patch_at` +
 handle_press/drag/release; non-Ctrl press inside a patch — film base / shadows /
 highlights — seeds a correction at the moved spot, a press with no movement just
@@ -706,7 +709,12 @@ gained optional `build_menus`/`build_toolbar` hooks (no-op for crop/dust) and an
   from `_populate_thumb_list`), `_apply_stream_thumb(i, pil)` (apply an
   already-rendered thumbnail directly) + a persistent `_stream_thumb`/
   `_poll_stream_thumbs` for late background renders, `_load_existing_annotations_for(img)`,
-  and `images[0]`/`_on_close` guards — all no-ops for crop/dust.
+  and `images[0]`/`_on_close` guards — all no-ops for crop/dust. **The centered
+  canvas progress overlay** (`_show_canvas_message` / `_set_analyzing_pct` /
+  `_animate_progress` / `_clear_canvas_message` / `_draw_analyzing_overlay` + the
+  `_analyzing` branch of `_on_canvas_configure`) **also lives in the base now**
+  (moved out of this file 2026-06-23) so the **dust UI reuses it** for its on-demand
+  detection — it was always meant to be shared.
 - **Preset dropdown:** a `ttk.Combobox` lists the bundled tuning presets
   (`presets/*.json`, via `_preset_names`) plus `(as exported)`. Selecting one
   **re-runs the WHOLE analysis** under that preset's `Tuning` on a **background

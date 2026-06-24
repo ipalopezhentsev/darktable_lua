@@ -230,7 +230,18 @@ echoes the same effective hyperparameters under "method params" (including the
 optimizer defaults applied when the config omits a knob). To see *where* a
 session is weak, sort the per-frame table in its `report.md` (worst frames are
 pre-listed). Two sessions of the same kind are directly comparable; different
-kinds never share a table.
+kinds never share a table. Each row also carries a free-text **comment** column
+(see below), so the *reason* a session was run sits beside its numbers.
+
+## Session comment
+
+Pass `--comment "why I ran this"` to annotate a session — it is stored in
+`config.json` and shown in `report.md` (a `- comment:` line) and the
+`INDEX_<kind>.md` table (a `comment` column). Handled by the shared
+`common/calibration/runner.py`, so it works identically in auto_retouch. NOTE: the
+comment column was added to the index header on 2026-06-23; INDEX files that
+predate it keep their old (column-short) header — regenerate or ignore the cosmetic
+mismatch.
 
 ## Usage
 

@@ -1,0 +1,97 @@
+{
+  "wall_seconds": 22.87,
+  "prep_seconds": 22.61,
+  "prep_seconds_by_roll": {
+    "2506-1": 4.84,
+    "2510-11-1": 5.62,
+    "2511-12-1": 6.31,
+    "2512-2601-1": 5.84
+  },
+  "trial_count": 1,
+  "objective_initial": 0.0067,
+  "objective_final": 0.0067,
+  "trace": {
+    "method": "none",
+    "trials": 1,
+    "best_objective": 0.0067,
+    "improvements": [
+      {
+        "trial": 1,
+        "objective": 0.0067
+      }
+    ]
+  },
+  "principal_components": null,
+  "init": {},
+  "fitted": {},
+  "aggregate": {
+    "rejected_rolls": 0,
+    "median_residual": 0.0067,
+    "max_residual": 0.0452,
+    "n_frames": 4
+  },
+  "per_roll": {
+    "2506-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0452,
+      "corner_falloff": 0.5876
+    },
+    "2510-11-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0059,
+      "corner_falloff": 0.5175
+    },
+    "2511-12-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0061,
+      "corner_falloff": 0.4737
+    },
+    "2512-2601-1": {
+      "n": 1,
+      "rejected": false,
+      "residual": 0.0073,
+      "corner_falloff": 0.5221
+    }
+  },
+  "per_frame": [
+    {
+      "roll": "2506-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0452,
+      "corner_falloff": 0.5876,
+      "reason": null,
+      "strength": 0.75
+    },
+    {
+      "roll": "2510-11-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0059,
+      "corner_falloff": 0.5175,
+      "reason": null,
+      "strength": 0.55
+    },
+    {
+      "roll": "2511-12-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0061,
+      "corner_falloff": 0.4737,
+      "reason": null,
+      "strength": 0.45
+    },
+    {
+      "roll": "2512-2601-1",
+      "stem": "(roll)",
+      "rejected": false,
+      "residual": 0.0073,
+      "corner_falloff": 0.5221,
+      "reason": null,
+      "strength": 0.575
+    }
+  ]
+}

@@ -18,6 +18,8 @@
 
 `auto_crop.py --debug-ui <images...>` writes per-image `{stem}_debug_crop.json` (crop %, per-edge confidence, detected_region, constants) and opens `auto_crop/debug_ui.py` (`CropDebugUI`, subclass of `common/debug_ui_base.py`). The user marks wrong edges: select an edge (click its line or keys 1/2/3/4), then Ctrl+Click the correct position (scroll = 1 px nudge, Shift = 10 px; C clears). Corrections auto-save to `{stem}_annotations.json`; closing writes `debug_report.txt` with detected vs corrected per edge (% and px) for tuning. A correction IS the wrong-edge marker. The annotation JSONs are designed to seed the future baseline/tests (see TODO below).
 
+UI chrome (2026-06-24): the marker legend + the full mouse/key reference moved OFF the left panel onto the **Help menu** (`Marker legend…` popup from `_LEGEND_ENTRIES`, `Mouse & keyboard shortcuts…` dialog), matching auto_negadoctor / auto_retouch. The View / Navigate / Help menu bar, the top toolbar's common ◀ ▶ / － ＋ / Fit navigation+zoom buttons, and the `P` display-colour-management toggle all come from the shared base skeleton in `common/debug_ui_base.py` (crop adds no toolbar widgets of its own and keeps its small bottom button column).
+
 ### Registered Actions
 
 Three modes (same scheme as auto_retouch):

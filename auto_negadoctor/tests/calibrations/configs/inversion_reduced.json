@@ -1,0 +1,35 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 4,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "_comment": "The 20 LIVE inversion params from the 2026-06-23 PCA sensitivity run (session inversion_03) = all 33 minus the 13 dead/negligible ones. FROZEN (left out, stay at preset): the whole wb_low family (WB_LOW_DESAT, WB_LOW_BAND_PCT[0/1], WB_LOW_PRIOR[0/1/2]) + the non-binding patch guards (SHADOW_MIN_LUMA, PATCH_CHROMA_MAX, PATCH_CHROMA_FLOOR, PATCH_LUMA_FLOOR, MIN_PATCH_DENSITY, HIGHLIGHT_CLIP_FRAC_MAX, WB_REGION_MIN_FRAC). Ordered by sensitivity rank. NOTE: PATCH_WIN_FRAC/PATCH_STRIDE_DIV are high-leverage but discontinuous (patch-winner flips) so can overfit 2 rolls; PRINT_CLIP_BUDGET is a safety knob (tuning it down trades EMD for clipping). Validate across rolls before adopting.",
+    "params": {
+      "PATCH_WIN_FRAC": {},
+      "PATCH_STRIDE_DIV": {},
+      "PRINT_HI_PCT": {},
+      "HIGHLIGHT_BAND_PCT[1]": {},
+      "PRINT_GAMMA": {},
+      "WB_HIGH_PRIOR[2]": {},
+      "PRINT_HI_CEIL": {},
+      "OFFSET_DEFAULT": {},
+      "WB_HIGH_PRIOR[0]": {},
+      "WB_HIGH_DESAT": {},
+      "HIGHLIGHT_BAND_PCT[0]": {},
+      "PATCH_UNIFORMITY_MAX": {},
+      "PRINT_TUNE_ITERS": {},
+      "DMAX_DEFAULT": {},
+      "WB_HIGH_PRIOR[1]": {},
+      "P_HIGH": {},
+      "PRINT_CLIP_BUDGET": {},
+      "WB_HIGH_BAND_PCT[0]": {},
+      "P_LOW": {},
+      "WB_HIGH_BAND_PCT[1]": {}
+    }
+  }
+}
