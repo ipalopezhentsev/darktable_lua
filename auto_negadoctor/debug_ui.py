@@ -155,9 +155,11 @@ SNAPSHOT_FIELDS = ("patch_corrections", "print_overrides", "wb_overrides",
 # auto_negadoctor.build_analysis_mask and their RGBA tints. The analysis
 # area is strictly the content-crop rectangle: code 2 = outside the crop.
 MASK_TINTS = {2: (255, 60, 60, 110)}    # rejected (outside crop) - red
-# Toolbar button label per mask-view state (no key hint — the menu carries the
-# accelerator).
-MASK_BTN_LABELS = {0: "Analysis crop", 1: "Hide rejected", 2: "Normal view"}
+# Toolbar button label per mask-view state — the CURRENT view (not the next one M
+# would cycle to), consistent with the other view-state buttons. mask_view 0 =
+# normal, 1 = rejected area tinted, 2 = rejected area blanked. (No key hint — the
+# menu carries the accelerator.)
+MASK_BTN_LABELS = {0: "Normal view", 1: "Analysis crop", 2: "Hide rejected"}
 
 
 # --- resolution-independent annotation coords --------------------------------
@@ -1175,6 +1177,10 @@ class NegadoctorDebugUI(DebugUIBase):
     # original session, before any on-the-fly preset re-analysis).
     _PRESET_AS_EXPORTED = "(as exported)"
 
+    # Calibration-review source cycle order (R steps through these): the session's
+    # FITTED result -> the user's GT annotation -> the LIVE preset's result.
+    REVIEW_CYCLE = ("fitted", "gt", "live")
+
     def init_selection_state(self):
         # Pristine copy of the loaded session img_dicts so "(as exported)" can
         # restore the original analysis after on-the-fly preset re-runs. These
@@ -1239,16 +1245,34 @@ class NegadoctorDebugUI(DebugUIBase):
         self._neg_cache_key = None
         self._neg_cache = None
         self.vignette_on = True        # N: apply the roll vignette correction
-        # Calibration review: frames carry review={live,fitted} payloads + a
-        # review_kind. The R toggle swaps the live (current source-code) result
-        # vs the fitted (this session's) result into img_dict, reusing every
-        # render path. PERSISTS across frames.
+        # Calibration review: frames carry review={fitted, gt?, live} payloads + a
+        # review_kind. R cycles them into img_dict (reusing every render path),
+        # FITTED -> GT -> live -> FITTED. PERSISTS across frames. "live" is the
+        # currently-selected PRESET's result (precomputed under default.json, then
+        # tracked by the preset dropdown — see _apply_reanalysis_result).
         _imgs = getattr(self, "images", None) or []
         self.review_mode = any(im.get("review") for im in _imgs)
         self.review_kind = next((im.get("review_kind") for im in _imgs
                                  if im.get("review")), None)
-        self.review_source = "fitted"  # "fitted" | "live"
+        self.review_source = "fitted"  # one of REVIEW_CYCLE
+        self._review_default_preset = None
         if self.review_mode:
+            # In review the dropdown selects which preset "live" reflects; the
+            # precomputed live payload is default.json, so anchor the label there
+            # (NOT "(as exported)", which is the fitted base, not live).
+            import auto_negadoctor as an
+            self._review_default_preset = getattr(an, "DEFAULT_PRESET", "default")
+            self._current_preset_label = self._review_default_preset
+            # _seed_preset_cache cached the EXPORTED (fitted) frames under the
+            # default label; in review that label means the LIVE preset, so drop
+            # the seed. To keep re-selecting "default" INSTANT (not a full re-run),
+            # snapshot the precomputed default.json live per frame as live_default
+            # and restore it from there in _on_preset_selected.
+            self._preset_cache.clear()
+            for im in _imgs:
+                rev = im.get("review")
+                if rev and rev.get("live") is not None and "live_default" not in rev:
+                    rev["live_default"] = copy.deepcopy(rev["live"])
             self._apply_review_source()
         self._live_job = None
         self._wheel_settle_job = None  # debounced heavy bookkeeping after a wheel drag
@@ -1386,7 +1410,7 @@ class NegadoctorDebugUI(DebugUIBase):
         "  X           corrected render / algorithm default\n"
         "  A           variant: analytical / AI (LLM)\n"
         "  N           vignette correction on / off\n"
-        "  R           review source: fitted / live (review sessions)\n"
+        "  R           review source: fitted / GT / live (review sessions)\n"
         "  M           cycle analysis-crop view (tint / hide rejected)\n"
         "  T           histogram on / off\n"
         "  L           on-image clip overlay (red=blown, blue=crushed)\n"
@@ -1415,7 +1439,7 @@ class NegadoctorDebugUI(DebugUIBase):
                          command=self._toggle_variant)
         view.add_command(label="Vignette correction on / off", accelerator="N",
                          command=self._toggle_vignette)
-        view.add_command(label="Review source: fitted / live", accelerator="R",
+        view.add_command(label="Review source: fitted / GT / live", accelerator="R",
                          command=self._toggle_review_source)
         view.add_separator()
         view.add_command(label="Cycle analysis-crop view", accelerator="M",
@@ -1490,23 +1514,51 @@ class NegadoctorDebugUI(DebugUIBase):
         The view toggles carry the state (text + colour) so the menu items can
         stay plain commands. A second row holds the live view-state status (what
         used to be drawn on top of the image)."""
-        btn = lambda text, cmd, **kw: self.toolbar_button(row, text, cmd, **kw)
+        def btn(text, cmd, tip=None, **kw):
+            b = self.toolbar_button(row, text, cmd, **kw)
+            if tip:
+                self.attach_tooltip(b, tip)   # static hover help (the label shows state)
+            return b
         sep = lambda: self.toolbar_separator(row)
 
         sep()
-        self.view_btn = btn("Negative", self._toggle_view)
-        self.compare_btn = btn("Default", self._toggle_compare)
-        self.snap_cmp_btn = btn("vs Snap", self._toggle_snapshot_compare)
+        # Every toggle button shows the CURRENT state (not the target it switches
+        # to), consistent with the variant / vignette / histogram / clip / review
+        # buttons — the _update_*_btn helpers below set the live text + colour. The
+        # tooltip describes what the button DOES (the label can't, since it's the
+        # state), with the keyboard shortcut in parentheses.
+        self.view_btn = btn("Inverted", self._toggle_view,
+                            tip="Switch the preview between the inverted positive "
+                                "and the raw negative (V)")
+        self.compare_btn = btn("Corrected", self._toggle_compare,
+                               tip="Compare your corrected render against the "
+                                   "algorithm's default render (X)")
+        self.snap_cmp_btn = btn("Live", self._toggle_snapshot_compare,
+                                tip="Compare the live render against a frozen "
+                                    "snapshot of the look (D; take one with S)")
+        self._update_view_btn()
+        self._update_compare_btn()
         self._update_snapshot_btn()
         sep()
-        self.variant_btn = btn("Analytical", self._toggle_variant)
-        self.vignette_btn = btn("Vignette ✓", self._toggle_vignette)
-        self.review_btn = btn("Source —", self._toggle_review_source)
+        self.variant_btn = btn("Analytical", self._toggle_variant,
+                               tip="Switch the active variant: analytical vs the "
+                                   "AI/LLM scene-tuned params (A)")
+        self.vignette_btn = btn("Vignette ✓", self._toggle_vignette,
+                                tip="Apply or remove the roll vignette correction "
+                                    "in the preview, before/after (N)")
+        self.review_btn = btn("Source —", self._toggle_review_source,
+                              tip="Cycle the calibration-review source: fitted / "
+                                  "GT / live (R; review sessions only)")
         self._update_review_btn()
         sep()
-        self.mask_btn = btn(MASK_BTN_LABELS[0], self._cycle_mask_view)
-        self.hist_btn = btn("Histogram ✓", self._toggle_histogram)
-        self.clip_btn = btn("Clip", self._toggle_clipping)
+        self.mask_btn = btn(MASK_BTN_LABELS[0], self._cycle_mask_view,
+                            tip="Cycle the analysis-crop view: normal / rejected "
+                                "area tinted / rejected area hidden (M)")
+        self.hist_btn = btn("Histogram ✓", self._toggle_histogram,
+                            tip="Show or hide the RGB histogram panel (T)")
+        self.clip_btn = btn("Clip", self._toggle_clipping,
+                            tip="Toggle the on-image clipping overlay: red = blown "
+                                "highlights, blue = crushed shadows (L)")
         # Preset selector: pick a tuning preset and re-run the whole analysis
         # on the fly (off the Tk thread), then refresh every frame's render.
         # RIGHT-aligned in its own frame so it (and the progress bar) stay
@@ -1516,7 +1568,13 @@ class NegadoctorDebugUI(DebugUIBase):
         tk.Label(pr, text="Preset:", bg="#3f3f3f", fg="#cccccc",
                  font=("", 8)).pack(side=tk.LEFT, padx=(2, 2))
         self.preset_var = tk.StringVar(value=self._current_preset_label)
-        values = [self._PRESET_AS_EXPORTED] + self._preset_names()
+        # In a review session the dropdown chooses which preset the "live" R-source
+        # reflects, so "(as exported)" (= the fitted base) is not offered — only the
+        # bundled presets, defaulting to default.json (the precomputed live).
+        if getattr(self, "review_mode", False):
+            values = self._preset_names()
+        else:
+            values = [self._PRESET_AS_EXPORTED] + self._preset_names()
         if self._current_preset_label not in values:   # a start --preset path/name
             values.append(self._current_preset_label)
         # A long preset name stays readable: the shared helper sizes the entry to
@@ -1587,22 +1645,74 @@ class NegadoctorDebugUI(DebugUIBase):
         self.root.after_idle(self._defocus_preset_combo)
         if self._reanalyzing:
             return
+        if name == self._current_preset_label:
+            return
+        # Review: re-selecting the default preset restores the precomputed
+        # default.json live instantly (no re-run) from the per-frame live_default
+        # snapshot — the cache was cleared because the seed held the fitted export.
+        if getattr(self, "review_mode", False) and name == self._review_default_preset:
+            self._current_preset_label = name
+            for img in self.images:
+                rev = img.get("review")
+                if rev and rev.get("live_default") is not None:
+                    rev["live"] = copy.deepcopy(rev["live_default"])
+            if self.review_source == "live":
+                self._apply_review_source()
+                self._after_reanalysis(name)
+            else:
+                self._update_review_btn()
+            return
         if name == self._PRESET_AS_EXPORTED:
             if self._current_preset_label == self._PRESET_AS_EXPORTED:
                 return
-            self.images[:] = copy.deepcopy(self._orig_images)
-            self._current_preset_label = self._PRESET_AS_EXPORTED
-            self._after_reanalysis(self._PRESET_AS_EXPORTED)
-            return
-        if name == self._current_preset_label:
+            self._apply_reanalysis_result(copy.deepcopy(self._orig_images),
+                                          self._PRESET_AS_EXPORTED)
             return
         cached = self._preset_cache.get(name)
         if cached is not None:                 # already analyzed this session
-            self.images[:] = copy.deepcopy(cached)
-            self._current_preset_label = name
-            self._after_reanalysis(name)
+            self._apply_reanalysis_result(copy.deepcopy(cached), name)
             return
         self._start_reanalysis(name)
+
+    def _review_live_payload(self, kind, new_img):
+        """Extract the kind-specific 'live' review payload from a freshly
+        re-analysed frame dict (the shape _apply_review_source consumes)."""
+        if kind == "inversion":
+            if new_img.get("params") is None:
+                return None
+            return {"params": new_img["params"],
+                    "params_hex": new_img.get("params_hex")}
+        if kind == "crop":
+            return ({"border": list(new_img["border"])}
+                    if new_img.get("border") else None)
+        if kind == "vignette":
+            return {"vignette": new_img.get("vignette")}
+        return None
+
+    def _apply_reanalysis_result(self, new_images, label):
+        """Install a preset re-analysis. NORMALLY replaces the working img_dicts.
+        In a calibration-review session the working dicts carry the fitted/GT/live
+        `review` payload and the dropdown is the authority for the 'live' source
+        ONLY, so redirect each frame's new params into review['live'] and re-render
+        only when 'live' is the source on screen (fitted/GT stay frozen)."""
+        self._current_preset_label = label
+        if getattr(self, "review_mode", False):
+            by_stem = {im["stem"]: im for im in new_images}
+            for img in self.images:
+                rev, new = img.get("review"), by_stem.get(img["stem"])
+                if not rev or new is None:
+                    continue
+                payload = self._review_live_payload(img.get("review_kind"), new)
+                if payload is not None:
+                    rev["live"] = payload
+            if self.review_source == "live":
+                self._apply_review_source()
+                self._after_reanalysis(label)
+            else:
+                self._update_review_btn()
+            return
+        self.images[:] = new_images
+        self._after_reanalysis(label)
 
     def _start_reanalysis(self, preset_name):
         """Kick off process_roll under `preset_name` on a background thread; the
@@ -1669,12 +1779,10 @@ class NegadoctorDebugUI(DebugUIBase):
                 parent=self.root)
             self.preset_var.set(self._current_preset_label)
             return
-        self.images[:] = result["images"]
-        self._current_preset_label = result["preset"]
         # Memoize so a later switch back to this preset is instant (see
         # _preset_cache note in init_selection_state).
         self._preset_cache[result["preset"]] = copy.deepcopy(result["images"])
-        self._after_reanalysis(result["preset"])
+        self._apply_reanalysis_result(result["images"], result["preset"])
 
     def _after_reanalysis(self, applied_label):
         """Swap-in done: every frame's params/border/vignette changed, so all
@@ -2173,7 +2281,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self._update_view_btn()
 
     def _update_view_btn(self):
-        label = "Inverted" if self.view_negative else "Negative"
+        # CURRENT state: which image is on screen now (not the target).
+        label = "Negative" if self.view_negative else "Inverted"
         self.view_btn.config(text=label,
                              fg="#ffff88" if self.view_negative else "white")
 
@@ -2783,7 +2892,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self._schedule_live_render(delay_ms=10)
 
     def _update_compare_btn(self):
-        label = "Corrected" if self.compare_default else "Default"
+        # CURRENT state: which render is on screen now (not the target).
+        label = "Default" if self.compare_default else "Corrected"
         self.compare_btn.config(text=label,
                                 fg="#ffff88" if self.compare_default else "white")
 
@@ -2875,7 +2985,8 @@ class NegadoctorDebugUI(DebugUIBase):
             return
         has = self._snapshot_for_current() is not None
         on = self.compare_snapshot and has
-        label = "Current" if on else "vs Snap"
+        # CURRENT state: showing the frozen snapshot, or the live render.
+        label = "Snapshot" if on else "Live"
         self.snap_cmp_btn.config(
             text=label,
             fg="#ffff88" if on else ("white" if has else "#888888"))
@@ -2952,17 +3063,27 @@ class NegadoctorDebugUI(DebugUIBase):
             text="Vignette ✓" if on else "Vignette ✗",
             fg="white" if on else "#ffb060")
 
+    def _frame_review_sources(self, img):
+        """The review sources available for THIS frame, in cycle order. GT is
+        present only when the frame carries an annotation (vignette / un-annotated
+        frames have no GT), so the R cycle skips it where it doesn't exist."""
+        rev = img.get("review") or {}
+        return [s for s in self.REVIEW_CYCLE if rev.get(s) is not None]
+
     def _apply_review_source(self):
         """Swap each review frame's payload (params / border / vignette) to the
-        active source (fitted vs live) IN PLACE, so every existing render path
-        (inversion, crop mask, vignette load) uses it unchanged."""
+        active source (fitted / GT / live) IN PLACE, so every existing render path
+        (inversion, crop mask, vignette load) uses it unchanged. A frame missing
+        the active source (e.g. no GT) falls back to its fitted payload."""
         if not getattr(self, "review_mode", False):
             return
         for img in self.images:
             rev = img.get("review")
             if not rev:
                 continue
-            src = rev.get(self.review_source) or {}
+            src = rev.get(self.review_source)
+            if src is None:                 # no GT for this frame -> show fitted
+                src = rev.get("fitted") or {}
             kind = img.get("review_kind")
             if kind == "inversion":
                 if src.get("params") is not None:
@@ -2979,14 +3100,22 @@ class NegadoctorDebugUI(DebugUIBase):
         self._amask_cache_stem = None   # border may have changed
 
     def _toggle_review_source(self):
-        """R: flip the preview between the FITTED params (this calibration
-        session's result) and the LIVE params (the current source-code
-        constants). Only meaningful while reviewing a session."""
+        """R: cycle the preview FITTED -> GT -> live -> FITTED. FITTED = this
+        calibration session's result; GT = the user's annotation (the calibration
+        target); live = the currently-selected preset's result (default.json by
+        default, tracks the preset dropdown). Sources the current frame lacks (e.g.
+        GT on an un-annotated frame) are skipped. Only meaningful while reviewing."""
         if not getattr(self, "review_mode", False):
             self._set_info_text("Not reviewing a calibration session "
                                 "(open one via run_calibration.py --review).")
             return
-        self.review_source = "live" if self.review_source == "fitted" else "fitted"
+        # Cycle over the sources present on the CURRENT frame (so GT-less frames
+        # toggle fitted<->live). Fall back to the full cycle if the frame has none.
+        img = self.images[self.current_idx] if self.images else None
+        order = (self._frame_review_sources(img) if img else None) \
+            or list(self.REVIEW_CYCLE)
+        cur = self.review_source if self.review_source in order else order[0]
+        self.review_source = order[(order.index(cur) + 1) % len(order)]
         self._apply_review_source()
         self._update_review_btn()
         self._sync_wheels()
@@ -2995,16 +3124,21 @@ class NegadoctorDebugUI(DebugUIBase):
         self._redraw_markers()
         self._schedule_live_render(delay_ms=10)
 
+    _REVIEW_BTN_STYLE = {
+        "fitted": ("Src: FITTED", "#9fd0ff"),
+        "gt":     ("Src: GT",     "#9be29b"),
+        "live":   ("Src: live",   "#ffd080"),
+    }
+
     def _update_review_btn(self):
         if not hasattr(self, "review_btn"):
             return
         if not self.review_mode:
             self.review_btn.config(text="Source —", fg="#888888")
             return
-        fitted = self.review_source == "fitted"
-        self.review_btn.config(
-            text="Src: FITTED" if fitted else "Src: live",
-            fg="#9fd0ff" if fitted else "#ffd080")
+        text, fg = self._REVIEW_BTN_STYLE.get(self.review_source,
+                                              self._REVIEW_BTN_STYLE["fitted"])
+        self.review_btn.config(text=text, fg=fg)
 
     # _toggle_histogram is the base's (it flips show_histogram, redraws the
     # left-panel histogram, and calls _update_hist_btn below for the toolbar btn).

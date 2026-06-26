@@ -364,13 +364,18 @@ def main():
                 "marker not re-placed after resize"
         step("wheel_resize", wheel_resize)
 
-        # X: compare corrected vs default render
+        # X: compare corrected vs default render. The button shows the CURRENT
+        # state (what's on screen), not the target it switches to.
         def compare_toggle():
             app._toggle_compare()
             assert app.compare_default
+            assert app.compare_btn.cget("text") == "Default", \
+                "compare button must show the CURRENT state (Default)"
             app._apply_live_render()
             assert not app._live_rendered, "compare mode must show default"
             app._toggle_compare()
+            assert app.compare_btn.cget("text") == "Corrected", \
+                "compare button must show the CURRENT state (Corrected)"
             app._apply_live_render()
             assert app._live_rendered, "corrected render did not return"
         step("compare_toggle", compare_toggle)
@@ -587,33 +592,46 @@ def main():
             assert app.vignette_on == before, "vignette toggle not reversible"
         step("vignette_toggle", vignette_toggle)
 
-        # R: live(code) vs fitted(session) review toggle. Not a review session
-        # here, so R is a no-op; then inject review payloads and verify the swap.
+        # R: cycle fitted(session) -> GT(annotation) -> live(preset) review
+        # source. Not a review session here, so R is a no-op; then inject a
+        # 3-source review payload and verify the cycle + the button text.
         def review_toggle():
             assert not app.review_mode, "should not start in review mode"
             app._toggle_review_source()
             assert app.review_source == "fitted", "R changed source off-review"
             img = app.images[app.current_idx]
             base = dict(img["params"])
-            live = dict(base)
-            live["gamma"] = base["gamma"] + 1.0
+            live = dict(base); live["gamma"] = base["gamma"] + 1.0
+            gt = dict(base); gt["gamma"] = base["gamma"] - 0.5
             img["review_kind"] = "inversion"
             img["review"] = {
                 "fitted": {"params": base, "params_hex": img["params_hex"]},
+                "gt": {"params": gt,
+                       "params_hex": an.nm.encode_negadoctor_params(gt)},
                 "live": {"params": live,
                          "params_hex": an.nm.encode_negadoctor_params(live)}}
             app.review_mode = True
             app.review_kind = "inversion"
+            app.review_source = "fitted"
             app._apply_review_source()
+            app._update_review_btn()
             assert abs(img["params"]["gamma"] - base["gamma"]) < 1e-9
-            app._toggle_review_source()
+            assert app.review_btn.cget("text") == "Src: FITTED"
+            app._toggle_review_source()                       # fitted -> GT
+            assert app.review_source == "gt"
+            assert abs(img["params"]["gamma"] - gt["gamma"]) < 1e-9, \
+                "R did not swap in the GT params"
+            assert app.review_btn.cget("text") == "Src: GT"
+            app._toggle_review_source()                       # GT -> live
             assert app.review_source == "live"
             assert abs(img["params"]["gamma"] - live["gamma"]) < 1e-9, \
                 "R did not swap in the live params"
-            app._toggle_review_source()
+            assert app.review_btn.cget("text") == "Src: live"
+            app._toggle_review_source()                       # live -> fitted (wrap)
             assert app.review_source == "fitted"
             assert abs(img["params"]["gamma"] - base["gamma"]) < 1e-9, \
-                "R did not swap back to fitted"
+                "R did not wrap back to fitted"
+            assert app.review_btn.cget("text") == "Src: FITTED"
             img.pop("review", None)
             img.pop("review_kind", None)
             app.review_mode = False

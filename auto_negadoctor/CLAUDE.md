@@ -567,8 +567,8 @@ detected patch seeds a correction from the detected rect, so adjusted sizes
 land in the annotations), C clears, V toggles inverted/negative view, G
 flags a bad inversion (whole frame), **N toggles the vignette correction
 on/off** (before/after; reloads the negative via the `_neg_cache_key`), **R
-flips the calibration-review source fitted↔live** (only in a `--review`
-session). **Print-page params are adjustable
+cycles the calibration-review source fitted→GT→live** (only in a `--review`
+session; `live` tracks the preset dropdown). **Print-page params are adjustable
 too**: 4/5/6/7 select paper black / paper grade (gamma) / paper gloss
 (soft_clip) / print exposure, **9 selects scan exposure bias (offset)** and **0
 selects D max (dynamic range)** — offset and D_max are darktable's FILM-properties
@@ -1017,15 +1017,25 @@ by the full quality gate (crop containment numbers unchanged).
 The metric helpers are
 SHARED with the gates: `run_quality_tests.histogram_per_frame` (extracted from
 `_histogram_match_medians`) and `crop_overtrim` / `crop_overtrim_per_frame`.
-`--review <session>` works for **all three kinds**: it runs the pipeline twice
-(once under the session's FITTED constants, once under the LIVE source-code
-constants), attaches per-frame `review={fitted,live}` payloads (kind-specific:
-inversion params / crop border / roll vignette) via `write_debug_sessions`, and
-opens the debug UI. There key **R** flips fitted↔live (swapping the payload into
-`img_dict` so every render path uses it) and key **N** toggles the vignette
-correction on/off in the preview (before/after). `_review_payload` /
-`_review_run` build the payloads; the UI side is `_apply_review_source` /
-`_toggle_review_source` / `_toggle_vignette` (smoke-tested).
+`--review <session>` works for **all three kinds**. It runs the pipeline under the
+session's FITTED constants and (separately) the LIVE source-code constants, builds
+a third **GT** payload from the user's annotations (`_review_gt_payloads`:
+inversion = `gt_params_for_frame` + hex; crop = the hand-drawn border rect;
+vignette has no per-frame GT so GT is omitted there), and attaches per-frame
+`review={fitted, gt?, live}` (kind-specific: inversion params / crop border / roll
+vignette) via `write_debug_sessions`, then opens the debug UI. Key **R** CYCLES
+the source FITTED → GT → live → FITTED (swapping the payload into `img_dict` so
+every render path uses it; sources a frame lacks — e.g. GT on an un-annotated
+frame — are skipped), the toolbar button + View-menu item show the CURRENT source
+(`Src: FITTED`/`Src: GT`/`Src: live`), and key **N** toggles the vignette
+correction on/off in the preview (before/after). The **`live` source TRACKS the
+preset dropdown** (default = `default.json`): in review mode the dropdown lists the
+bundled presets (no `(as exported)`) and picking one re-runs the analysis under it,
+redirecting the result into each frame's `review['live']`
+(`_apply_reanalysis_result` / `_review_live_payload`) instead of replacing the
+base img_dict, so fitted/GT stay frozen. `_review_payload` / `_review_gt_payloads`
+/ `_review_run` build the payloads; the UI side is `_apply_review_source` /
+`_toggle_review_source` (3-cycle) / `_toggle_vignette` (smoke-tested).
 
 ## Known Bugs / TODOs
 

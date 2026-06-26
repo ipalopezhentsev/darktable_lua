@@ -20,6 +20,7 @@ Writes: {export_dir}/{stem}_annotations.json   (auto-saved per image)
 import sys
 import math
 import os
+import copy
 import json
 import queue
 import threading
@@ -329,6 +330,10 @@ class DustDebugUI(DebugUIBase):
     # Selection state
     # ------------------------------------------------------------------
 
+    # Calibration-review source cycle order (R steps through these): the session's
+    # FITTED detection -> the user's GT annotation -> the LIVE preset's detection.
+    REVIEW_CYCLE = ("fitted", "gt", "live")
+
     def init_selection_state(self):
         self.selected_detected = set()   # set of int (detected spot indices)
         self.selected_rejected = set()   # set of int (rejected candidate indices)
@@ -353,13 +358,26 @@ class DustDebugUI(DebugUIBase):
         self.thread_draw_points = []     # list of [x,y] image coords (in-progress)
 
         # Calibration review (run_calibration.py --review): each frame carries a
-        # review={"fitted":{detected,rejected}, "live":{...}} payload + a
-        # review_kind. R swaps the active source in place — instant, both were
+        # review={"fitted":{detected,rejected}, "gt"?:{…}, "live":{…}} payload + a
+        # review_kind. R CYCLES the active source in place — instant, all were
         # precomputed — exactly like auto_negadoctor. PERSISTS across frames.
+        # GT = the user's annotation (corrected output); live = the currently-
+        # selected preset's detection (default.json default, tracks the dropdown).
         imgs = getattr(self, "images", None) or []
         self.review_mode = any(im.get("review") for im in imgs)
-        self.review_source = "fitted"    # "fitted" | "live"
+        self.review_source = "fitted"    # one of REVIEW_CYCLE
+        # Which preset the "live" R-source reflects (the 'Detect with:' dropdown);
+        # default.json is the precomputed default. Per-frame live is recomputed
+        # lazily under this preset on navigation (detection is full-res + slow).
+        self._review_live_preset = "(live default)"
         if self.review_mode:
+            # Snapshot the precomputed (default.json) live so the '(live default)'
+            # dropdown entry can restore it after a preset redetect overwrites it.
+            for im in imgs:
+                rev = im.get("review")
+                if rev and rev.get("live") is not None and "live_default" not in rev:
+                    rev["live_default"] = copy.deepcopy(rev["live"])
+                    rev["live_preset"] = "(live default)"
             self._apply_review_source()
 
     def reset_selection(self):
@@ -399,6 +417,10 @@ class DustDebugUI(DebugUIBase):
                 self._set_analyzing_pct(100.0 * self._bg_done / self._bg_total)
         elif getattr(self, "_analyzing", False):
             self._clear_canvas_message()
+        # In a review session, refresh this frame's 'live' under the selected
+        # preset (lazy — detection is full-res + slow) when 'live' is on screen.
+        if getattr(self, "review_mode", False):
+            self.root.after_idle(self._ensure_live_for_current)
 
     # ------------------------------------------------------------------
     # Run-mode background detection (detect the whole roll, streaming)
@@ -555,13 +577,16 @@ class DustDebugUI(DebugUIBase):
                 row, text="Src: FITTED", command=self._toggle_review_source,
                 **self.TOOLBAR_BTN_STYLE)
             self.review_btn.pack(side="right", padx=8, pady=2)
+            self.attach_tooltip(
+                self.review_btn,
+                "Cycle the calibration-review source: fitted / GT / live (R)")
             self._update_review_btn()
         # Shared helper: a long preset name stays readable (entry sized to the
         # longest name + capped, drop-down list widened past the cap, full-name
         # hover tooltip).
         combo = self.make_readonly_combobox(row, self._preset_var, choices)
         combo.pack(side="right", padx=2, pady=2)
-        combo.bind("<<ComboboxSelected>>", lambda e: self._redetect_current())
+        combo.bind("<<ComboboxSelected>>", lambda e: self._on_preset_combo_changed())
         ttk.Label(row, text="Detect with:").pack(side="right", padx=(8, 2))
         self._detect_status = ttk.Label(row, text="")
         self._detect_status.pack(side="right", padx=8)
@@ -578,7 +603,7 @@ class DustDebugUI(DebugUIBase):
                              variable=self.show_source_brush_var,
                              command=self._redraw_markers)
         view.add_separator()
-        view.add_command(label="Review source: fitted / live", accelerator="R",
+        view.add_command(label="Review source: fitted / GT / live", accelerator="R",
                          command=self._toggle_review_source)
 
     def extend_help_menu(self, helpm):
@@ -600,7 +625,7 @@ class DustDebugUI(DebugUIBase):
         "KEYS\n"
         "  Space / B   next / previous image\n"
         "  R           rejected → missed\n"
-        "              (review session: fitted / live detection)\n"
+        "              (review session: cycle fitted / GT / live)\n"
         "  T           draw missed thread (click pts, Enter=done, Esc=cancel)\n"
         "  M           mark false positive\n"
         "  C           clear FP mark\n"
@@ -624,40 +649,56 @@ class DustDebugUI(DebugUIBase):
         else:
             self._mark_rejected_as_missed()
 
+    def _frame_review_sources(self, img):
+        """The review sources available for THIS frame, in cycle order. GT is
+        present only when the frame carries an annotation, so the R cycle skips it
+        where it doesn't exist."""
+        rev = (img or {}).get("review") or {}
+        return [s for s in self.REVIEW_CYCLE if rev.get(s) is not None]
+
     def _apply_review_source(self):
         """Swap every review frame's detected/rejected lists to the active source
-        (fitted vs live) IN PLACE, so all render/hit-test paths use it unchanged."""
+        (fitted / GT / live) IN PLACE, so all render/hit-test paths use it
+        unchanged. A frame missing the active source (e.g. no GT) falls back to
+        its fitted payload."""
         if not getattr(self, "review_mode", False):
             return
         for img in self.images:
             rev = img.get("review")
             if not rev:
                 continue
-            src = rev.get(self.review_source) or {}
+            src = rev.get(self.review_source)
+            if src is None:                 # no GT for this frame -> show fitted
+                src = rev.get("fitted") or {}
             if src.get("detected") is not None:
                 img["detected"] = src["detected"]
             if src.get("rejected") is not None:
                 img["rejected"] = src["rejected"]
 
     def _toggle_review_source(self):
-        """Flip the preview between the FITTED detection (this calibration
-        session's result) and the LIVE detection (the current source code).
-        Only meaningful while reviewing a session."""
+        """R: cycle the preview FITTED -> GT -> live -> FITTED. FITTED = this
+        calibration session's detection; GT = the user's annotation (the corrected
+        output); live = the currently-selected preset's detection (default.json by
+        default, tracks the 'Detect with:' dropdown). Sources the current frame
+        lacks (e.g. GT on an un-annotated frame) are skipped. Review sessions only."""
         if not getattr(self, "review_mode", False):
             self._set_info_text("Not reviewing a calibration session "
                                 "(open one via run_calibration.py --review).")
             return
-        self.review_source = "live" if self.review_source == "fitted" else "fitted"
-        self._apply_review_source()
+        img = self.images[self.current_idx] if self.images else None
+        order = self._frame_review_sources(img) or list(self.REVIEW_CYCLE)
+        cur = self.review_source if self.review_source in order else order[0]
+        self.review_source = order[(order.index(cur) + 1) % len(order)]
         # The detected lists differ between sources, so spot indices change —
         # rebuild the (empty) annotation state for every frame and refresh.
-        for img in self.images:
-            self.annotations[img["stem"]] = self.new_annotation_state(img)
-        self.reset_selection()
-        self._update_review_btn()
-        self._populate_items_list()
-        self._redraw()
-        self.update_counts()
+        self._refresh_review_display()
+        self._ensure_live_for_current()   # live under a non-default preset is lazy
+
+    _REVIEW_BTN_STYLE = {
+        "fitted": ("Src: FITTED", "#9fd0ff"),
+        "gt":     ("Src: GT",     "#9be29b"),
+        "live":   ("Src: live",   "#ffd080"),
+    }
 
     def _update_review_btn(self):
         if not hasattr(self, "review_btn"):
@@ -666,10 +707,9 @@ class DustDebugUI(DebugUIBase):
             self.review_btn.config(text="Source —", fg="#888888",
                                    state=tk.DISABLED)
             return
-        fitted = self.review_source == "fitted"
-        self.review_btn.config(
-            text="Src: FITTED" if fitted else "Src: live",
-            fg="#9fd0ff" if fitted else "#ffd080", state=tk.NORMAL)
+        text, fg = self._REVIEW_BTN_STYLE.get(self.review_source,
+                                              self._REVIEW_BTN_STYLE["fitted"])
+        self.review_btn.config(text=text, fg=fg, state=tk.NORMAL)
 
     def _preset_names(self):
         import tuning
@@ -701,6 +741,63 @@ class DustDebugUI(DebugUIBase):
         except Exception:
             return detect_dust.DEFAULT_TUNING
 
+    def _on_preset_combo_changed(self):
+        """'Detect with:' combo changed. In a review session the combo chooses
+        which preset the 'live' R-source reflects; otherwise it's the ad-hoc
+        redetect of the current frame."""
+        if getattr(self, "review_mode", False):
+            self._on_review_preset_changed()
+        else:
+            self._redetect_current()
+
+    def _on_review_preset_changed(self):
+        """Review mode: the combo selects which preset 'live' reflects. Switching
+        it implies the user wants to SEE live. '(live default)' restores the
+        precomputed default.json live for every frame; any other preset redetects
+        the CURRENT frame under it (other frames refresh lazily on navigation)."""
+        self._review_live_preset = self._preset_var.get()
+        self.review_source = "live"
+        if self._review_live_preset == "(live default)":
+            for img in self.images:
+                rev = img.get("review")
+                if rev and rev.get("live_default") is not None:
+                    rev["live"] = copy.deepcopy(rev["live_default"])
+                    rev["live_preset"] = "(live default)"
+            self._refresh_review_display()
+        else:
+            self._update_review_btn()
+            self._redetect_current()      # _poll_detect stores into review['live']
+
+    def _refresh_review_display(self):
+        """Re-apply the active review source to every frame and rebuild the
+        (index-dependent) annotation state + redraw — the shared tail used by the
+        R cycle and the live-preset restore."""
+        self._apply_review_source()
+        for img in self.images:
+            self.annotations[img["stem"]] = self.new_annotation_state(img)
+        self.reset_selection()
+        self._update_review_btn()
+        self._populate_items_list()
+        self._redraw()
+        self.update_counts()
+
+    def _ensure_live_for_current(self):
+        """Lazily redetect the current frame's 'live' under the selected preset if
+        it's stale (a non-default preset and not yet computed for this frame).
+        Called when 'live' becomes/stays the shown source."""
+        if not getattr(self, "review_mode", False) or not self.images:
+            return
+        if self.review_source != "live":
+            return
+        if self._review_live_preset == "(live default)":
+            return
+        rev = self.images[self.current_idx].get("review")
+        if not rev:
+            return
+        if rev.get("live_preset") == self._review_live_preset:
+            return       # already current for this preset
+        self._redetect_current()
+
     def _redetect_current(self):
         """Detect the current frame under the selected preset on a background thread
         (detection is full-res + slow), then swap its spots + refresh on the UI thread."""
@@ -730,17 +827,17 @@ class DustDebugUI(DebugUIBase):
         def work():
             import detect_dust
             try:
-                spots, _rej, err, _ls = detect_dust.detect(path, ml_model_path=ml, cfg=cfg)
-                self._detect_q.put((idx, spots or [], err))
+                spots, rej, err, _ls = detect_dust.detect(path, ml_model_path=ml, cfg=cfg)
+                self._detect_q.put((idx, spots or [], rej or [], err))
             except Exception as ex:   # noqa: BLE001
-                self._detect_q.put((idx, None, str(ex)))
+                self._detect_q.put((idx, None, None, str(ex)))
 
         threading.Thread(target=work, daemon=True).start()
         self.root.after(150, self._poll_detect)
 
     def _poll_detect(self):
         try:
-            idx, spots, err = self._detect_q.get_nowait()
+            idx, spots, rej, err = self._detect_q.get_nowait()
         except queue.Empty:
             # Indeterminate heartbeat: nudge the overlay bar forward while the
             # (single-image, ~tens-of-seconds) detection runs, so it doesn't stall.
@@ -751,15 +848,35 @@ class DustDebugUI(DebugUIBase):
         self._set_analyzing_pct(100.0)
         self._clear_canvas_message()
         if spots is not None and 0 <= idx < len(self.images):
-            self.images[idx]["detected"] = spots
-            self.images[idx]["_detect_pending"] = False
-            if idx == self.current_idx:
-                self.annotations[self.images[idx]["stem"]] = \
-                    self.new_annotation_state(self.images[idx])  # indices changed
-                self.reset_selection()
-                self._populate_items_list()
-                self._redraw()
-                self.update_counts()
+            img = self.images[idx]
+            if getattr(self, "review_mode", False):
+                # In review the redetect feeds the 'live' R-source, NOT the base
+                # frame: store under review['live'] (tagged with the preset) and
+                # only swap into the frame when 'live' is what's on screen.
+                rev = img.get("review")
+                if rev is not None:
+                    rev["live"] = {"detected": spots, "rejected": rej or []}
+                    rev["live_preset"] = self._review_live_preset
+                if rev is not None and self.review_source == "live":
+                    img["detected"] = spots
+                    img["rejected"] = rej or []
+                    if idx == self.current_idx:
+                        self.annotations[img["stem"]] = \
+                            self.new_annotation_state(img)   # indices changed
+                        self.reset_selection()
+                        self._populate_items_list()
+                        self._redraw()
+                        self.update_counts()
+            else:
+                img["detected"] = spots
+                img["_detect_pending"] = False
+                if idx == self.current_idx:
+                    self.annotations[img["stem"]] = \
+                        self.new_annotation_state(img)       # indices changed
+                    self.reset_selection()
+                    self._populate_items_list()
+                    self._redraw()
+                    self.update_counts()
         if hasattr(self, "_detect_status"):
             self._detect_status.config(text=("" if not err else f"error: {err}"))
 

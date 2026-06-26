@@ -133,6 +133,48 @@ def main():
             step("click_empty", lambda: click(ex, ey - 150) if ey > 350 else None)
             step("nav_away", lambda: app._nav_image(+1 if target + 1 < len(app.images) else -1))
 
+        # R cycle: fitted(session) -> GT(annotation) -> live(preset) -> fitted.
+        # Inject a 3-source review payload and verify each toggle swaps the
+        # detected list in place (review_btn isn't built off-review, so the button
+        # text is asserted in the negadoctor smoke).
+        def review_cycle():
+            # Use a frame that has a real detected spot so the synthetic source
+            # lists carry every field item_rows() reads (contrast, etc.).
+            idx = next((i for i, im in enumerate(app.images)
+                        if im.get("detected")), None)
+            if idx is None:
+                return
+            app._on_thumb_row_click(idx)
+            img = app.images[idx]
+            base = dict(img["detected"][0])
+            mk = lambda dx: [dict(base, cx=float(base["cx"]) + dx,
+                                  cy=float(base["cy"]) + dx)]
+            d_fit, d_gt, d_live = mk(0.0), mk(5.0), mk(10.0)
+            img["review_kind"] = "dust"
+            img["review"] = {
+                "fitted": {"detected": d_fit, "rejected": []},
+                "gt": {"detected": d_gt, "rejected": []},
+                "live": {"detected": d_live, "rejected": []},
+                "live_default": {"detected": d_live, "rejected": []},
+                "live_preset": "(live default)"}
+            app.review_mode = True
+            app.review_source = "fitted"
+            app._apply_review_source()
+            assert img["detected"] == d_fit, "review fitted not applied"
+            app._toggle_review_source()                       # fitted -> GT
+            assert app.review_source == "gt" and img["detected"] == d_gt, \
+                "R did not swap in GT"
+            app._toggle_review_source()                       # GT -> live
+            assert app.review_source == "live" and img["detected"] == d_live, \
+                "R did not swap in live"
+            app._toggle_review_source()                       # live -> fitted (wrap)
+            assert app.review_source == "fitted" and img["detected"] == d_fit, \
+                "R did not wrap back to fitted"
+            img.pop("review", None)
+            img.pop("review_kind", None)
+            app.review_mode = False
+        step("review_cycle", review_cycle)
+
         step("clear_selection", lambda: app._clear_selection())
         step("close", lambda: app._on_close())
         if failures:

@@ -437,66 +437,109 @@ class DebugUIBase:
             side=tk.LEFT, fill=tk.Y, padx=5, pady=3)
 
     def make_readonly_combobox(self, parent, textvariable, values,
-                               max_width=40, min_width=14, **kw):
+                               max_width=22, min_width=14, **kw):
         """A readonly ttk.Combobox that stays readable when an entry (e.g. a
         preset name) is LONGER than the box: the entry is sized to the longest
-        value (capped at max_width so it never crowds the toolbar), the drop-down
-        LIST is widened to fit the longest value regardless of that cap (Tk
-        otherwise sizes the list to the entry, truncating long names there too),
-        and a hover tooltip shows the full selected value. Returns the combo."""
+        value but capped at max_width so it stays COMPACT in a crowded toolbar,
+        the drop-down LIST is widened to fit the longest value in full regardless
+        of that cap (ttk otherwise sizes the list to the entry, truncating long
+        names there too), and a hover tooltip shows the full selected value (for
+        when a long selected name overflows the capped entry). Returns the
+        combo."""
         import tkinter.ttk as ttk
         longest = max((len(str(v)) for v in values), default=min_width)
         combo = ttk.Combobox(parent, textvariable=textvariable, values=values,
                              state="readonly",
                              width=min(max(longest, min_width), max_width), **kw)
-        self._widen_combobox_popdown(combo, longest)
+        self._widen_combobox_popdown(combo, values)
         self._attach_combobox_tooltip(combo, textvariable)
         return combo
 
     @staticmethod
-    def _widen_combobox_popdown(combo, longest):
-        """Force a combobox's drop-down list wide enough for its longest value.
-        Tk creates the popdown listbox lazily and sizes it to the entry, so a
-        long value is truncated in the open list too; set the internal listbox
-        width directly the first time the list is opened (mouse or keyboard)."""
-        target = max(int(longest) + 2, 16)
+    def _widen_combobox_popdown(combo, values):
+        """Make the drop-down LIST wide enough to show the longest value in full.
 
-        def _apply(_e=None):
+        ttk forces the popdown Toplevel to the ENTRY's pixel width (PlacePopdown
+        in combobox.tcl does `wm geometry $popdown ${w}x...` with
+        `w = winfo width $cb`), IGNORING the listbox width — so configuring the
+        listbox -width does not help; the open list stays clipped to the entry.
+        We instead re-widen the popdown Toplevel itself to fit the measured text
+        (the gridded listbox stretches to fill). The popdown is a Tcl-created
+        Toplevel NOT registered in tkinter's widget tree, so everything goes
+        through tk.call on raw widget paths (nametowidget would KeyError). The
+        re-widen runs from the combobox -postcommand via after(), so it fires
+        AFTER ttk's Post/PlacePopdown has positioned the (narrow) popdown."""
+        import tkinter.font as tkfont
+
+        def _fit():
             try:
-                lb = combo.tk.call(
-                    "ttk::combobox::PopdownWindow", combo) + ".f.l"
-                combo.tk.call(lb, "configure", "-width", target)
+                popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo)
+                lb, sb = popdown + ".f.l", popdown + ".f.sb"
+                fontspec = combo.tk.call(lb, "cget", "-font") or "TkDefaultFont"
+                f = tkfont.Font(root=combo, font=fontspec)
+                text_px = max((f.measure(str(v)) for v in values), default=0)
+                sb_px = 0
+                if str(combo.tk.call("winfo", "ismapped", sb)) == "1":
+                    sb_px = int(combo.tk.call("winfo", "reqwidth", sb))
+                want = text_px + sb_px + 24    # listbox padding + borders + slack
+                # never narrower than ttk's placement (the entry width).
+                want = max(want, int(combo.tk.call("winfo", "width", popdown)))
+                geo = combo.tk.call("winfo", "geometry", popdown)  # WxH+X+Y
+                rest = geo[geo.index("x"):]                        # xH+X+Y
+                combo.tk.call("wm", "geometry", popdown, f"{want}{rest}")
             except Exception:
                 pass
-        combo.bind("<Button-1>", _apply, add="+")
-        combo.bind("<Map>", _apply, add="+")
+
+        combo.configure(postcommand=lambda: combo.after(0, _fit))
+
+    @staticmethod
+    def attach_tooltip(widget, text, delay_ms=450):
+        """Attach a hover tooltip to `widget`. `text` is a plain string OR a
+        no-arg callable returning the current string (dynamic content); a blank
+        result shows nothing. The tip appears after `delay_ms` of hover and hides
+        on leave or any button press. Returns a `hide()` callable. Reused by the
+        toolbar toggle buttons and the preset combo."""
+        text_fn = text if callable(text) else (lambda: text)
+        tip: list = [None]   # the open Toplevel, or None
+        job: list = [None]   # the pending after() id, or None
+
+        def _popup():
+            job[0] = None
+            s = text_fn()
+            if tip[0] is not None or not s:
+                return
+            x = widget.winfo_rootx()
+            y = widget.winfo_rooty() + widget.winfo_height()
+            w = tk.Toplevel(widget)
+            w.wm_overrideredirect(True)
+            w.wm_geometry(f"+{x}+{y}")
+            tk.Label(w, text=s, bg="#ffffe0", fg="#000000", font=("", 8),
+                     relief=tk.SOLID, borderwidth=1, padx=4, pady=2,
+                     justify=tk.LEFT).pack()
+            tip[0] = w
+
+        def show(_e=None):
+            if job[0] is None and tip[0] is None:
+                job[0] = widget.after(delay_ms, _popup)
+
+        def hide(_e=None):
+            if job[0] is not None:
+                widget.after_cancel(job[0])
+                job[0] = None
+            if tip[0] is not None:
+                tip[0].destroy()
+                tip[0] = None
+
+        widget.bind("<Enter>", show, add="+")
+        widget.bind("<Leave>", hide, add="+")
+        widget.bind("<ButtonPress>", hide, add="+")
+        return hide
 
     @staticmethod
     def _attach_combobox_tooltip(combo, textvariable):
         """Hover tooltip showing the FULL current value of `combo` (the entry can
         be capped narrower than a long value)."""
-        tip: list = [None]  # single-cell holder: the open tooltip Toplevel or None
-
-        def show(_e=None):
-            text = textvariable.get()
-            if tip[0] is not None or not text:
-                return
-            x = combo.winfo_rootx()
-            y = combo.winfo_rooty() + combo.winfo_height()
-            w = tk.Toplevel(combo)
-            w.wm_overrideredirect(True)
-            w.wm_geometry(f"+{x}+{y}")
-            tk.Label(w, text=text, bg="#ffffe0", fg="#000000", font=("", 8),
-                     relief=tk.SOLID, borderwidth=1, padx=4, pady=2).pack()
-            tip[0] = w
-
-        def hide(_e=None):
-            if tip[0] is not None:
-                tip[0].destroy()
-                tip[0] = None
-
-        combo.bind("<Enter>", show, add="+")
-        combo.bind("<Leave>", hide, add="+")
+        hide = DebugUIBase.attach_tooltip(combo, textvariable.get)
         combo.bind("<<ComboboxSelected>>", lambda e: hide(), add="+")
 
     def build_feature_toolbar(self, toolbar, row):

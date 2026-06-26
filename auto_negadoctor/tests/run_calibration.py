@@ -518,6 +518,40 @@ def _review_run(kind, roll, cfg):
     return out, frames, roll_meta
 
 
+def _review_gt_payloads(kind, roll, base_frames):
+    """The GROUND-TRUTH payload per stem, built from the user's annotations (the
+    calibration target), so the debug UI's R cycle can show GT as a third source.
+    A frame with NO annotation for this kind gets no entry (the UI cycle then
+    skips GT for it). `base_frames` supply per-frame context (production params
+    for the un-annotated fields, frame dims) — the LIVE run's frames."""
+    by_stem = {fr["stem"]: fr for fr in base_frames if not fr.get("error")}
+    out = {}
+    if kind == "inversion":
+        gt = rqt._load_ground_truth(roll["fixtures"])
+        for stem, g in gt.items():
+            fr = by_stem.get(stem)
+            if not fr or "params" not in fr:
+                continue
+            p = rqt.gt_params_for_frame(fr, g)
+            out[stem] = {"params": p, "params_hex": nm.encode_negadoctor_params(p)}
+    elif kind == "crop":
+        for f in roll["fixtures"]:
+            data = json.loads(f.read_text())
+            crop = data.get("crop_correction")
+            if not crop or not crop.get("corrected"):
+                continue
+            stem = data.get("stem") or f.name.replace("_annotations.json", "")
+            fr = by_stem.get(stem)
+            if fr is None or "width" not in fr or "height" not in fr:
+                continue
+            x, y, cw, ch = rqt._rect_to_px(crop["corrected"],
+                                           fr["width"], fr["height"])
+            out[stem] = {"border": [x, y, fr["width"] - x - cw,
+                                    fr["height"] - y - ch]}
+    # vignette: no per-frame GT annotation -> no GT source
+    return out
+
+
 def review_session(session_dir, roll_id=None):
     """Open the debug UI on a finished session showing its FITTED result, with the R
     toggle flipping to the LIVE (current source-code) result. N toggles vignette."""
@@ -535,23 +569,27 @@ def review_session(session_dir, roll_id=None):
     roll = rolls[0]
 
     review_dir = Path(tempfile.mkdtemp(prefix="nega_review_"))
-    live_payloads, _, _ = _review_run(kind, roll, an.DEFAULT_TUNING)
+    live_payloads, live_frames, _ = _review_run(kind, roll, an.DEFAULT_TUNING)
     fit_payloads, frames, roll_meta = _review_run(kind, roll,
                                                   reg.to_tuning(fitted))
+    gt_payloads = _review_gt_payloads(kind, roll, live_frames)
 
     for fr in frames:
         if fr.get("error") or fr["stem"] not in fit_payloads:
             continue
         fr["review_kind"] = kind
-        fr["review"] = {"fitted": fit_payloads[fr["stem"]],
-                        "live": live_payloads.get(fr["stem"],
-                                                  fit_payloads[fr["stem"]])}
+        review = {"fitted": fit_payloads[fr["stem"]],
+                  "live": live_payloads.get(fr["stem"],
+                                            fit_payloads[fr["stem"]])}
+        if fr["stem"] in gt_payloads:        # only frames with an annotation
+            review["gt"] = gt_payloads[fr["stem"]]
+        fr["review"] = review
     an.write_debug_sessions(frames, roll_meta, review_dir)
 
     ui = TESTS_DIR.parent / "debug_ui.py"
     print(f"Opening debug UI for {session.name} (close the window to return)")
-    print(f"  R: FITTED ({kind} from this session) <-> live (current code)   "
-          "N: vignette on/off")
+    print(f"  R: FITTED ({kind} from this session) -> GT (your annotation) -> "
+          "live (current preset)   N: vignette on/off")
     try:
         subprocess.run([sys.executable, str(ui), str(review_dir)])
     finally:

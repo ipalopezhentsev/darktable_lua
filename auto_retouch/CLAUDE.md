@@ -125,21 +125,31 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
   `RETOUCH_REVIEW_PRESET` (`RETOUCH_ML_MODEL` carries the model path). The
   **InPlace/apply** flow and **sensor-dust** debug path are unchanged (they keep the
   batch — sensor is multi-frame consensus, can't stream per-frame).
-- **Calibration review: FITTED ↔ LIVE toggle (negadoctor-style, 2026-06-24):**
-  `run_calibration.py --review <session>` now **precomputes BOTH the fitted
-  (session result) and live (current source-code) detection** for every roll
-  frame (`review_session` detects twice via `ADAPTER.map_frames`), writes a
-  throwaway session dir of `*_debug_spots.json` whose frames carry
-  `detected`/`rejected` = fitted plus a `review={"fitted":…, "live":…}` payload
-  + `review_kind`, and opens the dust UI on it. The UI detects `review_mode` in
-  `init_selection_state` and key **R** flips the active source IN PLACE
-  (`_apply_review_source` swaps each frame's detected/rejected lists; instant, no
-  re-detection) — exactly like negadoctor. A RIGHT-aligned toolbar button
-  (`Src: FITTED` / `Src: live`) + a View-menu item mirror it. **R is a
-  dispatcher** (`_on_r_key`): review session → fitted/live toggle; otherwise the
+- **Calibration review: FITTED → GT → LIVE cycle (negadoctor-style, 2026-06-24;
+  3-way since 2026-06-26):** `run_calibration.py --review <session>` **precomputes
+  the fitted (session result) and live (current source-code) detection** for every
+  roll frame (`review_session` detects twice via `ADAPTER.map_frames`) PLUS a third
+  **GT** payload from the user's annotation (`_gt_review_payload`: the
+  user-corrected output = fitted detections minus the ones reproducing an annotated
+  `false_positive`, plus the hand-added `missed_dust`/`missed_strokes` as spots via
+  `missed_dust_to_spot`/`missed_stroke_to_spot`; the dropped FPs become GT
+  `rejected`). It writes a throwaway session dir of `*_debug_spots.json` whose
+  frames carry `detected`/`rejected` = fitted plus a `review={"fitted":…, "gt"?:…,
+  "live":…}` payload + `review_kind`, and opens the dust UI. The UI detects
+  `review_mode` in `init_selection_state` and key **R** CYCLES the active source IN
+  PLACE FITTED → GT → live → FITTED (`_apply_review_source` swaps each frame's
+  detected/rejected lists; instant, no re-detection; sources a frame lacks — e.g.
+  GT on an un-annotated frame — are skipped). A RIGHT-aligned toolbar button
+  (`Src: FITTED`/`Src: GT`/`Src: live`) + a View-menu item show the CURRENT source.
+  **R is a dispatcher** (`_on_r_key`): review session → source cycle; otherwise the
   normal "rejected → missed" annotation action. Toggling rebuilds the (empty)
-  per-frame annotation state because spot indices differ between the two
-  detections. The older env-preset combo path still exists for ad-hoc use.
+  per-frame annotation state because spot indices differ between sources. **The
+  `live` source TRACKS the 'Detect with:' dropdown** (default = `(live default)` =
+  default.json): selecting a preset redetects under it (`_on_review_preset_changed`
+  → `_redetect_current`, which in review mode stores into `review['live']` tagged
+  with `live_preset` rather than overwriting the base frame); other frames refresh
+  their live LAZILY on navigation (`_ensure_live_for_current`, detection is
+  full-res + slow), and `(live default)` restores the precomputed `live_default`.
 
 ### Canonical Data Principle (auto_retouch)
 

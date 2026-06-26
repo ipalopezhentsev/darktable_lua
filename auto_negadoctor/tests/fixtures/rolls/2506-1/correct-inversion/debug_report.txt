@@ -1,6 +1,6 @@
 AUTO NEGADOCTOR DEBUG REPORT
-Generated: 2026-06-26 21:21:25
-Export dir: C:\Users\ilyap\AppData\Local\darktable\lua\ilya\auto_negadoctor\tests\fixtures\rolls\2506-1\correct-inversion
+Generated: 2026-06-26 22:50:22
+Export dir: tests\fixtures\rolls\2506-1\correct-inversion
 Images processed: 38
 Run wall time: 21.0s
 

@@ -185,12 +185,41 @@ def _headline(kind, agg):
             f"(W_fp={runner._fmtv(agg['w_fp'])})")
 
 
+def _gt_review_payload(ann, fitted_detected, min_dim):
+    """The GROUND-TRUTH spot set for the R cycle's GT source = the user-corrected
+    output: (fitted detections minus the ones reproducing an annotated
+    `false_positive`) + the hand-added `missed_dust` / `missed_strokes`. The
+    dropped FP detections become the GT 'rejected' list (so they show as rejected
+    candidates). Mirrors the apply writer's final spot set. Returns
+    {detected, rejected} or None if the frame carries no annotation."""
+    fps = ann.get("false_positives") or []
+    missed = ann.get("missed_dust") or []
+    strokes = ann.get("missed_strokes") or []
+    if not (fps or missed or strokes):
+        return None
+    kept, rejected = [], []
+    for s in (fitted_detected or []):
+        if any(rqt._dist(fp, s) <= rqt.MATCH_RADIUS for fp in fps):
+            rejected.append(s)
+        else:
+            kept.append(s)
+    detected = list(kept)
+    for md in missed:
+        detected.append(dd.missed_dust_to_spot(md, fitted_detected, None))
+    for ms in strokes:
+        sp = dd.missed_stroke_to_spot(ms, min_dim)
+        if sp:
+            detected.append(sp)
+    return {"detected": detected, "rejected": rejected}
+
+
 def review_session(session_dir, roll_id=None):
     """Open the dust debug UI on a finished session showing its FITTED detection,
-    with the R key flipping to the LIVE (current source-code) detection — the
-    same fitted/live review auto_negadoctor offers. BOTH detections are
-    precomputed here and written into a throwaway session dir as the frames'
-    `review` payload, so the toggle in the UI is instant (no re-detection)."""
+    with R cycling FITTED -> GT (your annotation, the corrected output) -> LIVE
+    (the current source-code detection) -> FITTED — the same three-way review
+    auto_negadoctor offers. All sources are precomputed here and written into a
+    throwaway session dir as the frames' `review` payload, so the toggle in the
+    UI is instant (no re-detection)."""
     import shutil
     import subprocess
     import tempfile
@@ -224,6 +253,7 @@ def review_session(session_dir, roll_id=None):
     print(f"Detecting {len(roll['images'])} frame(s) twice (fitted + live)…")
     fit = _detect_all(reg.to_tuning(fitted))
     live = _detect_all(dd.DEFAULT_TUNING)
+    anns = _load_annotations(roll["fixtures"])     # the user's GT, per stem
 
     review_dir = Path(tempfile.mkdtemp(prefix="retouch_review_"))
     try:
@@ -236,18 +266,23 @@ def review_session(session_dir, roll_id=None):
                 continue
             fp = fit.get(stem, {"detected": [], "rejected": []})
             lp = live.get(stem, fp)
+            review = {"fitted": fp, "live": lp}
+            gt = _gt_review_payload(anns.get(stem, {}), fp["detected"],
+                                    min(int(w), int(h)))
+            if gt is not None:                     # only annotated frames carry GT
+                review["gt"] = gt
             data = {
                 "stem": stem, "image_path": str(p),
                 "width": int(w), "height": int(h),
                 "detected": fp["detected"], "rejected": fp["rejected"],
                 "review_kind": kind,
-                "review": {"fitted": fp, "live": lp},
+                "review": review,
             }
             (review_dir / f"{stem}_debug_spots.json").write_text(
                 json.dumps(data, indent=2, cls=dd.NumpyEncoder))
         ui = TESTS_DIR.parent / "debug_ui.py"
         print(f"Opening dust debug UI for {session.name} "
-              f"(R: FITTED [{kind}] <-> live)")
+              f"(R: FITTED [{kind}] -> GT -> live)")
         subprocess.run([sys.executable, str(ui), str(review_dir)])
     finally:
         shutil.rmtree(review_dir, ignore_errors=True)
