@@ -45,7 +45,13 @@ def test_optimizers_find_minimum():
                          {"method": "coordinate_descent", "epsilon": 1e-6,
                           "max_iters": 30}),
                         ("random_search",
-                         {"method": "random_search", "n_trials": 200, "seed": 0})]:
+                         {"method": "random_search", "n_trials": 200, "seed": 0}),
+                        ("cmaes",
+                         {"method": "cmaes", "max_iters": 40, "seed": 0,
+                          "verbose": False}),
+                        ("spsa",
+                         {"method": "spsa", "max_iters": 200, "seed": 0,
+                          "a": 1.0, "c": 0.1, "verbose": False})]:
         x, obj, n, tr = rc.optimize(f, spec, fit)
         check(f"{method} ~= 2.0", abs(x["X"] - 2.0) < 0.3, x["X"])
 

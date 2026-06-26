@@ -57,6 +57,15 @@ def test_optimizers_find_min():
                                       "n_trials": 4000, "seed": 1})
     check("random_search gets close", abs(x["a"] - 0.3) < 0.03, x)
 
+    x, obj, n, tr = rc.optimize(f, spec, {"method": "cmaes", "max_iters": 40,
+                                          "seed": 1, "verbose": False})
+    check("cmaes converges", abs(x["a"] - 0.3) < 0.01, x)
+
+    x, obj, n, tr = rc.optimize(f, spec, {"method": "spsa", "max_iters": 300,
+                                          "seed": 1, "a": 0.3, "c": 0.1,
+                                          "verbose": False})
+    check("spsa converges", abs(x["a"] - 0.3) < 0.02, x)
+
 
 def test_coordinate_descent_two_params():
     print("coordinate descent on a 2-D bowl (min at (0.6, 0.2)):")
@@ -455,6 +464,56 @@ def test_random_search_parallel_equivalence():
           tr4.get("workers"))
 
 
+def test_cmaes_parallel_equivalence():
+    """Parallel cmaes (workers>1) must give a BIT-IDENTICAL result to the serial run:
+    each generation's candidates are independent, evaluated in any order but recorded
+    (and told back to the optimizer) in fixed index order, so the seeded run is
+    deterministic regardless of which worker finishes first."""
+    print("parallel cmaes == serial (deterministic):")
+    spec = {"a": {"range": [0.0, 1.0], "grid_step": 0.1, "init": 0.5},
+            "b": {"range": [0.0, 1.0], "grid_step": 0.1, "init": 0.5}}
+
+    def f(x):
+        return (x["a"] - 0.3) ** 2 + (x["b"] - 0.7) ** 2
+
+    base = {"method": "cmaes", "max_iters": 30, "seed": 7, "verbose": False}
+    bx1, bo1, n1, tr1 = rc.optimize(f, spec, dict(base, workers=1))
+    bx4, bo4, n4, tr4 = rc.optimize(f, spec, dict(base, workers=4))
+    check("same best objective", bo1 == bo4, (bo1, bo4))
+    check("same best point", bx1 == bx4, (bx1, bx4))
+    check("same convergence curve",
+          tr1["improvements"] == tr4["improvements"])
+    check("cmaes converged near (0.3, 0.7)",
+          abs(bx1["a"] - 0.3) < 0.02 and abs(bx1["b"] - 0.7) < 0.02, bx1)
+    check("trace records the worker count", tr4.get("workers") == 4,
+          tr4.get("workers"))
+
+
+def test_spsa_parallel_equivalence():
+    """Parallel spsa (workers>=2) must give a BIT-IDENTICAL result to the serial run:
+    each iteration's plus/minus pair is independent, evaluated in any order but
+    recorded in fixed (plus, minus) order, so the seeded run is deterministic."""
+    print("parallel spsa == serial (deterministic):")
+    spec = {"a": {"range": [0.0, 1.0], "grid_step": 0.1, "init": 0.5},
+            "b": {"range": [0.0, 1.0], "grid_step": 0.1, "init": 0.5}}
+
+    def f(x):
+        return (x["a"] - 0.3) ** 2 + (x["b"] - 0.7) ** 2
+
+    base = {"method": "spsa", "max_iters": 200, "seed": 7, "a": 0.3, "c": 0.1,
+            "verbose": False}
+    bx1, bo1, n1, tr1 = rc.optimize(f, spec, dict(base, workers=1))
+    bx2, bo2, n2, tr2 = rc.optimize(f, spec, dict(base, workers=4))
+    check("same best objective", bo1 == bo2, (bo1, bo2))
+    check("same best point", bx1 == bx2, (bx1, bx2))
+    check("same convergence curve",
+          tr1["improvements"] == tr2["improvements"])
+    check("spsa converged near (0.3, 0.7)",
+          abs(bx1["a"] - 0.3) < 0.03 and abs(bx1["b"] - 0.7) < 0.03, bx1)
+    check("trace records the worker count", tr2.get("workers") == 4,
+          tr2.get("workers"))
+
+
 def main():
     test_optimizers_find_min()
     test_coordinate_descent_two_params()
@@ -466,6 +525,8 @@ def main():
     test_to_tuning_builds_cfg()
     test_tuning_presets()
     test_random_search_parallel_equivalence()
+    test_cmaes_parallel_equivalence()
+    test_spsa_parallel_equivalence()
     test_registry_apply_restore()
     test_registry_tuple_and_int()
     test_build_spec_rejects_unknown()

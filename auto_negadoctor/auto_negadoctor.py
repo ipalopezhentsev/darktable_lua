@@ -56,6 +56,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import cv2
@@ -91,7 +92,32 @@ _AI_WORKERS = max(1, int(os.environ.get("NEGA_AI_WORKERS", "1")))
 _FRAME_CACHE = os.environ.get("NEGA_FRAME_CACHE", "1") != "0"
 
 
+# Set on a thread (via `serial_frames()`) when the caller is ALREADY a parallel
+# worker — e.g. a calibration trial thread (cmaes/random/spsa). Then the per-frame
+# stages must NOT spawn their own pool on top: P trial threads each starting an
+# 8-wide pool = P*8 threads thrashing the memory bus (the per-frame work is
+# bandwidth-bound, knee ~8). The runner's own eval_frames already serializes the
+# per-frame loop this way; this extends the SAME guard to process_roll /
+# estimate_vignette, which the inversion/vignette FULL evaluators call per trial.
+_serial_local = threading.local()
+
+
+@contextmanager
+def serial_frames():
+    """Force the per-frame stages onto a SINGLE worker for the duration, so a
+    caller that is itself a parallel-trial thread doesn't spawn a nested pool and
+    oversubscribe the memory bus. No-op for nested use (already serial)."""
+    prev = getattr(_serial_local, "on", False)
+    _serial_local.on = True
+    try:
+        yield
+    finally:
+        _serial_local.on = prev
+
+
 def _proc_workers(n):
+    if getattr(_serial_local, "on", False):
+        return 1
     if _PROC_WORKERS_ENV > 0:
         return max(1, min(_PROC_WORKERS_ENV, n))
     # The per-frame stages are MEMORY-BANDWIDTH bound (each streams several

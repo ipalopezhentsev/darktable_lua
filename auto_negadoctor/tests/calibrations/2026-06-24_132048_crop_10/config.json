@@ -1,0 +1,26 @@
+{
+  "kind": "crop",
+  "rolls": [
+    "2506-1",
+    "2510-11-1",
+    "2511-12-1",
+    "2512-2601-1"
+  ],
+  "fit": {
+    "method": "cmaes",
+    "tolerances": {
+      "containment_weight": 5.0
+    },
+    "params": "all",
+    "sigma": 0.3,
+    "popsize": 16,
+    "max_iters": 100,
+    "seed": 0,
+    "workers": 16
+  },
+  "comment": "third run on cmaes, with more iterations. compare with crop_06",
+  "metric": "crop_overtrim_area_fraction (containment HARD)",
+  "created": "2026-06-24T12:55:38",
+  "git_commit": "7bb7153",
+  "command_line": "run_calibration.py --config calibrations/configs/crop_cmaes_soft.json --comment third run on cmaes, with more iterations. compare with crop_06 --workers 16"
+}

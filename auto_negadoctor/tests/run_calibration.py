@@ -26,6 +26,7 @@ Run a fit:           ... --method coordinate_descent
 Review a session:    ... --review <session_dir> [roll_id]
 """
 
+import contextlib
 import json
 import shutil
 import subprocess
@@ -68,7 +69,8 @@ def _map_frames_prep(roll_id, label, fn, items):
 
 
 METRIC_NAME = {
-    "crop": "crop_overtrim_area_fraction (containment HARD)",
+    "crop": "crop_overtrim_area_fraction (containment HARD unless "
+            "containment_weight set -> soft overtrim + W*undertrim)",
     "inversion": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
     "vignette": "vignette_fit_rejected_count + median_residual",
 }
@@ -354,14 +356,21 @@ def _make_inversion_full(rolls, clip_budget, fit_params=()):
     def evaluate(overrides):
         cfg = reg.to_tuning(overrides)   # immutable per-trial config (no globals)
         per_frame = []
-        for roll in prepped:
-            frames, _ = an.process_roll(roll["images"], roll["exif"], cfg=cfg,
-                                        prep=roll["prefix"])
-            by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
-            items = [(roll["id"], stem, c, by_stem[stem]["params"])
-                     for stem, c in roll["cache"].items()
-                     if by_stem.get(stem) and "params" in by_stem[stem]]
-            per_frame += _eval_frames(items, _one)
+        # When this trial is ALREADY running in a parallel optimizer worker
+        # (cmaes/random/spsa), process_roll must not spawn its own per-frame pool
+        # on top — that nests P trials * 8 workers and thrashes the memory bus
+        # (_eval_frames already serializes itself the same way via _trial_local).
+        ctx = (an.serial_frames() if getattr(runner._trial_local, "serial", False)
+               else contextlib.nullcontext())
+        with ctx:
+            for roll in prepped:
+                frames, _ = an.process_roll(roll["images"], roll["exif"], cfg=cfg,
+                                            prep=roll["prefix"])
+                by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
+                items = [(roll["id"], stem, c, by_stem[stem]["params"])
+                         for stem, c in roll["cache"].items()
+                         if by_stem.get(stem) and "params" in by_stem[stem]]
+                per_frame += _eval_frames(items, _one)
         return _inversion_result(per_frame, clip_budget)
 
     return evaluate, prep_secs
@@ -442,12 +451,18 @@ def make_vignette_evaluator(rolls, tolerances, fit_params=()):
 
         def evaluate(overrides):
             cfg = reg.to_tuning(overrides)
-            return _vignette_result([
-                _vig_record(roll["id"],
-                            *an.estimate_vignette(roll["images"], roll["exif"],
-                                                  frame_cache=roll["frame_cache"],
-                                                  cfg=cfg))
-                for roll in cached])
+            # See _make_inversion_full: keep the per-frame envelope re-fold serial
+            # when this trial is itself a parallel optimizer worker.
+            ctx = (an.serial_frames()
+                   if getattr(runner._trial_local, "serial", False)
+                   else contextlib.nullcontext())
+            with ctx:
+                return _vignette_result([
+                    _vig_record(roll["id"],
+                                *an.estimate_vignette(roll["images"], roll["exif"],
+                                                      frame_cache=roll["frame_cache"],
+                                                      cfg=cfg))
+                    for roll in cached])
 
     return evaluate, prep_secs
 

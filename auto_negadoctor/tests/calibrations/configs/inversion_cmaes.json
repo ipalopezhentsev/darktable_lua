@@ -1,0 +1,16 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "comment": "CMA-ES over all 33 inversion params. Compare against the coordinate_descent inversion_* sessions.",
+  "fit": {
+    "method": "cmaes",
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all",
+    "sigma": 0.3,
+    "popsize": 16,
+    "max_iters": 100,
+    "seed": 1
+  }
+}

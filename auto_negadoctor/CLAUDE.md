@@ -382,6 +382,20 @@ note). The analysis algorithm is unchanged; only the launch point moved.
   (history_end-protected). The temp folder is KEPT (it holds the annotations).
   Guarded by `tests/smoke_debug_ui.py` (sets `apply_mode`, verifies
   `applied_results.txt` shape on close).
+- **AutoNegadoctor_Apply_From_Folder** (`export_apply_from_folder`) — apply
+  SAVED annotations from a user-picked ground-truth folder (NO export/analyze).
+  Launches `debug_ui.py --choose-dir --apply` foreground: the base
+  (`common/debug_ui_base.py`) pops a native `filedialog.askdirectory()` and echoes
+  `CHOSEN_DIR|<path>` to stdout; the UI loads the folder's existing
+  `*_debug_nega.json` + `*_annotations.json` (no `--run`), the user reviews, and on
+  close apply mode writes `applied_results.txt`. Lua reads that + the folder's
+  existing `negadoctor_results.txt` (vignette, via `parse_nega_results`) and applies
+  vignette + crop + negadoctor (NEW history items) to the selected images, matched
+  by sanitized stem (folder frames not selected are skipped). Saved annotations win;
+  the folder's auto-detection is applied where a frame has none. `_corrected_params`
+  degrades gracefully when a frame's TIFF is absent (direct print/wb/crop overrides
+  need no pixels; only film-base patch re-derivation does). This is the
+  "push my calibration ground truth back into darktable" path.
 - **AutoNegadoctor_Remove** (`remove_negadoctor_selected`) — strip ALL the
   modules the apply flow writes — **negadoctor + crop + lens/vignette** — from
   the selected frames' history (renumbers entries, fixes history_end) for a
@@ -530,9 +544,13 @@ owns `_build_histogram_panel` / `_refresh_histogram` / the `<Motion>` pipette an
 holder can't fake a clipped-whites spike) AND sets `self._clip_stats`. T toggles the
 histogram. **Clipping indication** (added 2026-06-15): the displayed 8-bit sRGB render is
 checked per pixel for blown highlights (any channel == 255 → linear >= 1.0) and crushed
-shadows (any channel == 0); a VU-style **clip meter** stays **top-right ON THE CANVAS**
-(an H bar for highlights with a gold tick at the clip budget `PRINT_CLIP_BUDGET`=0.3% and
-an S bar for shadows, each full at `CLIP_METER_FULL_PCT`=2%, with the exact %), red/blue
+shadows (any channel == 0); a VU-style **clip meter** lives in the **left panel, in its
+own section directly BELOW the histogram + pipette** (moved OFF the canvas 2026-06-26 —
+negadoctor extends the base's `_build_histogram_panel` to add `clip_meter_canvas` and
+redraws it via the base's `_draw_histogram_extras` hook, which fires on every
+`_refresh_histogram`) (an H bar for highlights with a gold tick at the clip budget
+`PRINT_CLIP_BUDGET`=0.3% and an S bar for shadows, each full at `CLIP_METER_FULL_PCT`=2%,
+with the exact %; the section title shows the L overlay state), red/blue
 **spikes** on the histogram edges (drawn by the base when `_clip_stats` is set) show the
 same fractions, and **L** toggles an **on-image overlay** (default OFF) tinting clipped
 pixels red (highlights) / blue (shadows). Clip fractions use the SAME pixel set as the
@@ -942,13 +960,21 @@ own history index (never mixed):
   the report names which still fails. (residual = the vignette-model fit error;
   see below.)
 
-Fitting methods (all native, recorded in `config.json` with their
+Fitting methods (recorded in `config.json` with their
 hyperparameters): `none` (evaluate once), `grid` (per-param `grid_step`),
 `coordinate_descent` (`epsilon`/`max_iters` + per-param step controls),
-`random_search` (`n_trials`/`seed`). Every method hyperparameter has a CLI flag
+`random_search` (`n_trials`/`seed`), `cmaes` (CMA-ES via the `cma` library —
+`sigma`/`popsize`/`max_iters`/`seed`; searches in range-normalized coords so one
+sigma fits all params, parallelizes each generation across `workers` threads),
+`spsa` (Simultaneous Perturbation Stochastic Approximation — `a`/`c`/`alpha`/
+`gamma`/`A`/`max_iters`/`seed`; a stochastic gradient descent that estimates the
+gradient from just 2 evals/iter regardless of param count, so it scales to many
+params, but the `a`/`c` gains must be tuned to the objective's scale).
+Every method hyperparameter has a CLI flag
 that overrides the config (`--epsilon`/`--max-iters`/`--step-shrink`/
-`--init-step`/`--step-min`/`--n-trials`/`--seed`, plus `--method`/`--rolls`/
-`--pca`; per-param ranges stay in the config) — precedence CLI > config >
+`--init-step`/`--step-min`/`--n-trials`/`--sigma`/`--popsize`/`--spsa-a`/
+`--spsa-c`/`--spsa-alpha`/`--spsa-gamma`/`--spsa-A`/`--seed`/`--workers`, plus
+`--method`/`--rolls`/`--pca`; per-param ranges stay in the config) — precedence CLI > config >
 optimizer default. The EFFECTIVE method + its params (defaults filled in) are
 echoed to the console banner, the `report.md` "method params" line, and the
 `INDEX_<kind>.md` method column, so a one-off override is still fully recorded. `tests/calibration_registry.py` is the

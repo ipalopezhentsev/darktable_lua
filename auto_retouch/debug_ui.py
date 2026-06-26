@@ -72,6 +72,11 @@ class DustDebugUI(DebugUIBase):
     NOTE_COLUMN  = "nt"
     SHOW_BOTTOM_BUTTONS = False     # actions live on the menu bar + toolbar
 
+    # Apply-from-folder (--apply): on close, write dust_results.txt from the FINAL
+    # spot set per frame (detected − false_positives + missed_dust + missed_strokes)
+    # so the Lua side can heal the user's annotated set into the XMPs.
+    apply_mode = False
+
     # ------------------------------------------------------------------
     # Session / annotation lifecycle
     # ------------------------------------------------------------------
@@ -89,12 +94,104 @@ class DustDebugUI(DebugUIBase):
             # Debug action, the preset combo, and `run_calibration.py --review`.
             images = self._images_from_dir(session_dir)
             self._run_mode = bool(images)
+        # Resolve each frame's source JPG when the stored image_path is dead (a
+        # saved ground-truth folder: the temp path is gone and the roll's JPGs
+        # live in the session dir or one level up at the roll root). Keeps display,
+        # re-detect and missed-dust source recommendation working from a folder.
+        sd = Path(session_dir)
+        for img in images:
+            p = img.get("image_path")
+            if p and os.path.isfile(p):
+                continue
+            stem = img.get("stem")
+            for cand in (sd / f"{stem}.jpg", sd / f"{stem}.jpeg",
+                         sd.parent / f"{stem}.jpg", sd.parent / f"{stem}.jpeg"):
+                if cand.is_file():
+                    img["image_path"] = str(cand)
+                    break
         # Sensor-dust sessions reuse this UI wholesale (sensor spots are dot
         # spots in the same dict format); only title and report wording differ.
         self.sensor_mode = bool(images and images[0].get("mode") == "sensor")
         if self.sensor_mode:
             self.root.title("Sensor Dust Debug UI")
         return images, constants
+
+    # ------------------------------------------------------------------
+    # Apply-from-folder: final spot set + dust_results.txt on close
+    # ------------------------------------------------------------------
+
+    def _final_spots_for_apply(self, img_dict):
+        """The healing spot set to APPLY for this frame: detected spots minus
+        false_positives (with the user's radius / source / path overrides) PLUS
+        hand-added missed_dust and missed_strokes turned into healable spots."""
+        import detect_dust
+        stem = img_dict["stem"]
+        ann = self.annotations.get(stem) or {}
+        detected = img_dict.get("detected") or []
+        fp = ann.get("false_positives") or set()
+        radius_ov = ann.get("radius_overrides") or {}
+        source_ov = ann.get("source_overrides") or {}
+        path_ov = ann.get("path_overrides") or {}
+
+        spots = []
+        for i, s in enumerate(detected):
+            if i in fp:
+                continue
+            sp = dict(s)
+            if i in radius_ov:
+                sp["brush_radius_px"] = float(radius_ov[i])
+            if i in source_ov:
+                sp["src_cx"], sp["src_cy"] = float(source_ov[i][0]), float(source_ov[i][1])
+            if sp.get("kind") == "stroke" and i in path_ov:
+                sp["path"] = [[float(p[0]), float(p[1])] for p in path_ov[i]]
+            spots.append(sp)
+
+        buffers = self._source_buffers_for(img_dict)
+        for md in ann.get("missed_dust") or []:
+            spots.append(detect_dust.missed_dust_to_spot(md, detected, buffers))
+
+        min_dim = min(img_dict.get("width") or 0, img_dict.get("height") or 0)
+        for ms in ann.get("missed_strokes") or []:
+            sp = detect_dust.missed_stroke_to_spot(ms, min_dim)
+            if sp:
+                spots.append(sp)
+        return spots
+
+    def _write_apply_results(self):
+        """Write dust_results.txt for the Lua apply step: the FINAL spot set per
+        frame healed via generate_xmp_data_for_spots (using the folder's
+        transform_params.txt for flip/crop/ashift). Mirrors write_dust_results'
+        results tuple shape."""
+        import detect_dust
+        session_dir = getattr(self, "_session_dir", None) or self.session_dir
+        transforms = detect_dust.parse_transform_params(
+            os.path.join(session_dir, "transform_params.txt"))
+        results = []
+        for img_dict in self.images:
+            stem = img_dict["stem"]
+            w, h = img_dict.get("width"), img_dict.get("height")
+            spots = self._final_spots_for_apply(img_dict)
+            xmp_data = None
+            if spots and w and h:
+                t = transforms.get(stem, {"flip": 0, "crop": (0.0, 0.0, 1.0, 1.0),
+                                          "ashift": None})
+                xmp_data = detect_dust.generate_xmp_data_for_spots(
+                    spots, w, h, flip=t["flip"], crop=t["crop"],
+                    ashift_params=t.get("ashift"))
+            results.append((stem, spots, img_dict.get("rejected") or [],
+                            (w, h), None, xmp_data))
+        results.sort(key=lambda r: r[0])
+        path = detect_dust.write_dust_results(results, session_dir)
+        print(f"Apply results written to: {path} "
+              f"({sum(1 for r in results if r[1])} frame(s) with spots)")
+
+    def _on_close(self):
+        if self.apply_mode:
+            try:
+                self._write_apply_results()
+            except Exception as e:   # pragma: no cover - defensive
+                print(f"Failed to write apply results: {e}")
+        super()._on_close()
 
     def _images_from_dir(self, session_dir):
         """Minimal img_dicts from a directory of JPGs (no debug_spots.json). Each is
@@ -239,6 +336,11 @@ class DustDebugUI(DebugUIBase):
         self.selected_source = None      # int or None: spot index whose source is selected
         self.selected_keypoint = None    # (spot_idx, kp_idx) or None: selected stroke key point
         self.selected_missed_stroke = None  # int or None: index into missed_strokes
+        self.selected_missed_source = None  # int or None: missed-dust index whose source is selected
+        self._missed_src_drag = None        # int or None: missed-dust whose source is being dragged
+        # Lazily-computed {stem: (img_lab, L_f32, local_std, w, h)} for recommending
+        # a healing source for a hand-added missed dust (prepare_source_buffers).
+        self._missed_buffers = {}
 
         # Visibility toggles — now View-menu checkbuttons (were left-panel
         # checkboxes). Created here (before the UI is built) so the menu can bind
@@ -267,6 +369,7 @@ class DustDebugUI(DebugUIBase):
         self.selected_source = None
         self.selected_keypoint = None
         self.selected_missed_stroke = None
+        self.selected_missed_source = None
         self.remove_missed_btn.config(state=tk.DISABLED)
 
     def __init__(self, root, session_dir):
@@ -354,20 +457,31 @@ class DustDebugUI(DebugUIBase):
                 if item is None:
                     self._bg_active = False
                     self._update_detect_progress(done=True)
+                    # Persist {stem}_debug_spots.json so this session reloads
+                    # instantly next time (no re-detection) — apply-from-folder
+                    # relies on it; the UI-first streaming flow had dropped it.
+                    self._persist_debug_spots()
                     if not self.images[self.current_idx].get("_detect_pending"):
                         self._clear_canvas_message()
                     return
                 i, spots, err = item
                 if spots is not None and 0 <= i < len(self.images):
-                    self.images[i]["detected"] = spots
-                    self.images[i]["_detect_pending"] = False
+                    img = self.images[i]
+                    img["detected"] = spots
+                    img["_detect_pending"] = False
+                    # Re-seed this frame's annotations now that its detected spots
+                    # exist: a clean state, then re-load any saved
+                    # {stem}_annotations.json so FPs / overrides (stored by coords /
+                    # index) re-match against the fresh detection. Fresh Debug flow
+                    # has no file → stays empty; a re-opened / apply-from-folder
+                    # session RESTORES the user's annotations instead of wiping them.
+                    self.annotations[img["stem"]] = self.new_annotation_state(img)
+                    self._load_existing_annotations_for(img)
                 self._bg_done += 1
                 self._update_detect_progress()
                 if i == self.current_idx:
                     # reveal the current frame's spots as they land
                     self._clear_canvas_message()
-                    self.annotations[self.images[i]["stem"]] = \
-                        self.new_annotation_state(self.images[i])
                     self.reset_selection()
                     self._populate_items_list()
                     self._redraw()
@@ -376,6 +490,33 @@ class DustDebugUI(DebugUIBase):
             pass
         if getattr(self, "_bg_active", False):
             self.root.after(120, self._poll_bg_detect)
+
+    def _persist_debug_spots(self):
+        """Write {stem}_debug_spots.json for every detected frame so a saved
+        session reloads WITHOUT re-detecting (restores the persistence the
+        UI-first streaming flow dropped — apply-from-folder reads it). Only runs
+        on the run-mode completion path, so a folder that already had debug_spots
+        (e.g. a committed fixture being reviewed) is never re-detected and never
+        overwritten."""
+        try:
+            import detect_dust
+            session_dir = getattr(self, "_session_dir", None) or self.session_dir
+            results, paths = [], {}
+            for img in self.images:
+                if img.get("_detect_pending"):
+                    continue
+                stem = img["stem"]
+                results.append((stem, img.get("detected") or [],
+                                img.get("rejected") or [],
+                                (img.get("width"), img.get("height")), None, None))
+                if img.get("image_path"):
+                    paths[stem] = img["image_path"]
+            if results:
+                detect_dust.write_debug_spots_json(
+                    results, paths, session_dir,
+                    mode="sensor" if getattr(self, "sensor_mode", False) else None)
+        except Exception as e:   # pragma: no cover - defensive
+            print(f"Could not persist debug spots: {e}")
 
     def _update_detect_progress(self, done=False):
         if hasattr(self, "_detect_status"):
@@ -415,8 +556,10 @@ class DustDebugUI(DebugUIBase):
                 **self.TOOLBAR_BTN_STYLE)
             self.review_btn.pack(side="right", padx=8, pady=2)
             self._update_review_btn()
-        combo = ttk.Combobox(row, values=choices, textvariable=self._preset_var,
-                             state="readonly", width=18)
+        # Shared helper: a long preset name stays readable (entry sized to the
+        # longest name + capped, drop-down list widened past the cap, full-name
+        # hover tooltip).
+        combo = self.make_readonly_combobox(row, self._preset_var, choices)
         combo.pack(side="right", padx=2, pady=2)
         combo.bind("<<ComboboxSelected>>", lambda e: self._redetect_current())
         ttk.Label(row, text="Detect with:").pack(side="right", padx=(8, 2))
@@ -779,6 +922,43 @@ class DustDebugUI(DebugUIBase):
             return (src_cx, src_cy)
         return None
 
+    def _source_buffers_for(self, img_dict):
+        """Cached (img_lab, L_f32, local_std, w, h) for the current frame's source
+        image, used to recommend a healing source for a hand-added missed dust.
+        None when the source JPG can't be loaded (e.g. not present in the folder)."""
+        stem = img_dict["stem"]
+        if stem in self._missed_buffers:
+            return self._missed_buffers[stem]
+        path = img_dict.get("image_path")
+        buffers = None
+        if path and os.path.exists(path):
+            try:
+                import detect_dust
+                buffers = detect_dust.prepare_source_buffers(path)
+            except Exception:
+                buffers = None
+        self._missed_buffers[stem] = buffers
+        return buffers
+
+    def _seed_missed_dust(self, img_dict, md):
+        """Fill a missed-dust entry's heal radius + recommended source IN PLACE
+        (idempotent: keeps any value already set). Makes the hand-added dust a
+        first-class healable spot — the user then scroll-resizes / drags the
+        source. Uses the shared detect_dust.missed_dust_to_spot so the UI preview
+        and the apply writer agree."""
+        import detect_dust
+        if md.get("brush_radius_px") is not None and md.get("src_cx") is not None:
+            return md
+        detected = img_dict.get("detected") or []
+        buffers = self._source_buffers_for(img_dict)
+        spot = detect_dust.missed_dust_to_spot(md, detected, buffers)
+        md["brush_radius_px"] = spot["brush_radius_px"]
+        md["radius_px"] = spot["radius_px"]
+        if "src_cx" in spot:
+            md.setdefault("src_cx", spot["src_cx"])
+            md.setdefault("src_cy", spot["src_cy"])
+        return md
+
     def _get_path(self, stem, spot_idx, spot):
         """Return the stroke centerline key points (list of [x,y]) for a stroke spot —
         user path override first, then the detected path. None for non-stroke spots."""
@@ -956,17 +1136,48 @@ class DustDebugUI(DebugUIBase):
                                                    tags="source")
                         break
 
-        # Missed dust markers (cyan +)
+        # Missed dust markers (cyan +), now first-class healable spots: a heal-radius
+        # circle + a dashed line to the (recommended / dragged) healing source.
         for i, md in enumerate(ann["missed_dust"]):
             cx, cy = image_to_canvas(md["cx"], md["cy"],
                                      self.offset_x, self.offset_y, self.zoom)
             r = 10
-            color = "#00ffff" if i not in self.selected_missed else "#ffffff"
-            lw = 2 if i not in self.selected_missed else 3
+            is_msel = i in self.selected_missed
+            color = "#00ffff" if not is_msel else "#ffffff"
+            lw = 2 if not is_msel else 3
             self.canvas.create_line(cx - r, cy, cx + r, cy,
                                     fill=color, width=lw, tags="missed")
             self.canvas.create_line(cx, cy - r, cx, cy + r,
                                     fill=color, width=lw, tags="missed")
+            # Heal brush circle (when this missed dust has a radius)
+            brad = md.get("brush_radius_px")
+            if brad:
+                crad = max(5, brad * self.zoom)
+                self.canvas.create_oval(cx - crad, cy - crad, cx + crad, cy + crad,
+                                        outline=color, width=lw, tags="missed")
+            # Healing source: dashed line + square (selectable, Ctrl+drag to move)
+            scx, scy = md.get("src_cx"), md.get("src_cy")
+            if scx is not None and scy is not None:
+                sx, sy = image_to_canvas(scx, scy,
+                                         self.offset_x, self.offset_y, self.zoom)
+                is_msrc_sel = (self.selected_missed_source == i)
+                src_color = "#ffff00" if (is_msel or is_msrc_sel) else "#00cc44"
+                sq = max(3, int(2 * self.zoom))
+                self.canvas.create_line(cx, cy, sx, sy,
+                                        fill=src_color, width=1, dash=(4, 3),
+                                        tags="source")
+                self.canvas.create_rectangle(sx - sq, sy - sq, sx + sq, sy + sq,
+                                             outline=src_color,
+                                             width=2 if is_msrc_sel else 1,
+                                             tags="source")
+                # Source heal circle — same radius as the missed dust (so it tracks
+                # scroll-resizing of the dust); dashed to read as the SOURCE brush.
+                if brad:
+                    sbr = max(5, brad * self.zoom)
+                    self.canvas.create_oval(sx - sbr, sy - sbr, sx + sbr, sy + sbr,
+                                            outline=src_color,
+                                            width=lw if is_msrc_sel else 1,
+                                            dash=(4, 3), tags="source")
 
         # Missed threads (hand-drawn, cyan polyline with handles)
         for i, ms in enumerate(ann.get("missed_strokes", [])):
@@ -1006,7 +1217,31 @@ class DustDebugUI(DebugUIBase):
         if len(self.selected_detected) == 1:
             self._adjust_radius_correction(event)
             return True
+        # When exactly one missed dust is selected, scroll resizes its heal radius
+        if len(self.selected_missed) == 1:
+            self._adjust_missed_radius(event)
+            return True
         return False
+
+    def _adjust_missed_radius(self, event):
+        """Scroll wheel: grow/shrink a hand-added missed dust's heal brush radius."""
+        delta = 1 if (event.num == 4 or getattr(event, "delta", 0) > 0) else -1
+        idx = next(iter(self.selected_missed))
+        img_dict = self.images[self.current_idx]
+        stem = img_dict["stem"]
+        md_list = self.annotations[stem]["missed_dust"]
+        if idx >= len(md_list):
+            return
+        md = md_list[idx]
+        self._seed_missed_dust(img_dict, md)   # ensure it has a radius to scale from
+        factor = 1.1 if delta > 0 else (1 / 1.1)
+        import detect_dust
+        md["brush_radius_px"] = max(detect_dust.MIN_BRUSH_PX, md["brush_radius_px"] * factor)
+        md["radius_px"] = max(1.0, md["brush_radius_px"] /
+                              max(detect_dust.DEFAULT_TUNING.ENC_RADIUS_SCALE, 1e-6))
+        self._auto_save(stem)
+        self._redraw_markers()
+        self._update_info_from_selection()
 
     def _adjust_radius_correction(self, event):
         """Scroll wheel: grow/shrink the radius correction for the selected detected spot."""
@@ -1049,6 +1284,21 @@ class DustDebugUI(DebugUIBase):
             f"  Enter = finish,  Esc / T = cancel.")
         self._redraw_markers()
 
+    def _missed_source_at(self, canvas_x, canvas_y):
+        """Missed-dust index whose healing-source square is under the cursor, else None."""
+        ix, iy = canvas_to_image(canvas_x, canvas_y,
+                                 self.offset_x, self.offset_y, self.zoom)
+        hit_r = max(8.0, 12.0 / self.zoom)
+        stem = self.images[self.current_idx]["stem"]
+        best, best_d = None, hit_r
+        for i, md in enumerate(self.annotations[stem]["missed_dust"]):
+            if md.get("src_cx") is None or md.get("src_cy") is None:
+                continue
+            d = math.hypot(md["src_cx"] - ix, md["src_cy"] - iy)
+            if d < best_d:
+                best, best_d = i, d
+        return best
+
     def handle_press_override(self, event):
         # Thread-draw mode: every mouse-down drops a centerline point (immune to
         # accidental drag). Hold and drag to draw freehand (see handle_drag_override).
@@ -1056,6 +1306,19 @@ class DustDebugUI(DebugUIBase):
             self._thread_add_point(event.x, event.y)
             self.drag_start = (event.x, event.y)  # last freehand sample point
             self.is_dragging = False
+            return True
+        # Grab a missed-dust healing source square to DRAG it (claim the gesture so
+        # the base doesn't rubber-band / zoom-to-rectangle). Works with or without
+        # Ctrl; a press without movement just selects it (on release).
+        idx = self._missed_source_at(event.x, event.y)
+        if idx is not None:
+            self._missed_src_drag = idx
+            self.selected_missed_source = idx
+            self.selected_missed = set()
+            self.selected_detected = set()
+            self.drag_start = (event.x, event.y)
+            self.is_dragging = False
+            self._redraw_markers()
             return True
         return False
 
@@ -1070,6 +1333,22 @@ class DustDebugUI(DebugUIBase):
                 self._thread_add_point(event.x, event.y)
                 self.drag_start = (event.x, event.y)
             return True
+        # Dragging a missed-dust healing source: move it live.
+        if self._missed_src_drag is not None:
+            img_dict = self.images[self.current_idx]
+            stem = img_dict["stem"]
+            ix, iy = canvas_to_image(event.x, event.y,
+                                     self.offset_x, self.offset_y, self.zoom)
+            iw, ih = img_dict["width"], img_dict["height"]
+            ix = max(0.0, min(float(iw), ix))
+            iy = max(0.0, min(float(ih), iy))
+            md_list = self.annotations[stem]["missed_dust"]
+            if self._missed_src_drag < len(md_list):
+                md = md_list[self._missed_src_drag]
+                md["src_cx"], md["src_cy"] = float(ix), float(iy)
+                self.is_dragging = True
+                self._redraw_markers()
+            return True
         return False
 
     def handle_release_override(self, event):
@@ -1077,6 +1356,19 @@ class DustDebugUI(DebugUIBase):
         if self.thread_draw_mode:
             self.drag_start = None
             self.is_dragging = False
+            return True
+        # Finish a missed-dust source drag: persist it.
+        if self._missed_src_drag is not None:
+            stem = self.images[self.current_idx]["stem"]
+            idx = self._missed_src_drag
+            self._missed_src_drag = None
+            self.drag_start = None
+            self.is_dragging = False
+            self._auto_save(stem)
+            self._redraw_markers()
+            self._set_info_text(
+                f"Healing source for missed dust #{idx} moved.\n"
+                f"  Drag it again to adjust, or scroll the dust to resize.")
             return True
         return False
 
@@ -1149,25 +1441,44 @@ class DustDebugUI(DebugUIBase):
                 f"Ctrl+Click again to reposition further.")
             return
 
+        # If a MISSED-dust source is selected, move that missed dust's heal source.
+        if self.selected_missed_source is not None:
+            md_list = self.annotations[stem]["missed_dust"]
+            if self.selected_missed_source < len(md_list):
+                md = md_list[self.selected_missed_source]
+                md["src_cx"] = float(ix)
+                md["src_cy"] = float(iy)
+                self._auto_save(stem)
+                self._redraw_markers()
+                self._set_info_text(
+                    f"Healing source for missed dust #{self.selected_missed_source} "
+                    f"moved to ({ix:.0f}, {iy:.0f})\n  Ctrl+Click again to reposition.")
+            return
+
         # If near existing marker, treat as normal click instead
         nearest = self._find_nearest_marker(canvas_x, canvas_y)
         if nearest is not None:
             self.on_click(canvas_x, canvas_y)
             return
 
-        self.annotations[stem]["missed_dust"].append({"cx": ix, "cy": iy})
+        md = {"cx": ix, "cy": iy}
+        self._seed_missed_dust(img_dict, md)   # heal radius + recommended source
+        self.annotations[stem]["missed_dust"].append(md)
         new_idx = len(self.annotations[stem]["missed_dust"]) - 1
         self.selected_detected = set()
         self.selected_rejected = set()
         self.selected_missed = {new_idx}
         self.selected_source = None
+        self.selected_missed_source = None
         self.remove_missed_btn.config(state=tk.NORMAL)
         self._auto_save(stem)
         self._redraw_markers()
         self._update_count_label()
         self._populate_items_list()
         self._sync_item_list_selection()
-        self._set_info_text(f"Added missed dust at ({ix:.0f}, {iy:.0f})")
+        self._set_info_text(
+            f"Added missed dust at ({ix:.0f}, {iy:.0f})\n"
+            f"  Scroll = resize; drag its green source square to move the healing source.")
 
     def on_shift_click(self, canvas_x, canvas_y):
         """Shift+click: toggle nearest detected or missed spot in/out of selection."""
@@ -1207,6 +1518,7 @@ class DustDebugUI(DebugUIBase):
             self.selected_rejected = set()
             self.selected_missed = set()
             self.selected_source = None
+            self.selected_missed_source = None
             self.selected_keypoint = kp
             self.remove_missed_btn.config(state=tk.DISABLED)
             self._update_info_from_selection()
@@ -1227,6 +1539,7 @@ class DustDebugUI(DebugUIBase):
         self.selected_rejected = set()
         self.selected_missed = set()
         self.selected_source = None
+        self.selected_missed_source = None
         self.selected_keypoint = None
         self.selected_missed_stroke = None
 
@@ -1236,6 +1549,14 @@ class DustDebugUI(DebugUIBase):
         elif kind == "source":
             self.selected_source = idx
             self.remove_missed_btn.config(state=tk.DISABLED)
+        elif kind == "missed_source":
+            self.selected_missed_source = idx
+            self.remove_missed_btn.config(state=tk.DISABLED)
+            self._set_info_text(
+                f"Healing source for missed dust #{idx} selected.\n"
+                f"  Drag it to move the healing source.")
+            self._redraw_markers()
+            return
         elif kind == "rejected":
             self.selected_rejected = {idx}
             self.remove_missed_btn.config(state=tk.DISABLED)
@@ -1311,6 +1632,15 @@ class DustDebugUI(DebugUIBase):
                 if d < hit_r and d < best_dist:
                     best = ("source", i)
                     best_dist = d
+
+        # Missed-dust heal source markers (so they can be selected + Ctrl+drag-moved)
+        for i, md in enumerate(ann["missed_dust"]):
+            if md.get("src_cx") is None or md.get("src_cy") is None:
+                continue
+            d = math.hypot(md["src_cx"] - ix, md["src_cy"] - iy)
+            if d < hit_r and d < best_dist:
+                best = ("missed_source", i)
+                best_dist = d
 
         # Rejected (only when visible)
         if self.show_rejected_var.get():
@@ -1890,7 +2220,16 @@ DebugUI = DustDebugUI
 # ---------------------------------------------------------------------------
 
 def main():
-    DustDebugUI.run_main(usage="Usage: debug_ui.py <export_dir>")
+    # Flags (consumed before run_main, which reads argv[1] as the session dir):
+    #   --apply       : write dust_results.txt on close (apply-from-folder flow)
+    #   --choose-dir  : pop a native folder picker instead of a positional dir
+    if "--apply" in sys.argv:
+        DustDebugUI.apply_mode = True
+    if "--choose-dir" in sys.argv:
+        DustDebugUI.choose_dir = True
+    sys.argv = [a for a in sys.argv if a not in ("--apply", "--choose-dir")]
+    DustDebugUI.run_main(
+        usage="Usage: debug_ui.py <export_dir> [--apply] [--choose-dir]")
 
 
 if __name__ == "__main__":

@@ -997,6 +997,102 @@ def find_healing_source(cx, cy, radius_px, brush_radius_px, img_lab, L_f32, loca
     return (float(sb_x1 + best_rx + t_icx), float(sb_y1 + best_ry + t_icy))
 
 
+# Resolution-independent fallback brush radius for a hand-added missed dust when
+# the frame has NO detected spots to take a median from (a fraction of the short
+# side, so it scales with export resolution). The user scroll-adjusts from here.
+MISSED_FALLBACK_BRUSH_FRAC = 0.0025
+
+
+def prepare_source_buffers(image_path, cfg=None):
+    """Compute the image buffers `find_healing_source` needs, on demand (the UI /
+    apply path uses this to recommend a healing source for a hand-added missed
+    dust). Returns (img_lab, L_f32, local_std, width, height) or None on load
+    failure. Mirrors the same computations in `detect_dust_spots` (gray local
+    std + Lab) so a recommended source matches what detection would have picked."""
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return None
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    gray_f = gray.astype(np.float32)
+    k = cfg.TEXTURE_KERNEL
+    local_mean = cv2.blur(gray_f, (k, k))
+    local_sq_mean = cv2.blur(gray_f ** 2, (k, k))
+    local_std = np.sqrt(np.maximum(local_sq_mean - local_mean ** 2, 0))
+    img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+    L_f32 = img_lab[:, :, 0].astype(np.float32)
+    return img_lab, L_f32, local_std, width, height
+
+
+def missed_dust_to_spot(md, detected_spots, buffers, cfg=None):
+    """Turn a hand-added `missed_dust` annotation ({cx, cy}, optionally with a
+    user-set `brush_radius_px` / `src_cx` / `src_cy`) into a full healable spot
+    dict (kind="dot") suitable for `generate_xmp_data_for_spots`.
+
+    Radius: the entry's stored `brush_radius_px` if present, else the MEDIAN
+    `brush_radius_px` of the frame's detected spots, else a frame-fraction
+    fallback. Source: the entry's stored `src_cx`/`src_cy` if present, else
+    `find_healing_source` over `buffers` (from `prepare_source_buffers`); if no
+    buffers are available, a fixed offset is left to `generate_xmp_data_for_spots`.
+    Used by both the debug UI (live preview) and the apply writer, so legacy
+    {cx,cy}-only annotations still heal and edited ones honor the user's values."""
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    cx = float(md["cx"])
+    cy = float(md["cy"])
+
+    brush_radius_px = md.get("brush_radius_px")
+    if brush_radius_px is None:
+        dets = [float(s["brush_radius_px"]) for s in (detected_spots or [])
+                if s.get("brush_radius_px")]
+        if dets:
+            brush_radius_px = float(np.median(dets))
+        elif buffers is not None:
+            _, _, _, w, h = buffers
+            brush_radius_px = max(MIN_BRUSH_PX, MISSED_FALLBACK_BRUSH_FRAC * min(w, h))
+        else:
+            brush_radius_px = MIN_BRUSH_PX * 2
+    brush_radius_px = max(MIN_BRUSH_PX, float(brush_radius_px))
+    # raw detection radius (drives source-search ring sizes); invert the brush
+    # scaling for a hand-set radius that carries no raw radius.
+    radius_px = md.get("radius_px")
+    if radius_px is None:
+        radius_px = max(1.0, brush_radius_px / max(cfg.ENC_RADIUS_SCALE, 1e-6))
+
+    spot = {"kind": "dot", "cx": cx, "cy": cy,
+            "radius_px": float(radius_px), "brush_radius_px": float(brush_radius_px)}
+
+    src_cx, src_cy = md.get("src_cx"), md.get("src_cy")
+    if src_cx is None or src_cy is None:
+        if buffers is not None:
+            img_lab, L_f32, local_std, w, h = buffers
+            src_cx, src_cy = find_healing_source(
+                cx, cy, radius_px, brush_radius_px,
+                img_lab, L_f32, local_std, detected_spots or [], w, h, cfg=cfg)
+    if src_cx is not None and src_cy is not None:
+        spot["src_cx"] = float(src_cx)
+        spot["src_cy"] = float(src_cy)
+    return spot
+
+
+def missed_stroke_to_spot(ms, min_dim, cfg=None):
+    """Turn a hand-drawn `missed_stroke` annotation ({path, stroke_width_px}) into
+    a healable stroke spot dict for `generate_xmp_data_for_spots`. No acceptance
+    gating (the user drew it deliberately). The heal source is left to the XMP
+    writer's fixed-offset fallback. Returns None for an empty path."""
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    path = ms.get("path") or []
+    if len(path) < 2:
+        return None
+    width_px = float(ms.get("stroke_width_px") or cfg.STROKE_MIN_BORDER_PX)
+    brush_radius_px = max(cfg.STROKE_MIN_BORDER_PX, width_px * cfg.STROKE_BORDER_SCALE)
+    brush_radius_px = min(brush_radius_px, cfg.STROKE_MAX_BORDER_FRAC * min_dim)
+    return {"kind": "stroke",
+            "path": [[float(p[0]), float(p[1])] for p in path],
+            "stroke_width_px": width_px,
+            "brush_radius_px": float(brush_radius_px)}
+
+
 # ===================================================================
 # Stroke (thread / scratch) detection
 # ===================================================================

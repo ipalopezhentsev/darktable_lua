@@ -1,0 +1,13 @@
+{
+  "kind": "crop",
+  "rolls": [],
+  "fit": {
+    "method": "cmaes",
+    "tolerances": { "containment_weight": 5.0 },
+    "params": "all",
+    "sigma": 0.3,
+    "popsize": 16,
+    "max_iters": 100,
+    "seed": 1
+  }
+}

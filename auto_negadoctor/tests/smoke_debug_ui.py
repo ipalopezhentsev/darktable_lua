@@ -314,12 +314,12 @@ def main():
         # wheel) so the render matches darktable's numbers exactly.
         def wb_sliders():
             name = "wb_shadows"
-            sliders = app.wb_sliders[name]
-            sliders[0].set(0.94)
+            # A USER drag fires the Scale's -command directly (Tk does not route
+            # it through _fill_wb_sliders), so simulate it by invoking the
+            # callback — NOT via .set(), which is a programmatic sync the new
+            # echo-counter guard deliberately ignores (see below + _fill_wb_sliders).
             app._on_wb_slider(name, 0, 0.94)
-            sliders[1].set(0.88)
             app._on_wb_slider(name, 1, 0.88)
-            sliders[2].set(0.73)
             app._on_wb_slider(name, 2, 0.73)
             ovr = app.annotations[stem]["wb_overrides"].get("shadows")
             assert ovr and [round(v, 4) for v in ovr] == [0.94, 0.88, 0.73], \
@@ -336,10 +336,20 @@ def main():
             hi = app.annotations[stem]["wb_overrides"]["highlights"]
             assert hi[0] == 2.0 and hi[1] == 0.25, f"wb not clamped: {hi}"
             # programmatic .set() during sync must NOT register as a user edit
+            # (regression guard for the async tk.Scale echo that used to plant a
+            # spurious override = the displayed wb rounded to the 0.001 step).
             del app.annotations[stem]["wb_overrides"]["shadows"]
             app._sync_wb_sliders()
+            root.update_idletasks()          # let any deferred Scale echo fire
+            root.update()
             assert "shadows" not in app.annotations[stem]["wb_overrides"], \
                 "_sync_wb_sliders must not create an override via the callback"
+            # re-establish a real shadows override (the persisted-output check
+            # below expects one) via the genuine callback path
+            app._on_wb_slider(name, 0, 0.94)
+            app._on_wb_slider(name, 1, 0.88)
+            app._on_wb_slider(name, 2, 0.73)
+            assert "shadows" in app.annotations[stem]["wb_overrides"]
         step("wb_sliders", wb_sliders)
 
         # Wheels resize to fill the panel and keep the marker at the same wb

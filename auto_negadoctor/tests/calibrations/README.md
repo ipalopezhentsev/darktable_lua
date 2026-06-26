@@ -93,6 +93,104 @@ report names exactly which roll still fails and by how much.
 | `grid` | per-param `range` + `grid_step` | exhaustive Cartesian grid. |
 | `coordinate_descent` | `epsilon`, `max_iters`, per-param `init_step`/`step_min`/`step_shrink` | cycle params, shrinking-step ± line search each; stop when a cycle improves < `epsilon` or `max_iters` cycles. |
 | `random_search` | `n_trials`, `seed` | uniform samples in range; keep best. |
+| `cmaes` | `sigma`, `popsize`, `max_iters`, `seed` | CMA-ES via the `cma` library — adapts a full covariance matrix, so it handles correlated/ill-conditioned objectives that trip up coordinate descent. Searches in range-normalized coords (one `sigma` fits all params); ~`popsize`×`max_iters` evals. |
+| `spsa` | `a`, `c`, `alpha`, `gamma`, `A`, `max_iters`, `seed` | SPSA — stochastic gradient descent that estimates the gradient from just **2 evals per iteration regardless of param count** (a finite difference needs 2N), so it scales to many params. Noisy descent; the `a`/`c` gains must be tuned to the objective's scale. ~`2`×`max_iters` evals. |
+
+### CMA-ES hyperparameters (`sigma` / `popsize` / `max_iters`)
+
+CMA-ES runs in **generations**: each generation it samples `popsize` candidate
+parameter sets from its current distribution, evaluates them, then uses the best
+ones to update that distribution (mean, step size, covariance) for the next
+generation. The search runs in coordinates where **each param is normalized to its
+`[lo, hi]` range** (mapped to `[0, 1]`), which is what lets a single step size work
+across params of wildly different scales.
+
+- **`sigma`** — the **initial step size**: the standard deviation (in normalized
+  `[0,1]` units) of the first generation's sampling spread around the start value.
+  `sigma = 0.3` means the first candidates land ~±0.3 of each param's full range
+  away from the start. It's only a *seed* — CMA-ES **adapts it automatically** each
+  generation, shrinking it as it converges (watch the per-generation sigma in the
+  report). Too small → stays near the start / converges prematurely; too large →
+  early generations flail against the box bounds. `0.3` (~30% of the range) is
+  Hansen's standard default. It's the rough analogue of coordinate descent's
+  `init_step`, except CMA-ES adapts per-param scales *and* their correlations, not
+  one shrinking scalar per axis.
+- **`popsize`** (λ) — candidates evaluated **per generation**. More → each update is
+  better-informed (more robust to noise & local minima) at the cost of more evals
+  per step. The auto default is `4 + ⌊3·ln N⌋` (= 12 for crop's 18 params) — a sane
+  floor; raise it for noisy/rugged objectives or if you have idle cores. **A whole
+  generation's candidates are independent → they run in parallel across `--workers`**,
+  so up to your worker count, extra `popsize` is nearly free in wall-clock.
+- **`max_iters`** — number of **generations** (the stop cap). Generations are
+  **sequential** (each needs the previous one's update), so this is pure serial time.
+  Set it large enough that `sigma` decays to convergence before the cap: if sigma is
+  still large at the last generation you stopped too early; if it flatlined near zero
+  well before the end you could use fewer.
+
+Total objective evaluations ≈ **`popsize × max_iters`** (e.g. 12 × 40 = 480). Key
+asymmetry: `popsize` parallelizes, `max_iters` does not — so given spare cores,
+spend budget on `popsize` rather than on more generations.
+
+### SPSA hyperparameters (`a` / `c` / `alpha` / `gamma` / `A` / `max_iters`)
+
+SPSA is **stochastic gradient descent** with a remarkably cheap gradient estimate:
+each iteration it perturbs **all** params at once by a random ±`c_k` step (a
+Rademacher ±1 vector), evaluates the **two** points `θ ± c_k·Δ`, and forms a
+one-sample gradient `(y₊ − y₋)/(2·c_k·Δ)` — so it costs **2 evals per iteration no
+matter how many params** (a finite-difference gradient would cost 2N). That makes it
+scale to many params, but the descent is noisy and the gains must be tuned. Like
+CMA-ES it runs in **range-normalized `[0,1]` coords** and clamps every evaluated
+point into the box. It returns the **best point it ever evaluated** (the running
+iterate `θ` is never evaluated and need not be the best).
+
+The gains follow Spall's decaying schedules — `a_k = a/(k+1+A)^alpha`,
+`c_k = c/(k+1)^gamma`:
+
+- **`a`** — **step-size** gain numerator (in normalized coords). This is the lever
+  you'll fight with: the step is `a_k · ĝ`, and `ĝ` has units of (objective change)
+  per (param), so the right `a` depends on your **objective's magnitude**. Too small →
+  crawls; too large → bounces off the box walls. Start by eyeballing the objective
+  scale (the `--method none` baseline) and pick `a` so the early step moves a param a
+  few % of its range; tune from there. (Default `0.05` assumes an O(1) objective.)
+- **`c`** — **perturbation** gain numerator (normalized coords): how far the ± probe
+  steps to measure the gradient. Want it large enough that `y₊ − y₋` rises above
+  evaluation noise, small enough to stay local. Default `0.1` (~10% of range).
+- **`alpha`** / **`gamma`** — the decay exponents for `a_k` / `c_k`. The theory
+  defaults `alpha = 0.602`, `gamma = 0.101` are almost always what you want; leave
+  them unless you know why.
+- **`A`** — step-size **stability** constant: damps the first few (largest) steps so a
+  bad early gradient can't fling the iterate. Default ≈ 10% of `max_iters`.
+- **`max_iters`** — number of iterations (each = 2 evals + 1 update). Iterations are
+  **sequential** (each needs the previous step), so this is serial time. SPSA usually
+  needs *more* iterations than CMA-ES needs generations.
+
+Total objective evaluations ≈ **`2 × max_iters`**. The two evals per iteration are
+independent, so they run on `--workers` (capped at 2 — there are only two); the
+serial cost is the iteration count. **Prefer CMA-ES for the small param counts here**
+(crop's 18, etc.) — it auto-adapts and needs no scale tuning; reach for SPSA when the
+fittable set is large or each eval is so costly that 2/iter is the only affordable
+budget.
+
+### `seed` (reproducibility) — and the CMA-ES `seed: 0` trap
+
+`seed` fixes the RNG so a `random_search` / `cmaes` / `spsa` run is reproducible:
+two runs with the same `seed` (and same objective) should give the **identical**
+result. Two caveats:
+
+- **⚠️ CMA-ES: never use `seed: 0` — it is NOT reproducible.** The `cma` library
+  tests the seed with `if not opts['seed']:` and treats a falsy value (`0`, like
+  unset/`'time'`) as "pick a fresh **time-derived** seed each run"
+  (`evolution_strategy.py` ~L1100). So `seed: 0` silently re-randomizes every run —
+  two CMA-ES sessions with `seed: 0` will **diverge** (a generation-N sample depends
+  on the generation-(N−1) update, so any difference compounds). Use any **non-zero**
+  seed (`1`, `42`, …) for a reproducible CMA-ES run. (`random_search` and `spsa` seed
+  via Python's `random.Random` / numpy `default_rng`, which handle `0` correctly — the
+  trap is CMA-ES-only.)
+- CMA-ES also amplifies any non-bit-identical **objective** value: one flipped rank
+  in a generation changes the covariance update and the whole trajectory. The crop
+  metric bottoms out in integer crop edges and the analysis uses no `np.random`, so a
+  non-zero seed is enough here; just be aware the seed is not the *only* thing that
+  must be stable for byte-identical reruns.
 
 [`../calibration_registry.py`](../calibration_registry.py) is the **complete
 catalog** of every algorithm tuning constant, grouped by the kind (= metric) that
@@ -105,7 +203,9 @@ integer constants are fit as integers.
 **Overriding a hyperparameter for a one-off run** — you don't have to edit the
 config JSON. Every method-level knob has a CLI flag that overrides the config:
 `--method`, `--epsilon`, `--max-iters`, `--step-shrink`, `--init-step`,
-`--step-min` (coordinate_descent), `--n-trials`, `--seed` (random_search), plus
+`--step-min` (coordinate_descent), `--n-trials` (random_search), `--sigma`,
+`--popsize` (cmaes), `--spsa-a`/`--spsa-c`/`--spsa-alpha`/`--spsa-gamma`/`--spsa-A`
+(spsa), `--seed`/`--workers` (random_search + cmaes + spsa), plus
 `--rolls` and `--pca`. The effective values (CLI > config > optimizer default)
 are echoed in the report's "method params" line and the index row. Only the
 **per-param** ranges/grid_steps stay in the config, since they're per-constant.
@@ -133,11 +233,13 @@ things can run multi-core, bit-identically to a serial loop:
 - **per-frame** within a trial: every evaluator spreads its frames (crop detect /
   inversion render+EMD / vignette refold) across the analysis thread pool
   (≈4–5× on a 38-frame roll's crop loop). Helps ALL methods.
-- **per-trial** for `random_search`: independent trials run in parallel threads
-  (`--workers`, default = auto, capped at the analysis worker count; `1` =
-  serial). Points are sampled up front and recorded in order, so a parallel run
-  is bit-identical to the serial one (same best, same curve). Each trial then
-  runs its frames serially to avoid nested pools.
+- **per-trial** for `random_search`, `cmaes` and `spsa`: independent trials
+  (random_search: all points; cmaes: each generation's `popsize` candidates; spsa:
+  the 2 ± probes per iteration) run in parallel threads (`--workers`, default = auto,
+  capped at the analysis worker count — and at 2 for spsa, which only has two; `1` =
+  serial). Objectives are recorded — and, for cmaes, told back to the optimizer — in
+  fixed index order, so a parallel run is bit-identical to the serial one (same best,
+  same curve). Each trial then runs its frames serially to avoid nested pools.
 
 How much per-trial parallelism helps depends on the kind: render-heavy inversion
 (numpy releases the GIL) scales well; crop's `_crop_decide` is partly pure-Python

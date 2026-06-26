@@ -883,6 +883,98 @@ local function export_detect_and_apply_retouch_inplace(keep_temp)
   end
 end
 
+-- Apply healing from a SAVED ground-truth folder (no export/detect). Pops a
+-- native folder picker (in the dust debug UI), opens the UI on the chosen folder
+-- in apply mode so the user can review/annotate, and on close heals the FINAL
+-- spot set (detected - false_positives + missed_dust + missed_strokes) into the
+-- selected images' XMPs. The folder must hold the saved session
+-- (`*_debug_spots.json` + `*_annotations.json` + `transform_params.txt`).
+local function apply_retouch_from_folder()
+  dlog.log_level(dlog.info)
+  math.randomseed(os.time() + os.clock() * 1000)
+
+  local images = dt.gui.selection()
+  if #images == 0 then
+    dt.print(_("No images selected"))
+    return
+  end
+
+  -- Map selected images by sanitized stem (the key dust_results.txt uses).
+  local filename_to_image = {}
+  for i, image in ipairs(images) do
+    local base_name = image.filename:match("(.+)%..+$") or image.filename
+    filename_to_image[df.sanitize_filename(base_name)] = image
+  end
+
+  local debug_ui_script = script_dir .. "debug_ui.py"
+  if not df.check_if_file_exists(debug_ui_script) then
+    dt.print(string.format(_("Debug UI script not found: %s"), debug_ui_script))
+    return
+  end
+
+  -- Launch the debug UI directly: --choose-dir pops a native folder picker and
+  -- echoes CHOSEN_DIR|<path>; --apply writes dust_results.txt into that folder on
+  -- close. Foreground/blocking so we can read the results back.
+  local command = string.format(
+    'conda run --no-capture-output -n autocrop python -u "%s" --choose-dir --apply',
+    debug_ui_script)
+  dt.print(_("Pick the ground-truth folder, review in the debug UI, then CLOSE it to apply..."))
+
+  local chosen_dir = nil
+  local pipe = io.popen(command .. " 2>&1")
+  if not pipe then
+    dt.print(_("Failed to launch debug UI"))
+    return
+  end
+  for line in pipe:lines() do
+    local d = line:match("^CHOSEN_DIR|(.*)$")
+    if d then
+      chosen_dir = (d ~= "") and d or nil
+    end
+  end
+  pipe:close()
+
+  if not chosen_dir then
+    dt.print(_("Apply-from-folder cancelled (no folder chosen)"))
+    return
+  end
+
+  local dust_results = parse_dust_results(chosen_dir .. "/dust_results.txt")
+  if not dust_results then
+    dt.print(string.format(_("No dust results in %s (UI closed without producing them) - nothing applied"), chosen_dir))
+    return
+  end
+
+  local stats = { applied = 0, skipped = 0, failed = 0, not_selected = 0 }
+  for filename, dust_data in pairs(dust_results) do
+    if dust_data.error then
+      stats.failed = stats.failed + 1
+      dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
+    elseif dust_data.count == 0 then
+      stats.skipped = stats.skipped + 1
+    else
+      local original_image = filename_to_image[filename]
+      if original_image then
+        dt.print(string.format(_("Applying saved retouch to %s (%d spots)..."),
+          original_image.filename, dust_data.count))
+        local success, error_msg = apply_retouch_in_place(original_image, dust_data, _("film dust"))
+        if success then
+          stats.applied = stats.applied + 1
+        else
+          stats.failed = stats.failed + 1
+          dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), error_msg or "Unknown error"))
+        end
+      else
+        stats.not_selected = stats.not_selected + 1
+      end
+    end
+  end
+
+  dt.print(string.format(
+    _("Apply-from-folder complete: %d applied, %d no spots, %d failed, %d not selected"),
+    stats.applied, stats.skipped, stats.failed, stats.not_selected))
+end
+
 -- Sensor dust pipeline: detect dust common across all selected frames, apply to each image
 local function export_detect_and_apply_sensor_dust(keep_temp)
   dlog.log_level(dlog.info)
@@ -961,6 +1053,7 @@ local function destroy()
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust")
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_KeepTemp")
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_Debug")
+    dt.gui.libs.image.destroy_action("AutoRetouch_Apply_From_Folder")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoRetouch_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_InPlace", "shortcut")
@@ -968,6 +1061,7 @@ local function destroy()
     pcall(dt.destroy_event, "AutoRetouch_SensorDust", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_SensorDust_KeepTemp", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_SensorDust_Debug", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch_Apply_From_Folder", "shortcut")
 end
 
 -- ============ Film dust ============
@@ -985,6 +1079,23 @@ dt.register_event(
     "shortcut",
     function(event, shortcut) export_and_detect_dust_debug() end,
     "AutoRetouch_Debug"
+)
+
+-- Apply from folder: pick a saved ground-truth folder, review in the debug UI,
+-- and on close heal its annotated spot set (detected - FP + missed) to the
+-- selected images.
+dt.gui.libs.image.register_action(
+    "AutoRetouch_Apply_From_Folder",
+    _("Auto retouch apply from folder (saved annotations)"),
+    function() apply_retouch_from_folder() end,
+    _("Pick a saved ground-truth folder, review in the debug UI; on close heal its annotated dust set (detected minus false positives, plus missed dust/threads) into the selected images")
+)
+
+dt.register_event(
+    "AutoRetouch_Apply_From_Folder",
+    "shortcut",
+    function(event, shortcut) apply_retouch_from_folder() end,
+    "AutoRetouch_Apply_From_Folder"
 )
 
 -- Mode 2: fully automatic, temp folder removed on success

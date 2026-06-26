@@ -1,0 +1,14 @@
+{
+  "kind": "crop",
+  "rolls": [],
+  "comment": "SPSA example. NOTE: crop's objective is bimodal (O(1-3) when feasible, +1e6 per containment violation), and SPSA's gradient estimate is dominated by those penalty cliffs, so it is a POOR fit here vs cmaes/coordinate_descent (which are rank/line-search based). Kept as a runnable example; if you use it, watch the per-iteration curve and tune `a` to the feasible-region scale (start from the --method none baseline).",
+  "fit": {
+    "method": "spsa",
+    "tolerances": { "containment_weight": 5.0 },
+    "params": "all",
+    "a": 0.05,
+    "c": 0.1,
+    "max_iters": 800,
+    "seed": 0
+  }
+}

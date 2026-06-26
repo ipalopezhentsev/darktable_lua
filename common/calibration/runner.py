@@ -3,8 +3,8 @@
 This is the shared engine behind each feature's `tests/run_calibration.py`. It owns
 everything that does NOT depend on what is being calibrated:
 
-  - native optimizers (`_grid` / `_coord` / `_random`) + the live progress `_Tracker`
-    + `principal_components` (curvature of the metric at the optimum)
+  - optimizers (`_grid` / `_coord` / `_random` / `_cmaes` / `_spsa`) + the live
+    progress `_Tracker` + `principal_components` (curvature of the metric at the optimum)
   - `build_spec` (merge registry defaults with a config's per-param overrides)
   - the recorded-session lifecycle: `run_session` evaluates / fits / writes
     `config.json` + `results.json` + `report.md` + `fitted_params.json` +
@@ -133,7 +133,7 @@ def _proc_cb(label):
 
 
 # ---------------------------------------------------------------------------
-# Optimizers — native, dependency-free. Each minimizes objective(overrides).
+# Optimizers. Each minimizes objective(overrides).
 # ---------------------------------------------------------------------------
 
 class _Tracker:
@@ -199,6 +199,10 @@ def optimize(objective, spec, fit, proc_workers=None):
         x, extra = _coord(tr, spec, fit)
     elif method == "random_search":
         x, extra = _random(tr, spec, fit, proc_workers)
+    elif method == "cmaes":
+        x, extra = _cmaes(tr, spec, fit, proc_workers)
+    elif method == "spsa":
+        x, extra = _spsa(tr, spec, fit, proc_workers)
     else:
         raise ValueError(f"unknown fit method {method!r}")
     trace = {"method": method, "trials": tr.n, "best_objective": tr.best,
@@ -370,6 +374,211 @@ def _random(objective, spec, fit, proc_workers=None):
             best, bx = o, x
     objective.verbose = saved
     return bx, {"n_trials": n_trials, "seed": seed, "workers": workers}
+
+
+def _cmaes(objective, spec, fit, proc_workers=None):
+    """CMA-ES (Covariance Matrix Adaptation Evolution Strategy) via the `cma` library
+    (Hansen's reference implementation). A derivative-free evolutionary optimizer that
+    adapts a full covariance matrix, so unlike coordinate descent it handles
+    correlated / ill-conditioned objectives.
+
+    The search runs in coordinates NORMALIZED to each param's [lo, hi] range (so a
+    single sigma is meaningful across params with wildly different scales); every
+    candidate is CLAMPED into the [0, 1] box in `_denorm` before evaluation ("clip
+    into box" boundary handling — done here rather than via cma's own `bounds` option,
+    which is broken for 1-D problems and calibration often fits a single param). Each
+    generation's `popsize` candidates are INDEPENDENT, so — like random_search — they
+    evaluate in parallel THREADS, and objectives are recorded (and fed back to the
+    optimizer) in fixed index order, making the run deterministic (seeded) regardless
+    of which worker finishes first."""
+    import cma
+
+    names = list(spec)
+    N = len(names)
+    lo = np.array([spec[n]["range"][0] for n in names], dtype=float)
+    hi = np.array([spec[n]["range"][1] for n in names], dtype=float)
+    span = hi - lo
+    span[span == 0] = 1.0   # avoid div-by-zero for a pinned param
+
+    # start at the live source value, in normalized [0,1] coords
+    x0 = list((np.array([spec[n]["init"] for n in names], dtype=float) - lo) / span)
+
+    sigma0 = float(fit.get("sigma", 0.3))
+    lam = int(fit.get("popsize", 0)) or None    # None => cma's default 4+floor(3*lnN)
+    max_gens = int(fit.get("max_iters", 30))
+    seed = int(fit.get("seed", 0))
+
+    workers = int(fit.get("workers", 0))
+    if not workers and proc_workers is not None:
+        workers = proc_workers(lam or (4 + int(math.floor(3 * math.log(N)))))
+    workers = workers or 1
+
+    opts = {"seed": seed, "maxiter": max_gens,
+            "verbose": -9}    # silence cma's own console output (bounds: see _denorm)
+    if lam:
+        opts["popsize"] = lam
+
+    es = cma.CMAEvolutionStrategy(x0, sigma0, opts)
+    if hasattr(objective, "total"):
+        objective.total = es.popsize * max_gens
+    verbose = getattr(objective, "verbose", True)
+
+    def _denorm(xn):
+        """A normalized [0,1] point -> the feature's param-override dict."""
+        return {names[j]: float(lo[j] + min(1.0, max(0.0, xn[j])) * span[j])
+                for j in range(N)}
+
+    def evaluate_pop(points):
+        """Objective over the generation; parallel threads when workers>1, recorded in
+        fixed index order so the run is bit-identical (seeded) to the serial one."""
+        overrides = [_denorm(p) for p in points]
+        if workers <= 1:
+            return [objective(o) for o in overrides]
+        objs = [None] * len(overrides)
+
+        def _worker(i):
+            _trial_local.serial = True
+            try:
+                return i, objective.fn(overrides[i])
+            finally:
+                _trial_local.serial = False
+
+        ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="calib-cma")
+        try:
+            futs = [ex.submit(_worker, i) for i in range(len(overrides))]
+            for fut in as_completed(futs):
+                i, v = fut.result()
+                objs[i] = v
+        except BaseException:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+        ex.shutdown(wait=True)
+        for v in objs:
+            objective.record(v)
+        return objs
+
+    gens_run, history = 0, []
+    while not es.stop():
+        points = es.ask()
+        objs = evaluate_pop(points)
+        es.tell(points, objs)
+        gens_run += 1
+        if verbose:
+            print(f"  generation {gens_run}/{max_gens} "
+                  f"(sigma {es.sigma:.4g}, popsize {es.popsize}, "
+                  f"best {es.best.f:.6f})", flush=True)
+        history.append({"gen": gens_run, "best_objective": float(es.best.f),
+                        "sigma": float(es.sigma)})
+
+    best_box = _denorm(es.best.x)
+    return best_box, {"generations": gens_run, "popsize": es.popsize,
+                      "sigma0": sigma0, "seed": seed, "workers": workers,
+                      "history": history}
+
+
+def _spsa(objective, spec, fit, proc_workers=None):
+    """SPSA (Simultaneous Perturbation Stochastic Approximation) — a stochastic
+    gradient-descent optimizer that estimates the gradient from just TWO objective
+    evaluations per iteration REGARDLESS of dimensionality (a finite-difference
+    gradient needs 2N). Each iteration perturbs ALL params at once by a random ±c step
+    and forms a one-sample gradient from the pair, then takes a shrinking step down it.
+    Cheap per step, so it scales to many params — at the cost of a noisy descent whose
+    gains (`a`, `c`) must be tuned to the objective's scale.
+
+    Runs in coordinates NORMALIZED to each param's [lo, hi] range (so one `a`/`c` pair
+    is meaningful across params) and CLAMPS every evaluated point into the [0, 1] box.
+    Gain sequences (Spall): a_k = a/(k+1+A)^alpha, c_k = c/(k+1)^gamma. The two
+    perturbation evals per iteration are INDEPENDENT, so they run in parallel THREADS
+    (workers>=2) and are recorded in fixed (plus, minus) order → the seeded run is
+    deterministic. Returns the BEST point EVALUATED (the SPSA iterate itself is never
+    evaluated and need not be the best)."""
+    names = list(spec)
+    N = len(names)
+    lo = np.array([spec[n]["range"][0] for n in names], dtype=float)
+    hi = np.array([spec[n]["range"][1] for n in names], dtype=float)
+    span = hi - lo
+    span[span == 0] = 1.0   # avoid div-by-zero for a pinned param
+
+    # start at the live source value, in normalized [0,1] coords
+    theta = (np.array([spec[n]["init"] for n in names], dtype=float) - lo) / span
+
+    max_iters = int(fit.get("max_iters", 100))
+    seed = int(fit.get("seed", 0))
+    rng = np.random.default_rng(seed)
+    a = float(fit.get("a", 0.05))
+    c = float(fit.get("c", 0.1))
+    alpha = float(fit.get("alpha", 0.602))
+    gamma = float(fit.get("gamma", 0.101))
+    A = float(fit.get("A", max(1.0, max_iters * 0.1)))
+
+    workers = int(fit.get("workers", 0))
+    if not workers and proc_workers is not None:
+        workers = proc_workers(2)
+    workers = workers or 1
+
+    if hasattr(objective, "total"):
+        objective.total = 2 * max_iters
+    verbose = getattr(objective, "verbose", True)
+
+    def _override(xn):
+        xc = np.clip(xn, 0.0, 1.0)
+        return {names[j]: float(lo[j] + xc[j] * span[j]) for j in range(N)}
+
+    def eval_pair(points):
+        """The (plus, minus) pair; parallel threads when workers>=2, recorded in
+        fixed order so the seeded run is bit-identical to the serial one."""
+        overrides = [_override(p) for p in points]
+        if workers <= 1:
+            return [objective(o) for o in overrides]
+        objs = [None, None]
+
+        def _worker(i):
+            _trial_local.serial = True
+            try:
+                return i, objective.fn(overrides[i])
+            finally:
+                _trial_local.serial = False
+
+        ex = ThreadPoolExecutor(max_workers=min(workers, 2),
+                                thread_name_prefix="calib-spsa")
+        try:
+            futs = [ex.submit(_worker, i) for i in range(2)]
+            for fut in as_completed(futs):
+                i, v = fut.result()
+                objs[i] = v
+        except BaseException:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+        ex.shutdown(wait=True)
+        for v in objs:
+            objective.record(v)
+        return objs
+
+    best_box, best_obj, history, last_print = None, None, [], 0.0
+    for k in range(max_iters):
+        ak = a / (k + 1 + A) ** alpha
+        ck = c / (k + 1) ** gamma
+        delta = (rng.integers(0, 2, size=N) * 2 - 1).astype(float)   # ±1 Rademacher
+        plus, minus = theta + ck * delta, theta - ck * delta
+        yp, ym = eval_pair([plus, minus])
+        improved = False
+        for xn, o in ((plus, yp), (minus, ym)):
+            if best_obj is None or o < best_obj:
+                best_obj, best_box, improved = float(o), _override(xn), True
+        # one-sample gradient estimate (1/delta == delta for ±1) + descent step
+        ghat = (yp - ym) / (2.0 * ck * delta)
+        theta = np.clip(theta - ak * ghat, 0.0, 1.0)
+        history.append({"iter": k + 1, "best_objective": best_obj,
+                        "a_k": float(ak), "c_k": float(ck)})
+        now = time.perf_counter()
+        if verbose and (improved or now - last_print >= 1.0 or k == max_iters - 1):
+            last_print = now
+            print(f"  iter {k + 1}/{max_iters} (a_k {ak:.4g}, c_k {ck:.4g}, "
+                  f"best {best_obj:.6f})", flush=True)
+
+    return best_box, {"iterations": max_iters, "a": a, "c": c, "alpha": alpha,
+                      "gamma": gamma, "A": A, "seed": seed, "workers": workers,
+                      "history": history}
 
 
 def _rank_contributions(contrib):
@@ -575,6 +784,22 @@ def _method_params(fit):
         return {"n_trials": int(fit.get("n_trials", 50)),
                 "seed": int(fit.get("seed", 0)),
                 "workers": int(fit.get("workers", 0)) or "auto"}
+    if m == "cmaes":
+        return {"sigma": float(fit.get("sigma", 0.3)),
+                "popsize": int(fit.get("popsize", 0)) or "auto",
+                "max_iters": int(fit.get("max_iters", 30)),
+                "seed": int(fit.get("seed", 0)),
+                "workers": int(fit.get("workers", 0)) or "auto"}
+    if m == "spsa":
+        mi = int(fit.get("max_iters", 100))
+        return {"a": float(fit.get("a", 0.05)),
+                "c": float(fit.get("c", 0.1)),
+                "alpha": float(fit.get("alpha", 0.602)),
+                "gamma": float(fit.get("gamma", 0.101)),
+                "A": float(fit.get("A", max(1.0, mi * 0.1))),
+                "max_iters": mi,
+                "seed": int(fit.get("seed", 0)),
+                "workers": int(fit.get("workers", 0)) or "auto"}
     if m == "grid":
         return {"grid_step": "per-param (see fitted params / config)"}
     return {}
@@ -632,6 +857,25 @@ def _write_report(adapter, path, config, results):
             lines.append(f"- grid total combinations: {tr.get('grid_total')}")
         elif tr.get("method") == "random_search":
             lines.append(f"- samples: {tr.get('n_trials')} (seed {tr.get('seed')})")
+        elif tr.get("method") == "cmaes":
+            lines.append(f"- generations run: {tr.get('generations')} "
+                         f"(popsize {tr.get('popsize')}, sigma0 {tr.get('sigma0')}, "
+                         f"seed {tr.get('seed')})")
+            if tr.get("history"):
+                lines.append("- per-generation best objective (sigma):")
+                for g in tr["history"]:
+                    lines.append(f"  - gen {g['gen']}: {_fmt(g['best_objective'])} "
+                                 f"(sigma {_fmt(g['sigma'])})")
+        elif tr.get("method") == "spsa":
+            lines.append(f"- iterations: {tr.get('iterations')} "
+                         f"(a {tr.get('a')}, c {tr.get('c')}, alpha {tr.get('alpha')}, "
+                         f"gamma {tr.get('gamma')}, A {tr.get('A')}, "
+                         f"seed {tr.get('seed')})")
+            if tr.get("history"):
+                lines.append("- per-iteration best objective (a_k, c_k):")
+                for h in tr["history"]:
+                    lines.append(f"  - iter {h['iter']}: {_fmt(h['best_objective'])} "
+                                 f"(a_k {_fmt(h['a_k'])}, c_k {_fmt(h['c_k'])})")
         imp = tr.get("improvements") or []
         lines.append(f"- best-so-far improved {len(imp)} time(s); curve "
                      "(trial: objective):")
@@ -765,6 +1009,7 @@ def run_session(adapter, config):
     config["metric"] = adapter.metric_name[kind]
     config["created"] = datetime.now().isoformat(timespec="seconds")
     config["git_commit"] = _git_commit(adapter.calib_dir)
+    config["command_line"] = " ".join(sys.argv)
 
     print("=" * 70)
     print(f"CALIBRATION  kind={kind}  method={_method_desc(fit)}  "
@@ -868,6 +1113,9 @@ def load_config(adapter, args):
     for flag, key in (("epsilon", "epsilon"), ("max_iters", "max_iters"),
                       ("step_shrink", "step_shrink"), ("init_step", "init_step"),
                       ("step_min", "step_min"), ("n_trials", "n_trials"),
+                      ("sigma", "sigma"), ("popsize", "popsize"),
+                      ("spsa_a", "a"), ("spsa_c", "c"), ("spsa_alpha", "alpha"),
+                      ("spsa_gamma", "gamma"), ("spsa_A", "A"),
                       ("seed", "seed"), ("workers", "workers")):
         val = getattr(args, flag, None)
         if val is not None:
@@ -883,7 +1131,7 @@ def run_main(adapter):
     ap.add_argument("--kind", choices=list(adapter.evaluators),
                     help="override / set the calibration kind")
     ap.add_argument("--method", choices=["none", "grid", "coordinate_descent",
-                                         "random_search"],
+                                         "random_search", "cmaes", "spsa"],
                     help="override the fitting method")
     ap.add_argument("--rolls", nargs="+", help="restrict to these roll ids")
     ap.add_argument("--comment", help="a free-text note about this session "
@@ -891,7 +1139,8 @@ def run_main(adapter):
     ap.add_argument("--epsilon", type=float,
                     help="coordinate_descent: stop when a cycle improves < this")
     ap.add_argument("--max-iters", type=int, dest="max_iters",
-                    help="coordinate_descent: max cycles")
+                    help="coordinate_descent: max cycles / cmaes: max generations / "
+                         "spsa: max iterations (2 evals each)")
     ap.add_argument("--step-shrink", type=float, dest="step_shrink",
                     help="coordinate_descent: per-cycle step shrink factor")
     ap.add_argument("--init-step", type=float, dest="init_step",
@@ -900,10 +1149,29 @@ def run_main(adapter):
                     help="coordinate_descent: stop shrinking below this step")
     ap.add_argument("--n-trials", type=int, dest="n_trials",
                     help="random_search: number of samples")
-    ap.add_argument("--seed", type=int, help="random_search: RNG seed")
+    ap.add_argument("--sigma", type=float,
+                    help="cmaes: initial step size in normalized [0,1] param units "
+                         "(default 0.3)")
+    ap.add_argument("--popsize", type=int,
+                    help="cmaes: population size lambda per generation "
+                         "(0/omit = auto = 4+floor(3*ln(N)))")
+    ap.add_argument("--spsa-a", type=float, dest="spsa_a",
+                    help="spsa: step-size gain numerator a_k=a/(k+1+A)^alpha "
+                         "(normalized coords; tune to the objective's scale)")
+    ap.add_argument("--spsa-c", type=float, dest="spsa_c",
+                    help="spsa: perturbation gain numerator c_k=c/(k+1)^gamma "
+                         "(normalized coords; default 0.1)")
+    ap.add_argument("--spsa-alpha", type=float, dest="spsa_alpha",
+                    help="spsa: step-size decay exponent (default 0.602)")
+    ap.add_argument("--spsa-gamma", type=float, dest="spsa_gamma",
+                    help="spsa: perturbation decay exponent (default 0.101)")
+    ap.add_argument("--spsa-A", type=float, dest="spsa_A",
+                    help="spsa: step-size stability constant (default ~10%% of "
+                         "max_iters)")
+    ap.add_argument("--seed", type=int, help="random_search / cmaes / spsa: RNG seed")
     ap.add_argument("--workers", type=int,
-                    help="random_search: parallel trial threads (0/omit = auto; "
-                         "1 = serial)")
+                    help="random_search / cmaes / spsa: parallel trial threads "
+                         "(0/omit = auto; 1 = serial)")
     ap.add_argument("--pca", action="store_true",
                     help="after the fit, compute the principal components of the "
                          "metric's curvature at the optimum (O(N^2) extra evals)")

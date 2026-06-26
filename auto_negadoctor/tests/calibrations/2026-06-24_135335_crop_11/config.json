@@ -1,0 +1,26 @@
+{
+  "kind": "crop",
+  "rolls": [
+    "2506-1",
+    "2510-11-1",
+    "2511-12-1",
+    "2512-2601-1"
+  ],
+  "comment": "first run on spsa. compare with crop_06",
+  "fit": {
+    "method": "spsa",
+    "tolerances": {
+      "containment_weight": 5.0
+    },
+    "params": "all",
+    "a": 0.05,
+    "c": 0.1,
+    "max_iters": 200,
+    "seed": 0,
+    "workers": 16
+  },
+  "metric": "crop_overtrim_area_fraction (containment HARD)",
+  "created": "2026-06-24T13:33:03",
+  "git_commit": "7bb7153",
+  "command_line": "run_calibration.py --config calibrations/configs/crop_spsa_soft.json --comment first run on spsa. compare with crop_06 --workers 16"
+}

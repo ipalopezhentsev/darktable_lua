@@ -1269,6 +1269,133 @@ local function export_annotate_and_apply()
   dt.print(string.format(_("Temp folder (with your annotations) kept: %s"), export_dir))
 end
 
+-- Mode 6: apply annotations from a SAVED ground-truth folder (no export/analyze).
+-- Pops a native folder picker (in the debug UI), opens the UI on the chosen
+-- folder in apply mode so the user can review, and on close applies the saved
+-- annotations (auto-detection where a frame has none) to the selected images:
+-- vignette (lens), crop, and negadoctor as a NEW history item. The folder must
+-- hold the saved session (`*_debug_nega.json` + `*_annotations.json` +
+-- `negadoctor_results.txt`); its TIFFs may live at the roll root (one level up).
+local function export_apply_from_folder()
+  dlog.log_level(dlog.info)
+  math.randomseed(os.time() + os.clock() * 1000)
+
+  local images = dt.gui.selection()
+  if #images == 0 then
+    dt.print(_("No images selected"))
+    return
+  end
+
+  -- Map selected images by sanitized stem (the key applied_results.txt uses).
+  local filename_to_image = {}
+  for i, image in ipairs(images) do
+    local base_name = image.filename:match("(.+)%..+$") or image.filename
+    filename_to_image[df.sanitize_filename(base_name)] = image
+  end
+
+  local debug_ui_script = script_dir .. "debug_ui.py"
+  if not df.check_if_file_exists(debug_ui_script) then
+    dt.print(string.format(_("Debug UI script not found: %s"), debug_ui_script))
+    return
+  end
+
+  -- Launch the debug UI directly (no analysis): --choose-dir pops a native
+  -- folder picker and echoes CHOSEN_DIR|<path>; --apply writes
+  -- applied_results.txt into that folder on close. Foreground/blocking so we
+  -- can read the results back.
+  local command = string.format(
+    'conda run --no-capture-output -n autocrop python -u "%s" --choose-dir --apply',
+    debug_ui_script)
+  dt.print(_("Pick the ground-truth folder, review in the debug UI, then CLOSE it to apply..."))
+
+  local chosen_dir = nil
+  local pipe = io.popen(command .. " 2>&1")
+  if not pipe then
+    dt.print(_("Failed to launch debug UI"))
+    return
+  end
+  for line in pipe:lines() do
+    local d = line:match("^CHOSEN_DIR|(.*)$")
+    if d then
+      chosen_dir = (d ~= "") and d or nil
+    end
+  end
+  pipe:close()
+
+  if not chosen_dir then
+    dt.print(_("Apply-from-folder cancelled (no folder chosen)"))
+    return
+  end
+
+  -- Vignette (roll-wide) from the folder's saved negadoctor_results.txt; the
+  -- per-frame params + crop from the UI's applied_results.txt.
+  local nega_unused, vignette = parse_nega_results(chosen_dir .. "/negadoctor_results.txt")
+  local applied_results = parse_applied_results(chosen_dir .. "/applied_results.txt")
+  if not applied_results then
+    dt.print(string.format(_("No applied results in %s (UI closed without producing them) - nothing applied"), chosen_dir))
+    return
+  end
+
+  local stats = { applied = 0, failed = 0, cropped = 0, crop_failed = 0,
+                  lens_applied = 0, lens_kept = 0, bad = 0, skipped = 0 }
+
+  for idx, result_data in ipairs(applied_results) do
+    if result_data.status == "success" then
+      local original_image = filename_to_image[result_data.filename]
+      if original_image then
+        dt.print(string.format(_("Applying saved annotations to %s..."), original_image.filename))
+        if result_data.bad_inversion then
+          stats.bad = stats.bad + 1
+          dt.print(string.format(_("  Note: %s was flagged as a bad inversion"),
+            original_image.filename))
+        end
+
+        -- vignette (lens) first - it precedes negadoctor in the pipe.
+        if vignette and vignette.params then
+          local lens_outcome, lens_err = apply_lens_in_place(original_image, vignette.params)
+          if lens_outcome == "applied" then
+            stats.lens_applied = stats.lens_applied + 1
+          elseif lens_outcome == "kept" then
+            stats.lens_kept = stats.lens_kept + 1
+          else
+            dt.print(string.format(_("  Warning: lens/vignette apply failed: %s"),
+              lens_err or "Unknown error"))
+          end
+        end
+
+        -- crop (saved annotation, else auto content border) as a new history item
+        if result_data.crop then
+          local crop_ok, crop_err = apply_crop_new_item(original_image, result_data.crop)
+          if crop_ok then
+            stats.cropped = stats.cropped + 1
+          else
+            stats.crop_failed = stats.crop_failed + 1
+            dt.print(string.format(_("  Warning: crop apply failed: %s"),
+              crop_err or "Unknown error"))
+          end
+        end
+
+        -- negadoctor as a NEW history item
+        local success, error_msg = apply_negadoctor_new_item(original_image, result_data.params_hex)
+        if success then
+          stats.applied = stats.applied + 1
+        else
+          stats.failed = stats.failed + 1
+          dt.print(string.format(_("  *** FAILED to apply: %s ***"), error_msg or "Unknown error"))
+        end
+      else
+        -- a frame in the folder that isn't in the current selection
+        stats.skipped = stats.skipped + 1
+      end
+    end
+  end
+
+  dt.print(string.format(
+    _("Apply-from-folder complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept; %d flagged bad, %d not selected"),
+    stats.applied, stats.cropped, stats.failed + stats.crop_failed,
+    stats.lens_applied, stats.lens_kept, stats.bad, stats.skipped))
+end
+
 -- Mode 4: remove the apply-flow modules (negadoctor + crop + lens/vignette)
 -- from the history of all selected frames, for a clean re-run. This strips ALL
 -- crop and lens entries too, so a manually-set crop or lens distortion/TCA
@@ -1321,6 +1448,7 @@ local function destroy()
     dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_Debug")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_InPlace")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Annotate_Apply")
+    dt.gui.libs.image.destroy_action("AutoNegadoctor_Apply_From_Folder")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Remove")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoNegadoctor_Debug", "shortcut")
@@ -1329,6 +1457,7 @@ local function destroy()
     pcall(dt.destroy_event, "AutoNegadoctor_AI_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_AI_InPlace", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_Annotate_Apply", "shortcut")
+    pcall(dt.destroy_event, "AutoNegadoctor_Apply_From_Folder", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_Remove", "shortcut")
 end
 
@@ -1424,6 +1553,23 @@ dt.register_event(
     "shortcut",
     function(event, shortcut) export_annotate_and_apply() end,
     "AutoNegadoctor_Annotate_Apply"
+)
+
+-- Mode 6: apply annotations from a SAVED ground-truth folder (no export/analyze).
+-- Pops a native folder picker, opens the debug UI on it for review, and applies
+-- the saved annotations (auto-detection where none) to the selected images.
+dt.gui.libs.image.register_action(
+    "AutoNegadoctor_Apply_From_Folder",
+    _("Auto negadoctor apply from folder (saved annotations)"),
+    function() export_apply_from_folder() end,
+    _("Pick a saved ground-truth folder, review in the debug UI; on close apply its annotations (auto where none) to the selected images - negadoctor (new history item), crop and vignette")
+)
+
+dt.register_event(
+    "AutoNegadoctor_Apply_From_Folder",
+    "shortcut",
+    function(event, shortcut) export_apply_from_folder() end,
+    "AutoNegadoctor_Apply_From_Folder"
 )
 
 -- Mode 4: remove the apply-flow modules (negadoctor + crop + lens/vignette)

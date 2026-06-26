@@ -38,7 +38,7 @@ import time
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 
 import numpy as np
 from PIL import Image, ImageTk
@@ -447,7 +447,52 @@ class NegadoctorDebugUI(DebugUIBase):
         # in _start_initial_analysis; otherwise load the pre-built session.
         if self.run_mode:
             return [], {}
-        return auto_negadoctor.load_debug_nega_dir(session_dir)
+        images, constants = auto_negadoctor.load_debug_nega_dir(session_dir)
+        self._relocate_negatives(images, session_dir)
+        return images, constants
+
+    # The negative_path baked into {stem}_debug_nega.json points at the throwaway
+    # %TEMP%/darktable_autonegadoctor_* export dir from the run that produced the
+    # session — long gone when you later open a SAVED fixture/annotation folder
+    # directly (calibration --review sidesteps this by re-exporting from the roll
+    # folder, so its paths are live). The source TIFFs live with the roll, often a
+    # level or two UP from the annotation subfolder (e.g.
+    # rolls/2506-1/correct-inversion -> rolls/2506-1/DSC_*.tif, shared by sibling
+    # crop/inversion fixtures). Re-point each frame to its {stem}.<ext> by
+    # searching the session dir, then walking up a few parents.
+    _NEG_EXTS = (".tif", ".tiff", ".jpg", ".jpeg")
+    _NEG_SEARCH_PARENTS = 3
+
+    def _relocate_negatives(self, images, session_dir):
+        base = Path(session_dir)
+        cache = {}
+
+        def find(stem):
+            if stem in cache:
+                return cache[stem]
+            d = base
+            for _ in range(self._NEG_SEARCH_PARENTS + 1):
+                for ext in self._NEG_EXTS:
+                    cand = d / f"{stem}{ext}"
+                    if cand.exists():
+                        cache[stem] = str(cand)
+                        return cache[stem]
+                if d.parent == d:
+                    break
+                d = d.parent
+            cache[stem] = None
+            return None
+
+        for img in images:
+            stem = img.get("stem")
+            if not stem:
+                continue
+            path = img.get("negative_path")
+            if path and Path(path).exists():
+                continue
+            found = find(stem)
+            if found:
+                img["negative_path"] = found
 
     # ------------------------------------------------------------------
     # First-run analysis (run mode): analyze on a background thread and
@@ -1474,9 +1519,11 @@ class NegadoctorDebugUI(DebugUIBase):
         values = [self._PRESET_AS_EXPORTED] + self._preset_names()
         if self._current_preset_label not in values:   # a start --preset path/name
             values.append(self._current_preset_label)
-        self.preset_combo = ttk.Combobox(
-            pr, textvariable=self.preset_var, state="readonly", width=14,
-            values=values)
+        # A long preset name stays readable: the shared helper sizes the entry to
+        # the longest name (capped), widens the drop-down list past that cap, and
+        # adds a full-name hover tooltip.
+        self.preset_combo = self.make_readonly_combobox(
+            pr, self.preset_var, values)
         self.preset_combo.pack(side=tk.LEFT, padx=1, pady=2)
         self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
         # No status text next to the dropdown — the dropdown already shows the
@@ -1671,7 +1718,6 @@ class NegadoctorDebugUI(DebugUIBase):
         self.wheels = {}
         self.wheel_readouts = {}
         self.wb_sliders = {}
-        self._syncing_wb_sliders = False
         for name in WB_NAMES:
             kind = WB_NAME_KIND[name]
             tk.Label(wrap, text=WB_NAME_LABEL[name], bg="#484848", fg="#cccccc",
@@ -1809,6 +1855,12 @@ class NegadoctorDebugUI(DebugUIBase):
         self._inline_slider_frame = f
         self._inline_slider_name = None
         self._inline_slider_sync = False
+        # The display value last pushed via .set() (quantized to the slider's
+        # resolution). tk.Scale fires -command ASYNC after a programmatic .set(),
+        # past the _inline_slider_sync guard, so _on_inline_slider matches this
+        # to ignore that echo (it would otherwise plant a spurious print_override
+        # = the displayed value). Same class of bug as the wb sliders.
+        self._inline_slider_synced = None
 
     def _effective_print_value(self, name):
         img_dict = self.images[self.current_idx]
@@ -1839,6 +1891,8 @@ class NegadoctorDebugUI(DebugUIBase):
             self._inline_slider.config(from_=lo, to=hi,
                                        resolution=PRINT_SLIDER_RES[name])
             self._inline_slider.set(self._print_to_display(name, float(val)))
+            # remember the quantized value the async -command echo will carry
+            self._inline_slider_synced = round(float(self._inline_slider.get()), 9)
         finally:
             self._inline_slider_sync = False
         self._inline_slider_label.config(text=PRINT_LABEL[name])
@@ -1882,8 +1936,13 @@ class NegadoctorDebugUI(DebugUIBase):
         if getattr(self, "_inline_slider_sync", False):
             return
         name = self._inline_slider_name
-        if name:
-            self._apply_print_value(name, self._print_from_display(name, float(v)))
+        if not name:
+            return
+        # Ignore the async echo of a programmatic .set() (see _inline_slider_synced):
+        # it carries exactly the value we pushed, so it isn't a user drag.
+        if round(float(v), 9) == getattr(self, "_inline_slider_synced", None):
+            return
+        self._apply_print_value(name, self._print_from_display(name, float(v)))
 
     def _on_inline_slider_wheel(self, event):
         """Scroll on the slider = fine step; Shift+scroll = coarse step."""
@@ -1900,6 +1959,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self._inline_slider_sync = True
         try:
             self._inline_slider.set(self._print_to_display(name, new))
+            self._inline_slider_synced = round(float(self._inline_slider.get()), 9)
         finally:
             self._inline_slider_sync = False
         return "break"
@@ -2339,16 +2399,16 @@ class NegadoctorDebugUI(DebugUIBase):
     # --- per-channel wb sliders (exact 3-DOF darktable wb) ------------------
 
     def _fill_wb_sliders(self, name, wb):
-        """Position a wheel's three R/G/B sliders to a wb (no callback churn)."""
+        """Position a wheel's three R/G/B sliders to a wb. tk.Scale.set() fires the
+        -command (our _on_wb_slider) on the NEXT idle cycle, but that echo carries
+        exactly the value we set here (= round(effective wb, 3)), so _on_wb_slider
+        recognises and ignores it (see there). No synchronous guard is reliable —
+        the callback fires after it would have reset."""
         sliders = getattr(self, "wb_sliders", {}).get(name)
         if not sliders or not wb:
             return
-        self._syncing_wb_sliders = True
-        try:
-            for ch, s in enumerate(sliders):
-                s.set(round(float(wb[ch]), 3))
-        finally:
-            self._syncing_wb_sliders = False
+        for ch, s in enumerate(sliders):
+            s.set(round(float(wb[ch]), 3))
 
     def _sync_wb_sliders(self):
         if not getattr(self, "wb_sliders", None):
@@ -2362,12 +2422,21 @@ class NegadoctorDebugUI(DebugUIBase):
         (full 3-DOF, clamped to darktable's [0.25, 2.0] range), move the wheel
         marker to the chroma direction and live-render. Heavy bookkeeping +
         slider re-sync are debounced via _wheel_settle."""
-        if getattr(self, "_syncing_wb_sliders", False):
-            return                            # programmatic .set(), not a user drag
         img_dict = self.images[self.current_idx]
+        cur = self._effective_wb(img_dict, name)
+        # tk.Scale fires its -command ASYNCHRONOUSLY after a programmatic .set()
+        # (our _fill_wb_sliders sync) — after any synchronous guard would have
+        # reset. Such an echo carries the value we set, which equals this
+        # channel's current effective wb (rounded to the 0.001 slider step), so
+        # treat a callback that doesn't move the channel off its current value as
+        # that echo and ignore it. Otherwise every sync (frame switch, wheel
+        # re-sync, calibration-review fitted/live toggle) would plant a spurious
+        # override = the displayed wb, which in review stayed pinned to the FITTED
+        # wb when the rest of the params flipped to live.
+        if round(float(value), 3) == round(float(cur[ch]), 3):
+            return
         stem = img_dict["stem"]
-        wb = [nm.clamp(float(v), nm.WB_RANGE)
-              for v in self._effective_wb(img_dict, name)]
+        wb = [nm.clamp(float(v), nm.WB_RANGE) for v in cur]
         wb[ch] = nm.clamp(float(value), nm.WB_RANGE)
         self.annotations[stem]["wb_overrides"][WB_NAME_OVR[name]] = \
             [float(v) for v in wb]
@@ -2614,40 +2683,68 @@ class NegadoctorDebugUI(DebugUIBase):
                             "lo": lo / total * 100.0, "total": total}
         return pixels
 
+    # The clip meter lives in the LEFT panel, in its own section below the
+    # shared histogram + pipette (moved off the canvas 2026-06-26). It's built
+    # by extending the base's _build_histogram_panel and redrawn via the base's
+    # _draw_histogram_extras hook (fires on every histogram refresh).
+
+    CLIP_METER_PANEL_H = 42
+
+    def _build_histogram_panel(self, parent):
+        super()._build_histogram_panel(parent)
+        self._build_clip_meter_panel(parent)
+
+    def _build_clip_meter_panel(self, parent):
+        sec = tk.Frame(parent, bg="#484848")
+        sec.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(0, 2))
+        self._clip_section = sec
+        self.clip_meter_title = tk.Label(sec, text="Clipping:", bg="#484848",
+                                         fg="white", font=("", 9, "bold"))
+        self.clip_meter_title.pack(anchor="w")
+        self.clip_meter_canvas = tk.Canvas(
+            sec, height=self.scaled(self.CLIP_METER_PANEL_H), bg="#1c1c1c",
+            highlightthickness=1, highlightbackground="#666666")
+        self.clip_meter_canvas.pack(fill=tk.X, pady=(2, 2))
+        self.clip_meter_canvas.bind("<Configure>",
+                                    lambda e: self._draw_clip_meter())
+
+    def _draw_histogram_extras(self):
+        """Base hook (fires on every histogram refresh): redraw the clip meter."""
+        self._draw_clip_meter()
+
     def _draw_clip_meter(self):
-        """A VU-style clip-level meter top-right of the canvas: one bar per
-        direction (H = blown highlights, S = crushed shadows) filling to
-        CLIP_METER_FULL_PCT, with a tick at the clip budget and the exact
-        percentage. Always shown; (L) additionally tints clipped pixels on the
-        image. (The histogram itself moved to the left panel.)"""
+        """A VU-style clip-level meter in the left panel (below the histogram /
+        pipette): one bar per direction (H = blown highlights, S = crushed
+        shadows) filling to CLIP_METER_FULL_PCT, with a tick at the clip budget
+        and the exact percentage. (L) additionally tints clipped pixels on the
+        image."""
+        c = getattr(self, "clip_meter_canvas", None)
+        if c is None:
+            return
+        c.delete("all")
+        if hasattr(self, "clip_meter_title"):
+            self.clip_meter_title.config(
+                text="Clipping  (L: ON)" if self.show_clipping else "Clipping  (L)",
+                fg="#ff8888" if self.show_clipping else "white")
         stats = getattr(self, "_clip_stats", None)
-        cw = self.canvas.winfo_width()
-        pw, rh, pad = 150, 13, 4
-        x0 = cw - pw - 12
-        y0 = 10
-        ph = 16 + 2 * (rh + pad)
-        self.canvas.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#1c1c1c",
-                                     outline="#666666", tags="clipmeter")
-        title = "clipping" + ("  L:ON" if self.show_clipping else "  (L)")
-        self.canvas.create_text(x0 + 4, y0 + 2, anchor="nw", text=title,
-                                fill="#dddddd" if self.show_clipping else "#aaaaaa",
-                                font=("Courier", 7, "bold"), tags="clipmeter")
+        w = max(c.winfo_width(), 1)
+        rh = self.scaled(13)
+        pad = self.scaled(4)
+        lab_w, pct_w = self.scaled(16), self.scaled(42)
+        bx0, bx1 = lab_w, w - pct_w
         rows = (("H", "#ff3030", stats["hi"] if stats else None),
                 ("S", "#4080ff", stats["lo"] if stats else None))
-        bx0, bx1 = x0 + 18, x0 + pw - 42
         for i, (lab, color, val) in enumerate(rows):
-            ry = y0 + 15 + i * (rh + pad)
-            self.canvas.create_text(x0 + 4, ry + rh / 2, anchor="w", text=lab,
-                                    fill="#cccccc", font=("Courier", 8),
-                                    tags="clipmeter")
-            self.canvas.create_rectangle(bx0, ry, bx1, ry + rh, fill="#000000",
-                                         outline="#555555", tags="clipmeter")
+            ry = pad + i * (rh + pad)
+            c.create_text(self.scaled(3), ry + rh / 2, anchor="w", text=lab,
+                          fill="#cccccc", font=("Courier", 8))
+            c.create_rectangle(bx0, ry, bx1, ry + rh, fill="#000000",
+                               outline="#555555")
             if val is not None:
                 frac = min(1.0, val / self.CLIP_METER_FULL_PCT)
                 if frac > 0:
-                    self.canvas.create_rectangle(
-                        bx0, ry, bx0 + (bx1 - bx0) * frac, ry + rh,
-                        fill=color, outline="", tags="clipmeter")
+                    c.create_rectangle(bx0, ry, bx0 + (bx1 - bx0) * frac,
+                                       ry + rh, fill=color, outline="")
                 txt = f"{val:.2f}%"
             else:
                 txt = "—"
@@ -2655,12 +2752,12 @@ class NegadoctorDebugUI(DebugUIBase):
             if lab == "H":
                 tx = bx0 + (bx1 - bx0) * min(1.0, self.CLIP_BUDGET_PCT
                                             / self.CLIP_METER_FULL_PCT)
-                self.canvas.create_line(tx, ry - 1, tx, ry + rh + 1,
-                                        fill="#ffd700", width=1, tags="clipmeter")
+                c.create_line(tx, ry - 1, tx, ry + rh + 1,
+                              fill="#ffd700", width=1)
             over = val is not None and lab == "H" and val > self.CLIP_BUDGET_PCT
-            self.canvas.create_text(bx1 + 3, ry + rh / 2, anchor="w", text=txt,
-                                    fill="#ff6060" if over else "#cccccc",
-                                    font=("Courier", 8), tags="clipmeter")
+            c.create_text(bx1 + self.scaled(3), ry + rh / 2, anchor="w",
+                          text=txt, fill="#ff6060" if over else "#cccccc",
+                          font=("Courier", 8))
 
     def _display_base_array(self):
         """Cached HxWx3 uint8 ndarray of the undecorated displayed image (true
@@ -2926,6 +3023,7 @@ class NegadoctorDebugUI(DebugUIBase):
         if self._display_base_pil is not None:
             self.pil_image = self._decorate(self._display_base_pil)
         self._update_clip_btn()
+        self._draw_clip_meter()          # refresh the L:ON title state
         self._redraw()
 
     def _update_clip_btn(self):
@@ -2948,7 +3046,7 @@ class NegadoctorDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def overlay_tags(self):
-        return ("patches", "corrections", "labels", "badges", "clipmeter")
+        return ("patches", "corrections", "labels", "badges")
 
     def _draw_rect(self, rect, color, tags, width=2, dash=None, label=None):
         x, y, w, h = rect
@@ -3007,9 +3105,7 @@ class NegadoctorDebugUI(DebugUIBase):
             w, h = img_dict["width"], img_dict["height"]
             self._draw_rect([2, 2, w - 4, h - 4], "#ff4444", "badges", width=3)
 
-        # The histogram + pipette are in the left panel now; only the clip meter
-        # remains on the canvas.
-        self._draw_clip_meter()
+        # The histogram + pipette + clip meter all live in the left panel now.
         self._update_canvas_status()
 
     def _redraw(self):
@@ -4044,6 +4140,10 @@ def main():
         NegadoctorDebugUI.ALLOW_EMPTY_SESSION = True   # populate progressively
     if "--ai-tune" in sys.argv:
         NegadoctorDebugUI.ai_tune = True
+    if "--choose-dir" in sys.argv:
+        # pop a native folder picker (apply-from-folder flow); the session dir
+        # is then the user's chosen ground-truth folder, not a positional arg.
+        NegadoctorDebugUI.choose_dir = True
     argv, skip = [], False
     for i, a in enumerate(sys.argv):
         if skip:
@@ -4055,14 +4155,14 @@ def main():
             skip = True
         elif a.startswith("--preset="):
             NegadoctorDebugUI.start_preset = a.split("=", 1)[1]
-        elif a in ("--apply", "--run", "--ai-tune"):
+        elif a in ("--apply", "--run", "--ai-tune", "--choose-dir"):
             continue
         else:
             argv.append(a)
     sys.argv = argv
     NegadoctorDebugUI.run_main(
         usage="Usage: debug_ui.py <session_dir> "
-              "[--run] [--apply] [--ai-tune] [--preset NAME]")
+              "[--run] [--apply] [--ai-tune] [--choose-dir] [--preset NAME]")
 
 
 if __name__ == "__main__":

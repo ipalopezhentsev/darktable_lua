@@ -80,7 +80,7 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
 - **Adopt** a result by hand: `cp <session>/fitted_preset.json presets/<name>.json`
   then `RETOUCH_PRESET=<name>` — never edit `detect_dust.py`.
 - Run: `python tests/run_calibration.py --config tests/calibrations/configs/dust_default.json
-  --method none|coordinate_descent|random_search`; review:
+  --method none|coordinate_descent|random_search|cmaes|spsa`; review:
   `--review <session_dir>`. Self-test (fast, image-free): `tests/test_calibration_runner.py`.
 - **Dust debug UI** (`DustDebugUI`) gained a `Detect with:` **preset combo** (toolbar):
   selecting a preset re-runs `detect()` on the CURRENT frame under that preset's
@@ -160,6 +160,48 @@ Each feature has three modes: 1) debug UI (detect + annotate, no apply, detached
 
 Film dust:
 - **AutoRetouch_Debug** (`export_and_detect_dust_debug`) - mode 1: detect + open debug UI, no apply.
+- **AutoRetouch_Apply_From_Folder** (`apply_retouch_from_folder`) - apply SAVED
+  annotations from a user-picked ground-truth folder (NO export/detect). Launches
+  `debug_ui.py --choose-dir --apply` foreground: the base pops a native
+  `filedialog.askdirectory()` + echoes `CHOSEN_DIR|<path>`; `DustDebugUI.apply_mode`
+  loads the folder's `*_debug_spots.json` + `*_annotations.json`, the user reviews,
+  and on close `_write_apply_results` writes `dust_results.txt` from the **FINAL
+  spot set** per frame = detected − `false_positives` + `missed_dust` +
+  `missed_strokes` (via `generate_xmp_data_for_spots`, reading the folder's
+  `transform_params.txt`). Lua reads `dust_results.txt` and heals via the EXISTING
+  `apply_retouch_in_place` XMP-inject path (same as InPlace), matched by sanitized
+  stem. `load_session` resolves each frame's JPG from the session dir / roll root
+  (one level up) when the stored temp path is dead.
+  **Sessions are now self-contained:** the UI-first **streaming run mode** had
+  stopped writing `*_debug_spots.json` (it detected live and never persisted),
+  so re-opening a saved session re-detected from scratch AND `_poll_bg_detect`
+  wiped each frame's annotations to a fresh state after detecting it — apply-from-
+  folder then showed an empty re-analysis. FIXED (2026-06-26): when a frame's
+  detection lands, `_poll_bg_detect` re-loads its `{stem}_annotations.json`
+  (`_load_existing_annotations_for`, re-matching FP/overrides against the FRESH
+  detection by coords/index) instead of wiping it, and on run-mode completion
+  `_persist_debug_spots` writes `{stem}_debug_spots.json` for every frame. So a
+  session created by Debug now reloads with NO re-detection and intact
+  annotations. `_persist_debug_spots` ONLY runs on the run-mode completion path,
+  so a folder that already has debug_spots (a committed fixture being reviewed) is
+  never re-detected or overwritten. (A session saved BEFORE this fix has no
+  debug_spots yet → it re-detects ONCE on first reopen, now keeping annotations
+  and writing debug_spots so the next open is instant.)
+  **Missed dust is now a first-class healable spot** (the feature that made apply
+  possible): a hand-added `missed_dust` ({cx,cy}) is seeded with a heal
+  `brush_radius_px` (median of the frame's detected spots, frame-fraction fallback)
+  + an auto-recommended healing `src_cx/src_cy` (`find_healing_source` over
+  `prepare_source_buffers`); **scroll** resizes it and you **drag its green source
+  square** to move the healing source (a press on the square is CLAIMED via
+  `handle_press_override`/`_drag`/`_release` → `_missed_source_at` /
+  `_missed_src_drag`, so it doesn't fall through to the base's Ctrl+drag
+  zoom-to-rectangle; Ctrl+click still works as an alternative). It renders as a
+  circle + dashed source line
+  (`selected_missed_source`, `_seed_missed_dust`, `_source_buffers_for`,
+  `missed_dust_to_spot`/`missed_stroke_to_spot` in `detect_dust.py`). The UI preview
+  and the apply writer share `missed_dust_to_spot`, so legacy {cx,cy}-only
+  annotations still heal and edited ones honor the user's radius/source. Guarded by
+  `tests/test_missed_spots.py`.
 - **AutoRetouch_InPlace** (`export_detect_and_apply_retouch_inplace(false)`) - mode 2: full pipeline: export, detect dust, apply heal retouch to source image's XMP; temp removed on success.
 - **AutoRetouch_InPlace_KeepTemp** (`export_detect_and_apply_retouch_inplace(true)`) - mode 3: same, temp folder kept.
 

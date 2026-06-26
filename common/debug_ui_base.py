@@ -288,10 +288,7 @@ class DebugUIBase:
         """Physical-pixel scale factor: 1.0 at 96 dpi, ~2.0 at 192 dpi (a 4K
         display at 200%). Pixel-literal widths/sizes are multiplied by this so
         the DPI-aware window isn't physically tiny. Never below 1.0."""
-        try:
-            s = self.root.winfo_fpixels("1i") / 96.0
-        except Exception:
-            s = 1.0
+        s = self._screen_dpi(self.root) / 96.0
         return s if s and s > 1.0 else 1.0
 
     def scaled(self, px):
@@ -438,6 +435,69 @@ class DebugUIBase:
         """Add a thin vertical separator to the toolbar `row`."""
         tk.Frame(row, width=1, bg="#6a6a6a").pack(
             side=tk.LEFT, fill=tk.Y, padx=5, pady=3)
+
+    def make_readonly_combobox(self, parent, textvariable, values,
+                               max_width=40, min_width=14, **kw):
+        """A readonly ttk.Combobox that stays readable when an entry (e.g. a
+        preset name) is LONGER than the box: the entry is sized to the longest
+        value (capped at max_width so it never crowds the toolbar), the drop-down
+        LIST is widened to fit the longest value regardless of that cap (Tk
+        otherwise sizes the list to the entry, truncating long names there too),
+        and a hover tooltip shows the full selected value. Returns the combo."""
+        import tkinter.ttk as ttk
+        longest = max((len(str(v)) for v in values), default=min_width)
+        combo = ttk.Combobox(parent, textvariable=textvariable, values=values,
+                             state="readonly",
+                             width=min(max(longest, min_width), max_width), **kw)
+        self._widen_combobox_popdown(combo, longest)
+        self._attach_combobox_tooltip(combo, textvariable)
+        return combo
+
+    @staticmethod
+    def _widen_combobox_popdown(combo, longest):
+        """Force a combobox's drop-down list wide enough for its longest value.
+        Tk creates the popdown listbox lazily and sizes it to the entry, so a
+        long value is truncated in the open list too; set the internal listbox
+        width directly the first time the list is opened (mouse or keyboard)."""
+        target = max(int(longest) + 2, 16)
+
+        def _apply(_e=None):
+            try:
+                lb = combo.tk.call(
+                    "ttk::combobox::PopdownWindow", combo) + ".f.l"
+                combo.tk.call(lb, "configure", "-width", target)
+            except Exception:
+                pass
+        combo.bind("<Button-1>", _apply, add="+")
+        combo.bind("<Map>", _apply, add="+")
+
+    @staticmethod
+    def _attach_combobox_tooltip(combo, textvariable):
+        """Hover tooltip showing the FULL current value of `combo` (the entry can
+        be capped narrower than a long value)."""
+        tip: list = [None]  # single-cell holder: the open tooltip Toplevel or None
+
+        def show(_e=None):
+            text = textvariable.get()
+            if tip[0] is not None or not text:
+                return
+            x = combo.winfo_rootx()
+            y = combo.winfo_rooty() + combo.winfo_height()
+            w = tk.Toplevel(combo)
+            w.wm_overrideredirect(True)
+            w.wm_geometry(f"+{x}+{y}")
+            tk.Label(w, text=text, bg="#ffffe0", fg="#000000", font=("", 8),
+                     relief=tk.SOLID, borderwidth=1, padx=4, pady=2).pack()
+            tip[0] = w
+
+        def hide(_e=None):
+            if tip[0] is not None:
+                tip[0].destroy()
+                tip[0] = None
+
+        combo.bind("<Enter>", show, add="+")
+        combo.bind("<Leave>", hide, add="+")
+        combo.bind("<<ComboboxSelected>>", lambda e: hide(), add="+")
 
     def build_feature_toolbar(self, toolbar, row):
         """Feature toolbar widgets: left-pack buttons onto `row` (use
@@ -1016,6 +1076,14 @@ class DebugUIBase:
                 self._hist_data = [h / peak for h in hists]
         self._draw_histogram()
         self._draw_pipette()        # keep the readout consistent with the image
+        self._draw_histogram_extras()
+
+    def _draw_histogram_extras(self):
+        """Hook: feature-specific widgets in the left histogram section (drawn
+        whenever the histogram refreshes — e.g. negadoctor's clip meter). No-op
+        by default; the panel is built by a feature override of
+        _build_histogram_panel."""
+        pass
 
     def _draw_histogram(self):
         c = getattr(self, "hist_canvas", None)
@@ -2040,29 +2108,101 @@ class DebugUIBase:
             pass
 
     @staticmethod
-    def _apply_dpi_scaling(root):
+    def _screen_dpi(root):
+        """Real screen DPI (96 = 100%, 144 = 150%, 192 = 200%).
+
+        Prefer the authoritative Win32 value (GetDpiForWindow on the actual
+        window, falling back to GetDpiForSystem) over Tk's winfo_fpixels: Tk
+        derives DPI from the driver-reported screen size in MILLIMETRES, which
+        many displays report wrong (or as a default), so winfo_fpixels silently
+        comes back near 96 and the whole UI scales down to physically-tiny
+        widgets even though the OS is at 150/200% — while the OS-drawn menu bar
+        (native DPI) stays correct, exactly the 'everything tiny except the
+        menu' symptom. An explicit DEBUG_UI_DPI override wins for hard cases."""
+        env = os.environ.get("DEBUG_UI_DPI")
+        if env:
+            try:
+                return float(env)
+            except ValueError:
+                pass
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                hwnd = root.winfo_id() if root is not None else 0
+                dpi = 0
+                if hwnd:
+                    try:
+                        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+                    except Exception:
+                        dpi = 0
+                if not dpi:
+                    try:
+                        dpi = ctypes.windll.user32.GetDpiForSystem()
+                    except Exception:
+                        dpi = 0
+                if dpi and dpi > 0:
+                    return float(dpi)
+            except Exception:
+                pass
+        try:
+            return float(root.winfo_fpixels("1i"))
+        except Exception:
+            return 96.0
+
+    @classmethod
+    def _apply_dpi_scaling(cls, root):
         """Now that the window is DPI-aware (crisp but laid out in physical
         pixels, hence tiny on 4K), scale Tk's point->pixel factor to the real
         screen DPI so fonts/widgets keep a sane size. Tk's reference is 72 dpi."""
         try:
-            dpi = root.winfo_fpixels("1i")
+            dpi = cls._screen_dpi(root)
             if dpi and dpi > 0:
                 root.tk.call("tk", "scaling", dpi / 72.0)
         except Exception:
             pass
 
+    @staticmethod
+    def _prompt_session_dir(title="Pick ground-truth annotation folder"):
+        """Pop a native folder picker (used by --choose-dir). Returns the chosen
+        absolute path, or None if the user cancelled. Uses a throwaway hidden Tk
+        root so it works before the real UI window is built."""
+        from tkinter import filedialog
+        picker_root = tk.Tk()
+        picker_root.withdraw()
+        try:
+            chosen = filedialog.askdirectory(title=title)
+        finally:
+            picker_root.destroy()
+        return os.path.abspath(chosen) if chosen else None
+
     @classmethod
     def run_main(cls, usage="Usage: debug_ui.py <session_dir>"):
-        if len(sys.argv) < 2:
+        session_dir = sys.argv[1] if len(sys.argv) >= 2 else None
+
+        # DPI awareness must be enabled BEFORE the first Tk() in the process (it
+        # is a one-shot, ignored once any window exists). The --choose-dir picker
+        # below creates a throwaway Tk root, so enable it here at the very top —
+        # otherwise that picker would lock the process at un-aware and the real
+        # window would render tiny.
+        cls._enable_windows_dpi_awareness()
+
+        # --choose-dir: pop a native folder picker instead of taking the dir on
+        # the command line, and echo the choice to stdout (CHOSEN_DIR|<path>) so
+        # the Lua caller learns where to read applied_results.txt. Empty = cancel.
+        if getattr(cls, "choose_dir", False):
+            chosen = cls._prompt_session_dir()
+            print(f"CHOSEN_DIR|{chosen or ''}", flush=True)
+            if not chosen:
+                sys.exit(0)
+            session_dir = chosen
+
+        if not session_dir:
             print(usage)
             sys.exit(1)
-
-        session_dir = sys.argv[1]
         if not os.path.isdir(session_dir):
             print(f"Error: directory not found: {session_dir}")
             sys.exit(1)
 
-        cls._enable_windows_dpi_awareness()
         root = tk.Tk()
         cls._apply_dpi_scaling(root)
         app = cls(root, session_dir)

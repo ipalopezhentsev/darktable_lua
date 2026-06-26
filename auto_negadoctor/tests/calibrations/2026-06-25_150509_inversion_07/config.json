@@ -1,0 +1,24 @@
+{
+  "kind": "inversion",
+  "rolls": [
+    "2506-1",
+    "2510-11-1"
+  ],
+  "comment": "100 iters of cmaes!",
+  "fit": {
+    "method": "cmaes",
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all",
+    "sigma": 0.3,
+    "popsize": 16,
+    "max_iters": 100,
+    "seed": 0,
+    "workers": 1
+  },
+  "metric": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
+  "created": "2026-06-24T23:00:00",
+  "git_commit": "7bb7153",
+  "command_line": "run_calibration.py --config calibrations/configs/inversion_cmaes.json --workers 1 --comment 100 iters of cmaes! --rolls 2506-1 2510-11-1"
+}
