@@ -119,7 +119,7 @@ local function parse_nega_results(results_file_path)
 end
 
 -- Parse applied_results.txt written by the debug UI on close (annotate+apply
--- flow): one `OK|stem|params=<hex>|crop=L,T,R,B|flag=ok` line per frame, where
+-- flow): one `OK|stem|params=<hex>|crop=L,T,R,B` line per frame, where
 -- params are the user's corrections applied over the auto analysis (auto where
 -- none) and crop is normalized [left,top,right,bottom] positions in [0,1], or
 -- `none`. Returns a results list (or nil when the file is missing/empty).
@@ -134,8 +134,10 @@ local function parse_applied_results(results_file_path)
   for line in file:lines() do
     local status, rest = line:match("^(%u+)|(.+)$")
     if status == "OK" then
-      local filename, params_hex, crop_str, flag = rest:match(
-        "^([^|]+)|params=([0-9a-fA-F]+)|crop=([^|]+)|flag=(%w+)$")
+      -- crop is the last field; tolerate an optional legacy `|flag=...` suffix
+      -- written by older sessions (the bad-inversion flag was removed).
+      local filename, params_hex, crop_str = rest:match(
+        "^([^|]+)|params=([0-9a-fA-F]+)|crop=([^|]+)")
       if filename and #params_hex == 152 then
         local crop = nil
         if crop_str ~= "none" then
@@ -151,7 +153,6 @@ local function parse_applied_results(results_file_path)
           filename = filename,
           params_hex = params_hex,
           crop = crop,
-          bad_inversion = (flag == "bad"),
         }
       else
         dlog.msg(dlog.warn, "parse_applied_results", "Malformed OK line: " .. line)
@@ -1208,18 +1209,13 @@ local function export_annotate_and_apply()
   end
 
   local stats = { applied = 0, failed = 0, cropped = 0, crop_failed = 0,
-                  lens_applied = 0, lens_kept = 0, bad = 0 }
+                  lens_applied = 0, lens_kept = 0 }
 
   for idx, result_data in ipairs(applied_results) do
     if result_data.status == "success" then
       local original_image = filename_to_image[result_data.filename]
       if original_image then
         dt.print(string.format(_("Applying annotated negadoctor to %s..."), original_image.filename))
-        if result_data.bad_inversion then
-          stats.bad = stats.bad + 1
-          dt.print(string.format(_("  Note: %s was flagged as a bad inversion in the UI"),
-            original_image.filename))
-        end
 
         -- vignette (lens) first - it precedes negadoctor in the pipe, and the
         -- negadoctor params assume vignette-corrected input.
@@ -1263,9 +1259,9 @@ local function export_annotate_and_apply()
   end
 
   dt.print(string.format(
-    _("Annotate+Apply complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept; %d flagged bad"),
+    _("Annotate+Apply complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept"),
     stats.applied, stats.cropped, stats.failed + stats.crop_failed,
-    stats.lens_applied, stats.lens_kept, stats.bad))
+    stats.lens_applied, stats.lens_kept))
   dt.print(string.format(_("Temp folder (with your annotations) kept: %s"), export_dir))
 end
 
@@ -1337,18 +1333,13 @@ local function export_apply_from_folder()
   end
 
   local stats = { applied = 0, failed = 0, cropped = 0, crop_failed = 0,
-                  lens_applied = 0, lens_kept = 0, bad = 0, skipped = 0 }
+                  lens_applied = 0, lens_kept = 0, skipped = 0 }
 
   for idx, result_data in ipairs(applied_results) do
     if result_data.status == "success" then
       local original_image = filename_to_image[result_data.filename]
       if original_image then
         dt.print(string.format(_("Applying saved annotations to %s..."), original_image.filename))
-        if result_data.bad_inversion then
-          stats.bad = stats.bad + 1
-          dt.print(string.format(_("  Note: %s was flagged as a bad inversion"),
-            original_image.filename))
-        end
 
         -- vignette (lens) first - it precedes negadoctor in the pipe.
         if vignette and vignette.params then
@@ -1391,9 +1382,9 @@ local function export_apply_from_folder()
   end
 
   dt.print(string.format(
-    _("Apply-from-folder complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept; %d flagged bad, %d not selected"),
+    _("Apply-from-folder complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept; %d not selected"),
     stats.applied, stats.cropped, stats.failed + stats.crop_failed,
-    stats.lens_applied, stats.lens_kept, stats.bad, stats.skipped))
+    stats.lens_applied, stats.lens_kept, stats.skipped))
 end
 
 -- Mode 4: remove the apply-flow modules (negadoctor + crop + lens/vignette)

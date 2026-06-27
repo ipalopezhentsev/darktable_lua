@@ -1,0 +1,25 @@
+{
+  "kind": "inversion",
+  "rolls": [
+    "2506-1",
+    "2510-11-1"
+  ],
+  "comment": "same as _07 but with 2x downsample. compare with it and _02.",
+  "fit": {
+    "method": "cmaes",
+    "downsample": 2,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all",
+    "sigma": 0.3,
+    "popsize": 16,
+    "max_iters": 100,
+    "seed": 1,
+    "workers": 1
+  },
+  "metric": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
+  "created": "2026-06-27T01:35:20",
+  "git_commit": "d6f21ed",
+  "command_line": "run_calibration.py --config calibrations/configs/inversion_cmaes_downsample2.json --comment same as _07 but with 2x downsample. compare with it and _02. --rolls 2506-1 2510-11-1 --workers 1"
+}

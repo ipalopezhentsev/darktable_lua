@@ -25,7 +25,6 @@ Interaction (same idiom as the crop UI: select, then Ctrl+Click / scroll):
     Scroll (patch selected) — nudge corrected patch 1 px vertically (Shift = 10 px)
     C — clear the correction for the selected patch
     V — toggle inverted preview / original negative view
-    G — toggle "bad inversion" flag for the whole frame
 """
 
 import sys
@@ -143,13 +142,12 @@ CROP_KEY = "8"
 
 # Snapshot: the per-frame annotation fields captured by "Snapshot current
 # settings" (S) and put back by "Restore to snapshot" (Z). These are the whole
-# editable look — patch/print/wb corrections, crop, notes and the bad flag.
+# editable look — patch/print/wb corrections, crop and notes.
 # global_base is deliberately excluded (it is a roll-wide mechanism with its own
 # set/clear), but its CURRENT effect is already baked into the frozen snapshot
 # params used for the compare render, so the compared image stays faithful.
 SNAPSHOT_FIELDS = ("patch_corrections", "print_overrides", "wb_overrides",
-                   "crop_correction", "patch_notes", "bad_inversion",
-                   "bad_inversion_note")
+                   "crop_correction", "patch_notes")
 
 # Analysis-mask view (M key cycles): category codes from
 # auto_negadoctor.build_analysis_mask and their RGBA tints. The analysis
@@ -671,8 +669,6 @@ class NegadoctorDebugUI(DebugUIBase):
             "wb_overrides": {},        # {"shadows"/"highlights": [r, g, b] wb}
             "crop_correction": None,   # [x, y, w, h] true photo-content rect
             "patch_notes": {},         # {patch / print param / wb / "crop": str}
-            "bad_inversion": False,
-            "bad_inversion_note": "",
             # set on the ONE frame chosen as the roll-wide film-base source:
             # {"winner_rgb": [r,g,b], "winner_factor": float}
             "global_base": None,
@@ -713,8 +709,6 @@ class NegadoctorDebugUI(DebugUIBase):
             "print_overrides": out_over,
             "wb_overrides": out_wb,
             "patch_notes": {p: n for p, n in sorted(ann["patch_notes"].items())},
-            "bad_inversion": bool(ann["bad_inversion"]),
-            "bad_inversion_note": ann["bad_inversion_note"],
         }
         if ann.get("crop_correction"):
             border = list(img_dict.get("border") or []) if img_dict else None
@@ -765,8 +759,6 @@ class NegadoctorDebugUI(DebugUIBase):
         ann["patch_notes"] = {p: str(n) for p, n in data.get("patch_notes", {}).items()
                               if (p in PATCHES or p in PRINT_PARAMS
                                   or p in WB_NAMES or p == CROP_NAME) and n}
-        ann["bad_inversion"] = bool(data.get("bad_inversion", False))
-        ann["bad_inversion_note"] = str(data.get("bad_inversion_note", ""))
         gb = data.get("global_base")
         if gb and isinstance(gb, dict):
             try:
@@ -878,6 +870,45 @@ class NegadoctorDebugUI(DebugUIBase):
             lin = cv2.resize(lin, (max(1, round(w * s)), max(1, round(h * s))),
                              interpolation=cv2.INTER_AREA)
         return self._invert_pil(lin, params)
+
+    def _on_leave_image(self, idx):
+        """Navigating away from frame `idx`: re-render its sidebar thumbnail so
+        it reflects the user's corrections (the plain auto thumbnail otherwise
+        keeps showing the un-corrected inversion)."""
+        self._bake_corrected_thumb(idx)
+
+    def _bake_corrected_thumb(self, idx):
+        """Re-render frame `idx`'s thumbnail from its CORRECTED params (Dmin /
+        wb / print / crop overrides applied), so the strip mirrors the edited
+        look. Runs on the MAIN thread, reusing the just-displayed frame's cached
+        negative (still warm in _neg_lin) and rendering at thumbnail scale, so
+        it's cheap and avoids racing the background thumbnail loader's cache.
+        When a frame's corrections were cleared, revert it to the auto render."""
+        if idx is None or idx < 0 or idx >= len(self.images):
+            return
+        baked = getattr(self, "_corrected_thumbs", None)
+        if baked is None:
+            baked = self._corrected_thumbs = set()
+        img_dict = self.images[idx]
+        params = self._corrected_params(img_dict)
+        if params is None:
+            if idx not in baked:
+                return                       # plain auto thumbnail already right
+            params = self._variant_params(img_dict)   # corrections cleared: revert
+            baked.discard(idx)
+        else:
+            baked.add(idx)
+        lin = self._neg_lin(img_dict)
+        if lin is None or not params:
+            return
+        import cv2
+        h, w = lin.shape[:2]
+        longest = max(h, w)
+        if longest > self._THUMB_RENDER_MAX:
+            s = self._THUMB_RENDER_MAX / longest
+            lin = cv2.resize(lin, (max(1, round(w * s)), max(1, round(h * s))),
+                             interpolation=cv2.INTER_AREA)
+        self._apply_stream_thumb(idx, self._invert_pil(lin, params))
 
     def _neg_rgb_at(self, img_dict, rect):
         lin = self._neg_lin(img_dict)
@@ -1088,8 +1119,8 @@ class NegadoctorDebugUI(DebugUIBase):
         return [left, top, right, bottom]
 
     def _write_applied_results(self):
-        """Write applied_results.txt: one `OK|stem|params=<hex>|crop=L,T,R,B|
-        flag=ok` line per frame, params being the user's corrections applied over
+        """Write applied_results.txt: one `OK|stem|params=<hex>|crop=L,T,R,B`
+        line per frame, params being the user's corrections applied over
         the auto analysis (auto where the user added none). Crop is `none` when
         there is no usable box. Read back by the Lua apply step."""
         lines = []
@@ -1107,8 +1138,7 @@ class NegadoctorDebugUI(DebugUIBase):
             crop = self._crop_positions(img)
             crop_str = ("none" if crop is None else
                         ",".join(f"{v:.6f}" for v in crop))
-            flag = "bad" if self.annotations[stem].get("bad_inversion") else "ok"
-            lines.append(f"OK|{stem}|params={params_hex}|crop={crop_str}|flag={flag}")
+            lines.append(f"OK|{stem}|params={params_hex}|crop={crop_str}")
         path = Path(self.session_dir) / self.APPLIED_RESULTS_FILENAME
         path.write_text("\n".join(lines) + ("\n" if lines else ""),
                         encoding="utf-8")
@@ -1363,7 +1393,6 @@ class NegadoctorDebugUI(DebugUIBase):
         ("◈", "#ffd700", "GLOBAL film base (winner)"),
         ("□", PATCH_COLORS["highlights"], "Highlights patch (wb_high)"),
         ("┊", "#00ff88", "Corrected position"),
-        ("▣", "#ff4444", "Bad inversion flag"),
         ("▒", "#ff6060", "Rejected outside crop (M)"),
         ("□", "#44ee44", "User crop (true content)"),
         ("■", "#ff3030", "Clipped highlights (L)"),
@@ -1416,7 +1445,6 @@ class NegadoctorDebugUI(DebugUIBase):
         "  L           on-image clip overlay (red=blown, blue=crushed)\n"
         "  P           display color management on / off (sRGB->monitor;\n"
         "              ON matches darktable's color-managed view)\n"
-        "  G           toggle the bad-inversion flag\n"
         "  H           hide / show markers\n"
         "  F           fit to window;  + / -  zoom;  arrows pan\n\n"
         "Corrections re-render the inversion live. The shadows/highlights\n"
@@ -1499,9 +1527,6 @@ class NegadoctorDebugUI(DebugUIBase):
                         command=self._restore_snapshot)
         adj.add_command(label="Compare with snapshot", accelerator="D",
                         command=self._toggle_snapshot_compare)
-        adj.add_separator()
-        adj.add_command(label="Toggle bad-inversion flag", accelerator="G",
-                        command=self._toggle_bad_inversion)
         menubar.add_cascade(label="Adjust", menu=adj)
 
     def extend_help_menu(self, helpm):
@@ -2111,8 +2136,6 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<C>", lambda e: self._clear_correction())
         self.bind_key("<v>", lambda e: self._toggle_view())
         self.bind_key("<V>", lambda e: self._toggle_view())
-        self.bind_key("<g>", lambda e: self._toggle_bad_inversion())
-        self.bind_key("<G>", lambda e: self._toggle_bad_inversion())
         self.bind_key("<x>", lambda e: self._toggle_compare())
         self.bind_key("<X>", lambda e: self._toggle_compare())
         # snapshot the current look (S), restore it (Z), compare with it (D)
@@ -3167,14 +3190,6 @@ class NegadoctorDebugUI(DebugUIBase):
         self.clip_btn.config(text="Clip ✓" if on else "Clip",
                              fg="#ff6666" if on else "white")
 
-    def _toggle_bad_inversion(self):
-        stem = self.images[self.current_idx]["stem"]
-        ann = self.annotations[stem]
-        ann["bad_inversion"] = not ann["bad_inversion"]
-        self._auto_save(stem)
-        self._redraw_markers()           # red frame border indicates the flag
-        self._update_canvas_status()     # + textual flag in the status strip
-
     # ------------------------------------------------------------------
     # Drawing
     # ------------------------------------------------------------------
@@ -3234,11 +3249,6 @@ class NegadoctorDebugUI(DebugUIBase):
             grown = [r[0] - 4, r[1] - 4, r[2] + 8, r[3] + 8]
             self._draw_rect(grown, "#ffd700", "patches", width=2, label="GLOBAL")
 
-        # bad-inversion frame border (the textual flag is in the status bar)
-        if ann["bad_inversion"]:
-            w, h = img_dict["width"], img_dict["height"]
-            self._draw_rect([2, 2, w - 4, h - 4], "#ff4444", "badges", width=3)
-
         # The histogram + pipette + clip meter all live in the left panel now.
         self._update_canvas_status()
 
@@ -3250,7 +3260,7 @@ class NegadoctorDebugUI(DebugUIBase):
 
     def _update_canvas_status(self):
         """Compose the live view-state line shown in the toolbar status strip
-        (render mode, global-base, bad-inversion, analysis-crop view) — these
+        (render mode, global-base, analysis-crop view) — these
         used to be drawn on top of the image."""
         if not hasattr(self, "canvas_status"):
             return
@@ -3277,9 +3287,6 @@ class NegadoctorDebugUI(DebugUIBase):
             parts.append(("★ global film-base winner", "#ffd700"))
         elif fb.get("global_winner_stem"):
             parts.append((f"global base from {fb['global_winner_stem']}", "#ffd700"))
-
-        if ann["bad_inversion"]:
-            parts.append(("BAD INVERSION", "#ff6060"))
 
         if self.mask_view == 1:
             parts.append(("ANALYSIS CROP: red = rejected (drag to correct)",
@@ -4107,7 +4114,6 @@ class NegadoctorDebugUI(DebugUIBase):
         overridden_by_param = {p: 0 for p in PRINT_PARAMS}
         wb_override_count = {n: 0 for n in WB_NAMES}
         crop_count = 0
-        bad_count = 0
         fallback_count = 0
         images_with_corrections = 0
 
@@ -4140,14 +4146,9 @@ class NegadoctorDebugUI(DebugUIBase):
                 fallback_count += 1
                 lines.append("  NOTE: highlights wb fell back to roll median")
 
-            if ann["bad_inversion"]:
-                bad_count += 1
-                note = f" — {ann['bad_inversion_note']}" if ann["bad_inversion_note"] else ""
-                lines.append(f"  ** BAD INVERSION flagged by user{note}")
-
             crop = ann.get("crop_correction")
             if (not corrections and not overrides and not wb_overrides
-                    and not crop and not notes and not ann["bad_inversion"]):
+                    and not crop and not notes):
                 lines.append("  No corrections — accepted.")
                 lines.append("")
                 continue
@@ -4248,7 +4249,6 @@ class NegadoctorDebugUI(DebugUIBase):
         for name in WB_NAMES:
             lines.append(f"    {WB_NAME_OVR[name]:<10} {wb_override_count[name]}")
         lines.append(f"  Crop corrections: {crop_count}")
-        lines.append(f"  Bad inversions flagged: {bad_count} / {len(self.images)}")
         lines.append(f"  wb fallbacks (patch missing): {fallback_count}")
         lines.append(f"  Images with corrections: {images_with_corrections} / "
                      f"{len(self.images)}")

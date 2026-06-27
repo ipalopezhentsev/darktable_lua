@@ -1,0 +1,15 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "comment": "Coordinate descent over ALL inversion params with calibration-only 2x downsampling -- the per-trial pipeline (stage B1/B2: crop/percentiles/wb/print) runs on a buffer area-resampled 2x in linear working space, ~2.7x faster per trial; vignette + film base stay full-res (computed once in the prefix) and the EMD scoring is still measured full-res. Params drift slightly (roll 2506-1 @2x: exposure ~0.01, wb ~0.01, well within TOL_GT_*), so this is for the SEARCH; ALWAYS re-validate the fitted preset at full res (drop the downsample / --downsample 1) before adopting it. Same as inversion_default otherwise.",
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 6,
+    "downsample": 2,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  }
+}

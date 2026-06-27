@@ -113,9 +113,15 @@ class DustDebugUI(DebugUIBase):
         # Sensor-dust sessions reuse this UI wholesale (sensor spots are dot
         # spots in the same dict format); only title and report wording differ.
         self.sensor_mode = bool(images and images[0].get("mode") == "sensor")
-        if self.sensor_mode:
-            self.root.title("Sensor Dust Debug UI")
         return images, constants
+
+    def _window_base_title(self):
+        # Sensor-dust sessions reuse this UI wholesale; only the title + report
+        # wording differ. The mode prefix (Calib. review / Correction) is added
+        # on top by the base.
+        if getattr(self, "sensor_mode", False):
+            return "Sensor Dust Debug UI"
+        return self.WINDOW_TITLE
 
     # ------------------------------------------------------------------
     # Apply-from-folder: final spot set + dust_results.txt on close

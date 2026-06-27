@@ -1,0 +1,17 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "comment": "CMA-ES over ALL inversion params with calibration-only 2x downsampling -- each generation's trials re-derive params on a buffer area-resampled 2x in linear working space (~2.7x faster/trial), while vignette + film base stay full-res and the EMD that scores each candidate is still measured full-res. With popsize 16 x 100 generations the per-trial saving compounds, so this is the cheapest way to run a broad CMA-ES search; the small param drift (roll 2506-1 @2x: exposure ~0.01, wb ~0.01) is acceptable for exploration but ALWAYS re-validate the fitted preset full-res (--downsample 1) before adopting. Same as inversion_cmaes otherwise.",
+  "fit": {
+    "method": "cmaes",
+    "downsample": 2,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all",
+    "sigma": 0.3,
+    "popsize": 16,
+    "max_iters": 100,
+    "seed": 1
+  }
+}

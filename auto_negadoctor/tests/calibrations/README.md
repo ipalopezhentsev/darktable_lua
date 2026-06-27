@@ -360,6 +360,12 @@ conda run -n autocrop python auto_negadoctor/tests/run_calibration.py \
 # vignette fit (captures each roll's envelope from its TIFFs, then re-fits)
 ... --config .../vignette_default.json
 
+# inversion fit ~2.7x faster/trial via 2x downsampling (INVERSION ONLY): params
+# are re-derived on a downsampled buffer (vignette/film base stay full res, EMD
+# stays full res). For the SEARCH only — re-validate the result with --downsample 1.
+... --config .../inversion_cmaes_downsample2.json     # (or set --downsample 2 on any inversion config)
+... --config .../inversion_descent_downsample2.json
+
 # review ANY session (crop / vignette / inversion) in the debug UI:
 #   key R flips FITTED (this session) <-> live (current source-code) result;
 #   key N toggles the vignette correction on/off in the preview

@@ -794,13 +794,9 @@ def main():
                 f"item pane width {iw} outside [{item_min}, {item_max}]"
         step("pane_reflow", pane_reflow)
 
-        # View + bad-inversion toggles
+        # View toggles
         step("view_negative", lambda: app._toggle_view())
         step("view_inverted", lambda: app._toggle_view())
-        def bad():
-            app._toggle_bad_inversion()
-            assert app.annotations[stem]["bad_inversion"] is True
-        step("bad_inversion", bad)
 
         # Clear correction for film_base, keep the highlights correction
         def clear():
@@ -812,6 +808,35 @@ def main():
             app._clear_correction()
             assert "film_base" not in app.annotations[stem]["patch_corrections"]
         step("clear_correction", clear)
+
+        # Leaving a CORRECTED frame bakes the correction into its sidebar
+        # thumbnail; clearing the correction reverts the thumbnail on the next
+        # leave (the strip mirrors the edited look).
+        def corrected_thumb_on_leave():
+            leaving = app.current_idx
+            other = leaving + 1 if leaving + 1 < len(app.images) else leaving - 1
+            lstem = app.images[leaving]["stem"]
+            saved_ann = copy.deepcopy(app.annotations[lstem])
+            # clean baseline so the revert assertion is unambiguous
+            app.annotations[lstem] = app.new_annotation_state(app.images[leaving])
+            if hasattr(app, "_corrected_thumbs"):
+                app._corrected_thumbs.discard(leaving)
+            before = app.lb_photos[leaving]
+            app.annotations[lstem]["print_overrides"]["gamma"] = 4.2
+            app._nav_image(other - leaving)
+            assert leaving in app._corrected_thumbs, \
+                "leaving a corrected frame did not bake its thumbnail"
+            assert app.lb_photos[leaving] is not None \
+                and app.lb_photos[leaving] is not before, \
+                "corrected thumbnail not applied to the strip"
+            app._nav_image(leaving - app.current_idx)
+            app.annotations[lstem]["print_overrides"].clear()
+            app._nav_image(other - leaving)
+            assert leaving not in app._corrected_thumbs, \
+                "clearing corrections did not drop the frame from the baked set"
+            app.annotations[lstem] = saved_ann
+            app._nav_image(leaving - app.current_idx)
+        step("corrected_thumb_on_leave", corrected_thumb_on_leave)
 
         # Run mode (Lua launches `debug_ui.py --run`): the UI analyzes the roll
         # ITSELF and STREAMS each finalized frame into the live view via
@@ -943,7 +968,6 @@ def main():
             data = json.loads(ann_path.read_text())
             assert data["patch_corrections"]["highlights"]["corrected"], "no corrected rect"
             assert data["patch_notes"].get("highlights") == "smoke note"
-            assert data["bad_inversion"] is True
             assert "black" in data["print_overrides"], "print override not saved"
             assert data["print_overrides"]["black"]["applied"] is not None
             assert "shadows" in data["wb_overrides"], "wb override not saved"
@@ -952,7 +976,7 @@ def main():
             report = session / "debug_report.txt"
             assert report.exists(), "debug_report.txt missing"
             txt = report.read_text(encoding="utf-8")
-            assert "CORRECTED PATCHES" in txt and "BAD INVERSION" in txt
+            assert "CORRECTED PATCHES" in txt
             assert "PRINT PARAM OVERRIDES" in txt
             assert "WB WHEEL OVERRIDES" in txt
         step("verify_outputs", verify_outputs)
@@ -969,7 +993,7 @@ def main():
                 f"expected {len(app.images)} OK lines, got {len(ok)}"
             for line in ok:
                 _, stem, rest = line.split("|", 2)
-                pj, cj, fj = rest.split("|")
+                pj, cj = rest.split("|")
                 assert pj.startswith("params=") and len(pj) - 7 == 152, \
                     f"bad params blob: {pj[:20]}"
                 cval = cj.split("=", 1)[1]
@@ -977,7 +1001,6 @@ def main():
                     parts = [float(v) for v in cval.split(",")]
                     assert len(parts) == 4 and parts[2] > parts[0] \
                         and parts[3] > parts[1], f"bad crop: {cval}"
-                assert fj in ("flag=ok", "flag=bad"), f"bad flag: {fj}"
         step("verify_applied_results", verify_applied_results)
 
         if failures:

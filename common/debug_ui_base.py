@@ -184,7 +184,7 @@ class DebugUIBase:
         self.root = root
         self.session_dir = session_dir
         self.export_dir = session_dir   # legacy alias used by feature code
-        self.root.title(self.WINDOW_TITLE)
+        self._update_title()
         # Hi-DPI: the window is DPI-aware (run_main), so pixel-literal sizes
         # render at PHYSICAL pixels and look tiny on a 4K display. Scale the
         # window and pixel-literal layout sizes by the screen DPI factor.
@@ -224,6 +224,9 @@ class DebugUIBase:
 
         # Feature-specific selection state
         self.init_selection_state()
+        # Mode flags (review_mode / apply_mode / …) are settled now, so stamp
+        # the window title with the current-mode prefix (e.g. "[Calib. review]").
+        self._update_title()
 
         # Visibility
         self.hide_markers = False
@@ -565,6 +568,31 @@ class DebugUIBase:
     # ------------------------------------------------------------------
     # Hooks: interaction  (optional)
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Window title / mode prefix
+    # ------------------------------------------------------------------
+
+    def _window_base_title(self):
+        """The un-prefixed window title. Override to vary by sub-mode."""
+        return self.WINDOW_TITLE
+
+    def _mode_prefix(self):
+        """Short label for the current UI mode, shown as a bracketed prefix in
+        the window title (e.g. "Calib. review", "Correction"). None = no prefix
+        (plain title). Subclasses may override / extend."""
+        if getattr(self, "review_mode", False):
+            return "Calib. review"
+        if getattr(self, "apply_mode", False):
+            return "Correction"
+        return None
+
+    def _update_title(self):
+        """Re-stamp the window title with the current-mode prefix. Safe to call
+        again whenever a mode flag changes."""
+        prefix = self._mode_prefix()
+        base = self._window_base_title()
+        self.root.title("[{}] {}".format(prefix, base) if prefix else base)
 
     def init_selection_state(self):
         """Create feature selection-state attributes (no widgets exist yet)."""
@@ -1841,20 +1869,30 @@ class DebugUIBase:
         if self._thumb_thread.is_alive() or not self._thumb_queue.empty():
             self.root.after(50, self._poll_thumb_queue)
 
+    def _on_leave_image(self, idx):
+        """Hook: called with the index of the image being navigated AWAY from,
+        after its annotations are saved and before the next image loads. No-op
+        by default; subclasses may refresh per-image UI (e.g. bake the user's
+        corrections into that image's sidebar thumbnail)."""
+
     def _nav_image(self, delta):
         """Go to next (+1) or previous (-1) image."""
         new_idx = self.current_idx + delta
         if new_idx < 0 or new_idx >= len(self.images):
             return
-        stem = self.images[self.current_idx]["stem"]
+        leaving = self.current_idx
+        stem = self.images[leaving]["stem"]
         self._auto_save(stem)
+        self._on_leave_image(leaving)
         self._load_image_by_idx(new_idx)
 
     def _on_thumb_row_click(self, idx):
         if idx == self.current_idx and self.pil_image is not None:
             return
-        stem = self.images[self.current_idx]["stem"]
+        leaving = self.current_idx
+        stem = self.images[leaving]["stem"]
         self._auto_save(stem)
+        self._on_leave_image(leaving)
         self._load_image_by_idx(idx)
 
     def _highlight_lb_row(self, idx):

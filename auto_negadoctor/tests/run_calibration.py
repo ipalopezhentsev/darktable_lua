@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import cv2
 
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR.parent.parent))   # repo root -> common
@@ -185,6 +186,67 @@ def make_crop_evaluator(rolls, tolerances, fit_params=()):
     return evaluate, prep_secs
 
 
+# ---------------------------------------------------------------------------
+# OPTIONAL calibration downsampling (inversion only). The per-trial param
+# re-derivation (stage B1/B2 in the full path; tune_print_params in the fast
+# path) is the slow part and is memory-bandwidth bound, so running it on a
+# buffer downsampled Nx makes each trial ~Nx cheaper. Vignette + film base stay
+# at full resolution (computed once in the prefix; their params are fractions /
+# a colour, resolution-independent), and the EMD that scores each trial is still
+# measured on the FULL-res buffer — only the params are derived on fewer pixels.
+# Measured effect on roll 2506-1 at 2x: per-trial ~2.7x faster, params drift
+# within GT tolerances (exposure ~0.01, wb ~0.01), median per-frame EMD shift
+# ~4%. ALWAYS re-validate the fitted preset at full res before adopting it.
+# OFF (factor None/1) => byte-identical to the previous behavior.
+# ---------------------------------------------------------------------------
+
+def _downsample_lin(arr, factor):
+    """Area-resample a linear working buffer by `factor` (the faithful analog of a
+    smaller darktable export). factor in (None, 1) -> the array unchanged."""
+    if not factor or factor == 1:
+        return arr
+    h, w = arr.shape[:2]
+    nw, nh = max(1, int(round(w / factor))), max(1, int(round(h / factor)))
+    return cv2.resize(np.asarray(arr, np.float32), (nw, nh),
+                      interpolation=cv2.INTER_AREA)
+
+
+def _scale_border(border, w_src, w_dst):
+    """Scale a (l, t, r, b) crop from a w_src-wide grid to a w_dst-wide grid."""
+    s = w_dst / w_src
+    return tuple(int(round(v * s)) for v in border)
+
+
+def _down_prefix(prefix, factor):
+    """A copy of a process_roll_prefix result with every frame's decoded buffer +
+    film-base rect downsampled by `factor`; the roll-wide vignette + global film
+    base (winner_rgb/winner_factor — a colour + a scalar) stay at full res. The
+    per-trial process_roll(prep=...) then runs stage B1/B2 on the small buffers.
+    factor None/1 -> the prefix unchanged (no copy)."""
+    if not factor or factor == 1:
+        return prefix
+    new = dict(prefix)
+    frames = []
+    for fr in prefix["frames"]:
+        g = dict(fr)
+        loaded = fr.get("_loaded")
+        if not fr.get("error") and loaded is not None:
+            enc_f, lin = loaded
+            lin_d = _downsample_lin(lin, factor)
+            enc_d = (_downsample_lin(enc_f, factor) if enc_f.any()
+                     else np.zeros_like(lin_d))
+            g["_loaded"] = (enc_d, lin_d)
+            g["width"], g["height"] = lin_d.shape[1], lin_d.shape[0]
+            if fr.get("base") and fr["base"].get("rect"):
+                x, y, w, h = fr["base"]["rect"]
+                g["base"] = dict(fr["base"], rect=[
+                    int(round(x / factor)), int(round(y / factor)),
+                    max(1, int(round(w / factor))), max(1, int(round(h / factor)))])
+        frames.append(g)
+    new["frames"] = frames
+    return new
+
+
 def _inversion_result(per_frame, clip_budget):
     """Common aggregate/objective for both inversion paths (median histogram EMD; a
     frame clipping past the budget adds BIG_PENALTY)."""
@@ -221,15 +283,20 @@ def _clip_frac(lin, border, params):
 
 def make_inversion_evaluator(rolls, tolerances, fit_params=()):
     """Picture-vs-picture histogram EMD between the algorithm's render and the user's
-    GT-param render. Dispatches FAST (print-tune-only) vs FULL (any wb/picker param)."""
+    GT-param render. Dispatches FAST (print-tune-only) vs FULL (any wb/picker param).
+
+    tolerances["downsample"] (optional int): re-derive params per trial on a buffer
+    downsampled this many times — ~Nx faster trials, params drift slightly, EMD
+    still measured full-res (see _downsample_lin and the section comment)."""
     clip_budget = float(tolerances.get("clip_max_frac", rqt.CLIP_MAX_FRAC))
+    downsample = int(tolerances.get("downsample") or 1)
     fast = set(fit_params) <= set(reg.PRINT_TUNE_PARAMS)
     if fast:
-        return _make_inversion_fast(rolls, clip_budget)
-    return _make_inversion_full(rolls, clip_budget, fit_params)
+        return _make_inversion_fast(rolls, clip_budget, downsample)
+    return _make_inversion_full(rolls, clip_budget, fit_params, downsample)
 
 
-def _make_inversion_fast(rolls, clip_budget):
+def _make_inversion_fast(rolls, clip_budget, downsample=1):
     prepped, prep_secs = [], {}
     nrolls = len(rolls)
     for i, roll in enumerate(rolls, 1):
@@ -254,12 +321,19 @@ def _make_inversion_fast(rolls, clip_budget):
                                          rqt.gt_params_for_frame(fr, g))
             if gt_f is None:
                 return None
+            # tune_print_params runs per trial; downsample the buffer it sees
+            # (the wb/pickers are full-res-derived above and unchanged). The EMD
+            # render below still uses the full-res `lin`/`border`.
+            lin_tune = _downsample_lin(lin, downsample)
+            border_tune = (_scale_border(fr["border"], lin.shape[1],
+                                         lin_tune.shape[1])
+                           if downsample > 1 else fr["border"])
             return stem, {
                 "lin": lin, "border": fr["border"], "dmin": fr["dmin"],
                 "d_max": fr["d_max"], "offset": fr["offset"],
                 "wb_low": fr["wb_low"], "wb_high": fr["wb_high"],
                 "picked_min": fr["picked_min"], "picked_max": fr["picked_max"],
-                "gt_f": gt_f,
+                "gt_f": gt_f, "lin_tune": lin_tune, "border_tune": border_tune,
             }
 
         done = _map_frames_prep(roll["id"], "GT", _prep_one, prep_items)
@@ -280,7 +354,7 @@ def _make_inversion_fast(rolls, clip_budget):
             p = an.make_params(c["dmin"], c["d_max"], c["offset"],
                                c["wb_low"], c["wb_high"],
                                c["picked_min"], c["picked_max"], cfg=cfg)
-            tuned, info = an.tune_print_params(c["lin"], p, c["border"],
+            tuned, info = an.tune_print_params(c["lin_tune"], p, c["border_tune"],
                                                c["dmin"], cfg=cfg)
             prod_f = rqt._render_crop_rows(c["lin"], c["border"], tuned)
             if prod_f is None:
@@ -296,9 +370,13 @@ def _make_inversion_fast(rolls, clip_budget):
     return evaluate, prep_secs
 
 
-def _make_inversion_full(rolls, clip_budget, fit_params=()):
+def _make_inversion_full(rolls, clip_budget, fit_params=(), downsample=1):
     """Stage-B1 params (wb / pickers) reshape the analysis, so the pipeline is re-run
-    per trial. The roll-wide vignette + film-base PREFIX is computed ONCE and reused."""
+    per trial. The roll-wide vignette + film-base PREFIX is computed ONCE and reused.
+
+    When `downsample` > 1 the per-trial process_roll runs on a downsampled copy of
+    the prefix (stage B1/B2 on ~Nx fewer pixels), while the prefix itself
+    (vignette + film base) and the EMD scoring buffers stay full-res."""
     leaked = set(fit_params) & set(reg.BASE_PREFIX_PARAMS)
     assert not leaked, (
         f"inversion cannot fit the vignette/film-base PREFIX constants {sorted(leaked)} "
@@ -334,12 +412,17 @@ def _make_inversion_full(rolls, clip_budget, fit_params=()):
 
         done = _map_frames_prep(roll["id"], "GT", _prep_one, prep_items)
         cache = {stem: c for stem, c in done}
+        # the per-trial process_roll reuses a (optionally downsampled) prefix; the
+        # full-res prefix is no longer needed once its copy is built (it is GC'd).
         prepped.append({"id": roll["id"], "images": roll["images"],
-                        "exif": roll["exif"], "cache": cache, "prefix": prefix})
+                        "exif": roll["exif"], "cache": cache,
+                        "prefix": _down_prefix(prefix, downsample)})
         prep_secs[roll["id"]] = round(time.perf_counter() - t0, 2)
+        ds_note = (f" (B1/B2 buffers downsampled {downsample}x)"
+                   if downsample > 1 else "")
         print(f"[prep {i}/{nrolls}] roll {roll['id']}: {len(cache)} GT frame(s) "
               f"ready in {prep_secs[roll['id']]}s. NOTE: full path re-runs only "
-              "stage B1/B2 per trial — vignette + film base computed ONCE.",
+              f"stage B1/B2 per trial — vignette + film base computed ONCE{ds_note}.",
               flush=True)
 
     def _one(it):

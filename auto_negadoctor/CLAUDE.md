@@ -367,7 +367,7 @@ note). The analysis algorithm is unchanged; only the launch point moved.
   **BLOCKING** (foreground, `--annotate-apply` → Python `subprocess.run`s the UI
   and waits), and when the user CLOSES the UI, write their corrections (auto
   where none) into the XMPs. The debug UI in `apply_mode` writes
-  `applied_results.txt` on close (`OK|stem|params=<hex>|crop=L,T,R,B|flag=ok`,
+  `applied_results.txt` on close (`OK|stem|params=<hex>|crop=L,T,R,B`,
   params = `_corrected_params` over the auto analysis, crop = the user's crop
   annotation else the auto content border, as normalized [0,1] edge positions).
   Lua then applies per frame: vignette (`apply_lens_in_place`), crop
@@ -564,8 +564,8 @@ highlights — seeds a correction at the moved spot, a press with no movement ju
 selects; smoke-tested `drag_patch`), Ctrl+Click
 re-places the selected patch, **scroll resizes it** (first scroll on a
 detected patch seeds a correction from the detected rect, so adjusted sizes
-land in the annotations), C clears, V toggles inverted/negative view, G
-flags a bad inversion (whole frame), **N toggles the vignette correction
+land in the annotations), C clears, V toggles inverted/negative view, **N
+toggles the vignette correction
 on/off** (before/after; reloads the negative via the `_neg_cache_key`), **R
 cycles the calibration-review source fitted→GT→live** (only in a `--review`
 session; `live` tracks the preset dropdown). **Print-page params are adjustable
@@ -657,9 +657,9 @@ Select / Adjust / Navigate / Help, with the key shown as each item's
 accelerator) plus a **top toolbar** of view/navigation toggles; the lower-left
 panel no longer carries the big always-on key list (it's in Help → Shortcuts…).
 The transient on-image text badges (NEGATIVE/DEFAULT/RE-RENDERED, global-base,
-BAD INVERSION, analysis-crop hints) moved OFF the image into a **status strip**
-under the toolbar (`_update_canvas_status`); the gold GLOBAL box + bad-inversion
-red border stay on the image. The per-frame detail (exif/factor, Dmax/blk/exp/g,
+analysis-crop hints) moved OFF the image into a **status strip**
+under the toolbar (`_update_canvas_status`); the gold GLOBAL box stays on the
+image. The per-frame detail (exif/factor, Dmax/blk/exp/g,
 scene, vignette, timings) moved from the cramped left status label into the
 bottom "Selected" panel (shown via `default_info_text` when nothing is selected);
 the left label is now a 3-4 line glance. The base (`common/debug_ui_base.py`)
@@ -940,6 +940,22 @@ own history index (never mixed):
   print-tune-only fit (`PRINT_TUNE_PARAMS`) re-tunes on cached frames (fast,
   spec-04 path); any wb/picker/base/patch param re-runs the WHOLE pipeline per
   trial (`_make_inversion_full`) — correct, slower.
+  **OPTIONAL per-trial speedup — `--downsample N` / `fit.downsample` (inversion
+  only, 2026-06-27):** re-derive the params each trial on a buffer area-resampled
+  Nx in linear working space (`_downsample_lin` / `_down_prefix` in
+  run_calibration.py). The slow stage B1/B2 (full path) or `tune_print_params`
+  (fast path) then runs on ~N² fewer pixels (~2.7x faster/trial at 2x), while the
+  roll-wide **vignette + film base stay full res** (the prefix; their consts are
+  fractions / a colour) and **the EMD that scores each trial is still measured on
+  the full-res buffer** — only the params are derived on fewer pixels. Probed on
+  roll 2506-1: params drift within `TOL_GT_*` (exposure/wb ~0.01), median
+  per-frame EMD shifts ~4%, and the shift is DETERMINISTIC per buffer (a fixed
+  landscape distortion, not per-eval noise), so it's safe for the SEARCH but the
+  fitted preset MUST be re-validated full-res (drop the flag / `--downsample 1`)
+  before adopting. Omit / 1 = byte-identical to before. The shared runner folds it
+  into the evaluator's tolerances dict, so crop/vignette/retouch ignore it.
+  Bundled configs: `inversion_descent_downsample2.json`,
+  `inversion_cmaes_downsample2.json`.
 - **vignette** — objective = `(#rolls rejected)·BIG + median residual`. The
   radial envelope is derived from the roll's TIFFs by `vignette_envelope()` (the
   accumulation half split out of `estimate_vignette`) — NO committed fixture. A

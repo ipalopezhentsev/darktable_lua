@@ -826,6 +826,9 @@ def _write_report(adapter, path, config, results):
     lines.append(f"- rolls: {', '.join(config['rolls'])}")
     lines.append(f"- metric: {config['metric']}")
     lines.append(f"- fit method: {config['fit']['method']}")
+    if config["fit"].get("downsample"):
+        lines.append(f"- downsample (calibration-only): "
+                     f"{int(config['fit']['downsample'])}x")
     mp = _method_params(config["fit"])
     if mp:
         lines.append("- method params: "
@@ -1016,13 +1019,23 @@ def run_session(adapter, config):
           f"rolls={len(rolls)} ({', '.join(config['rolls'])})  "
           f"params={len(spec)}")
     print(f"  metric: {config['metric']}")
+    if fit.get("downsample"):
+        print(f"  downsample: {int(fit['downsample'])}x (calibration-only — params "
+              "re-derived on a downsampled buffer; re-validate the result full-res)")
     print("=" * 70, flush=True)
 
     snap = reg.snapshot(list(spec))   # restore the live module no matter what
     t_wall = time.perf_counter()
     try:
-        evaluate, prep_secs = adapter.evaluators[kind](
-            rolls, fit.get("tolerances") or {}, list(spec))
+        # `downsample` is an OPTIONAL per-trial speed knob folded into the
+        # evaluator's free-form options dict (the same channel as tolerances).
+        # Evaluators that don't understand it (crop/vignette/retouch) ignore it,
+        # so it is a no-op unless set; only negadoctor's inversion evaluator acts
+        # on it (re-derive params on a downsampled buffer; EMD stays full-res).
+        tol = dict(fit.get("tolerances") or {})
+        if fit.get("downsample"):
+            tol["downsample"] = int(fit["downsample"])
+        evaluate, prep_secs = adapter.evaluators[kind](rolls, tol, list(spec))
         init_overrides = {n: s["init"] for n, s in spec.items()} if spec else {}
         init_result = evaluate(init_overrides) if spec else evaluate({})
         objective_initial = init_result["objective"]
@@ -1122,6 +1135,8 @@ def load_config(adapter, args):
             config["fit"][key] = val
     if args.pca:
         config["fit"]["pca"] = True
+    if getattr(args, "downsample", None) is not None:
+        config["fit"]["downsample"] = args.downsample
     return config
 
 
@@ -1175,6 +1190,12 @@ def run_main(adapter):
     ap.add_argument("--pca", action="store_true",
                     help="after the fit, compute the principal components of the "
                          "metric's curvature at the optimum (O(N^2) extra evals)")
+    ap.add_argument("--downsample", type=int, metavar="N",
+                    help="INVERSION ONLY: re-derive params per trial on a buffer "
+                         "downsampled Nx (area resample in linear working space) for "
+                         "~Nx faster trials; vignette/film base stay full res and the "
+                         "EMD is still measured full-res. Small param drift (validate "
+                         "the fitted preset full-res). Omit/1 = off (current behavior)")
     ap.add_argument("--review", metavar="SESSION_DIR",
                     help="open the debug UI comparing fitted vs live for a session")
     ap.add_argument("--review-roll", help="roll id to review (default: first)")
