@@ -9,6 +9,10 @@
     "gamma": {
       "applied": 4.501953125,
       "corrected": 5.001953124999998
+    },
+    "soft_clip": {
+      "applied": 0.75,
+      "corrected": 0.6809999999999999
     }
   },
   "wb_overrides": {
@@ -19,8 +23,8 @@
         1.0
       ],
       "corrected": [
-        1.7540721037554314,
-        1.3784212549220107,
+        1.816702331743555,
+        1.4357580430865073,
         1.0
       ]
     },
@@ -37,7 +41,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

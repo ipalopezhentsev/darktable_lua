@@ -1,6 +1,6 @@
 {
   "stem": "DSC_0016",
-  "negative_path": "C:\\Users\\ilyap\\AppData\\Local\\Temp/darktable_autonegadoctor_1782055181/DSC_0016.tif",
+  "negative_path": "tests\\fixtures\\rolls\\2506-1\\DSC_0016.tif",
   "width": 1998,
   "height": 1336,
   "exif": {
@@ -12,7 +12,7 @@
   },
   "border": [
     46,
-    45,
+    46,
     45,
     45
   ],
@@ -50,34 +50,34 @@
   "patches": {
     "highlights": {
       "rect": [
-        1222,
-        388,
+        977,
+        438,
         98,
         98
       ],
       "rgb_neg_linear": [
-        0.2795546352863312,
-        0.10142559558153152,
-        0.03148742392659187
+        0.274308979511261,
+        0.09963542968034744,
+        0.030703293159604073
       ],
-      "chroma": 0.014430476352572441,
-      "preview_luma": 0.5937712788581848,
+      "chroma": 0.0027064746245741844,
+      "preview_luma": 0.7064281105995178,
       "used_fallback": false
     }
   },
   "picked_min": [
-    0.186278834939003,
-    0.07133796066045761,
-    0.026131512597203255
+    0.24157662689685822,
+    0.09188077598810196,
+    0.02810860611498356
   ],
   "picked_max": [
-    1.2986699342727661,
-    0.7282236814498901,
-    0.4196694791316986
+    1.2922409772872925,
+    0.7235143184661865,
+    0.4168171286582947
   ],
   "wb_high_boot": [
-    1.3937825585053296,
-    1.1586641901513604,
+    1.5865240015295536,
+    1.272165014615463,
     1.0
   ],
   "source_16bit_tiff": false,
@@ -190,23 +190,23 @@
       0.4015330374240875
     ],
     "wb_high": [
-      1.627765239724638,
-      1.260397471330176,
+      1.6220055686717512,
+      1.2482148168002032,
       1.0
     ],
     "wb_low": [
-      0.5079114686744041,
-      0.37975516097679946,
+      0.559647521569024,
+      0.41738696082777305,
       1.0
     ],
-    "D_max": 1.7217812499999998,
-    "offset": 0.006250000000000007,
-    "black": 0.1408620404004716,
-    "gamma": 4.53125,
+    "D_max": 1.9131874999999998,
+    "offset": 0.01914062500000001,
+    "black": 0.16566537902514292,
+    "gamma": 4.501953125,
     "soft_clip": 0.75,
-    "exposure": 1.0901636146406728
+    "exposure": 1.1012165476133147
   },
-  "params_hex": "010000001381aa3fa6b0413fbd95cd3e000000009d5ad03fb454a13f0000803f0000803f7c06023f456fc23e0000803f0000803f5463dc3fcdcccc3b243e103e000091400000403f7b8a8b3f",
+  "params_hex": "010000001381aa3fa6b0413fbd95cd3e00000000e19dcf3f81c59f3f0000803f0000803f0f450f3fbeb3d53e0000803f0000803f54e3f43fcdcc9c3c2fa4293e001090400000403faaf48c3f",
   "params_analytical": {
     "film_stock": 1,
     "Dmin": [
@@ -215,30 +215,38 @@
       0.4015330374240875
     ],
     "wb_high": [
-      1.627765239724638,
-      1.260397471330176,
+      1.6220055686717512,
+      1.2482148168002032,
       1.0
     ],
     "wb_low": [
-      0.5079114686744041,
-      0.37975516097679946,
+      0.559647521569024,
+      0.41738696082777305,
       1.0
     ],
-    "D_max": 1.7217812499999998,
-    "offset": 0.006250000000000007,
-    "black": 0.1408620404004716,
-    "gamma": 4.53125,
+    "D_max": 1.9131874999999998,
+    "offset": 0.01914062500000001,
+    "black": 0.16566537902514292,
+    "gamma": 4.501953125,
     "soft_clip": 0.75,
-    "exposure": 1.0901636146406728
+    "exposure": 1.1012165476133147
   },
   "params_ai": null,
   "params_ai_hex": null,
   "scene": null,
   "scene_tuning": null,
+  "processing_time_s": 4.91,
+  "preset": "default_better_crop_and_inversion",
   "constants": {
     "_PROC_WORKERS_ENV": 0,
     "_AI_WORKERS": 1,
     "_FRAME_CACHE": true,
+    "_PROG_W_VIG": 1.5,
+    "_PROG_W_A": 2.8,
+    "_PROG_W_B1": 6.0,
+    "_PROG_W_B2": 2.2,
+    "_PROG_W_TOTAL": 12.5,
+    "_PROG_W_PREFIX": 4.3,
     "CLIP_SRGB_THR": 0.97,
     "PRINT_TUNE_SUBSAMPLE_FRAC": 0.003,
     "LENS_MODFLAG_VIGNETTING": 2,
@@ -396,10 +404,10 @@
     "BORDER_DARK_THR": 0.02,
     "BORDER_MAX_FRAC": 0.08,
     "BORDER_PAD_FRAC": 0.004,
-    "HOLDER_LUMA_THR": 0.024140625,
-    "CROP_JUNK_LINE_FRAC": 0.08000000000000002,
-    "CROP_LEAK_MARGIN_D": 0.03,
-    "CROP_REBATE_MARGIN_D": 0.14562500000000003,
+    "HOLDER_LUMA_THR": 0.026601562500000002,
+    "CROP_JUNK_LINE_FRAC": 0.09687500000000002,
+    "CROP_LEAK_MARGIN_D": 0.03421875,
+    "CROP_REBATE_MARGIN_D": 0.12687500000000002,
     "CROP_REBATE_LINE_FRAC": 0.18265625,
     "CROP_REBATE_TERM_FRAC": 0.04,
     "CROP_REBATE_MAX_FRAC": 0.026875000000000003,
@@ -409,7 +417,7 @@
     "CROP_REBATE_BAND_HUE_TOL": 0.009375,
     "CROP_REBATE_WIDE_FRAC": 0.55,
     "CROP_PAD_FRAC": 0.005000000000000001,
-    "CROP_SHADOW_REL": 0.7375,
+    "CROP_SHADOW_REL": 0.7468750000000001,
     "CROP_SHADOW_MAX_FRAC": 0.0309375,
     "CROP_SHADOW_CORE_FRAC": 0.0166875,
     "CROP_GAP_TOL_FRAC": 0.0153125,
@@ -427,43 +435,43 @@
     "PATCH_CHROMA_MAX": 0.35,
     "PATCH_LUMA_FLOOR": 0.02,
     "PATCH_STRIDE_DIV": 2,
-    "PATCH_UNIFORMITY_MAX": 0.45,
+    "PATCH_UNIFORMITY_MAX": 0.575,
     "PATCH_WIN_FRAC": 0.049375,
     "HIGHLIGHT_CLIP_FRAC_MAX": 0.02,
     "SHADOW_MIN_LUMA": 0.005,
     "MIN_WIN_FRAC": 0.016,
-    "P_LOW": 0.5,
-    "P_HIGH": 99.72265625000001,
-    "DMAX_DEFAULT": 1.7217812499999998,
-    "OFFSET_DEFAULT": 0.006250000000000007,
+    "P_LOW": 1.73046875,
+    "P_HIGH": 99.54453125000002,
+    "DMAX_DEFAULT": 1.9131874999999998,
+    "OFFSET_DEFAULT": 0.01914062500000001,
     "HIGHLIGHT_BAND_PCT": [
-      73.75,
-      96.75
+      71.875,
+      98.5
     ],
     "WB_LOW_DESAT": 0.0,
     "WB_HIGH_DESAT": 0.0,
     "WB_LOW_BAND_PCT": [
-      0.0,
-      20.0
+      8.4375,
+      20.1171875
     ],
     "WB_HIGH_BAND_PCT": [
       70.0,
       95.0
     ],
     "WB_LOW_PRIOR": [
-      1.0890625,
-      0.74609375,
-      0.694140625
+      1.0921874999999999,
+      0.73828125,
+      0.68046875
     ],
     "WB_HIGH_PRIOR": [
-      1.758984375,
-      1.365625,
+      1.81171875,
+      1.36953125,
       1.0640625
     ],
     "WB_REGION_MIN_FRAC": 0.0001,
-    "PRINT_GAMMA": 4.53125,
-    "PRINT_HI_CEIL": 0.9692578125,
-    "PRINT_HI_PCT": 99.91546875,
+    "PRINT_GAMMA": 4.501953125,
+    "PRINT_HI_CEIL": 0.9648046875,
+    "PRINT_HI_PCT": 99.91933593750001,
     "PRINT_CLIP_BUDGET": 0.003,
     "PRINT_TUNE_ITERS": 11,
     "VIG_DOWNSAMPLE_FRAC": 0.003625,
@@ -476,7 +484,5 @@
     "VIG_TAIL_CUT_REL": 0.97,
     "MASK_USED": 0,
     "MASK_BORDER": 2
-  },
-  "processing_time_s": 8.37,
-  "run_wall_time_s": 21.03
+  }
 }

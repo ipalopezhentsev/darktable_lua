@@ -8,11 +8,11 @@
     },
     "black": {
       "applied": 0.08081764200391642,
-      "corrected": 0.13081764200391643
+      "corrected": 0.14581764200391645
     },
     "exposure": {
       "applied": 1.2661208766216652,
-      "corrected": 1.157874539543409
+      "corrected": 1.137874539543409
     },
     "gamma": {
       "applied": 4.501953125,
@@ -49,7 +49,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

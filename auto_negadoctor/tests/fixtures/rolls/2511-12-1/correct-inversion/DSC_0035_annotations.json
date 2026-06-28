@@ -32,12 +32,10 @@
       ],
       "corrected": [
         1.0,
-        0.5531243051208863,
-        0.8243817247534317
+        0.7253531676244155,
+        0.9830073525678602
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

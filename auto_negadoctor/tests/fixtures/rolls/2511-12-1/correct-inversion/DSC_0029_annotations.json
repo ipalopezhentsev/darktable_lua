@@ -13,6 +13,10 @@
     "gamma": {
       "applied": 4.501953125,
       "corrected": 5.29
+    },
+    "soft_clip": {
+      "applied": 0.75,
+      "corrected": 0.644
     }
   },
   "wb_overrides": {
@@ -41,7 +45,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

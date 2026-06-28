@@ -1,6 +1,6 @@
 AUTO NEGADOCTOR DEBUG REPORT
-Generated: 2026-06-21 23:26:23
-Export dir: C:\Users\ilyap\AppData\Local\Temp\darktable_autonegadoctor_1782068752
+Generated: 2026-06-28 21:15:20
+Export dir: tests/fixtures/rolls/2510-11-1/correct-inversion
 Images processed: 38
 Run wall time: 22.8s
 
@@ -19,13 +19,13 @@ Detection constants at time of run:
   CLIP_FRAC_MAX = 0.02
   CLIP_SRGB_THR = 0.97
   CROP_GAP_TOL_FRAC = 0.0153125
-  CROP_JUNK_LINE_FRAC = 0.08000000000000002
-  CROP_LEAK_MARGIN_D = 0.03
+  CROP_JUNK_LINE_FRAC = 0.09687500000000002
+  CROP_LEAK_MARGIN_D = 0.03421875
   CROP_PAD_FRAC = 0.005000000000000001
   CROP_REBATE_BAND_HUE_TOL = 0.009375
   CROP_REBATE_HUE_TOL = 0.02
   CROP_REBATE_LINE_FRAC = 0.18265625
-  CROP_REBATE_MARGIN_D = 0.14562500000000003
+  CROP_REBATE_MARGIN_D = 0.12687500000000002
   CROP_REBATE_MAX_FRAC = 0.026875000000000003
   CROP_REBATE_TERM_FRAC = 0.04
   CROP_REBATE_WIDE_FRAC = 0.55
@@ -33,12 +33,12 @@ Detection constants at time of run:
   CROP_REBATE_WIDE_MAX_D = 0.387109375
   CROP_SHADOW_CORE_FRAC = 0.0166875
   CROP_SHADOW_MAX_FRAC = 0.0309375
-  CROP_SHADOW_REL = 0.7375
-  DEFAULT_TUNING = [0.02, 0.08, 0.004, 0.024140625, 0.08000000000000002, 0.03, 0.14562500000000003, 0.18265625, 0.04, 0.026875000000000003, 0.02, 0.387109375, 0.8, 0.009375, 0.55, 0.005000000000000001, 0.7375, 0.0309375, 0.0166875, 0.0153125, 1.05, 0.04, 1.2, 0.05, 0.016, 0.02, 0.004, 0.7, 0.008, 0.05, 0.02, 0.35, 0.02, 2, 0.45, 0.049375, 0.02, 0.005, 0.016, 0.5, 99.72265625000001, 1.7217812499999998, 0.006250000000000007, [73.75, 96.75], 0.0, 0.0, [0.0, 20.0], [70.0, 95.0], [1.0890625, 0.74609375, 0.694140625], [1.758984375, 1.365625, 1.0640625], 0.0001, 4.53125, 0.9692578125, 99.91546875, 0.003, 11, 0.003625, 0.007125000000000001, 22, 98.77734375, 25, 0.02, 0.15, 0.97]
-  DMAX_DEFAULT = 1.7217812499999998
-  HIGHLIGHT_BAND_PCT = [73.75, 96.75]
+  CROP_SHADOW_REL = 0.7468750000000001
+  DEFAULT_TUNING = [0.02, 0.08, 0.004, 0.024140625, 0.08000000000000002, 0.03, 0.14562500000000003, 0.18265625, 0.04, 0.026875000000000003, 0.02, 0.387109375, 0.8, 0.009375, 0.55, 0.005000000000000001, 0.7375, 0.0309375, 0.0166875, 0.0153125, 1.05, 0.04, 1.2, 0.05, 0.016, 0.02, 0.004, 0.7, 0.008, 0.05, 0.02, 0.35, 0.02, 2, 0.45, 0.049375, 0.02, 0.005, 0.016, 0.5, 99.72265625000001, 1.7217812499999998, 0.006250000000000007, (73.75, 96.75), 0.0, 0.0, (0.0, 20.0), (70.0, 95.0), (1.0890625, 0.74609375, 0.694140625), (1.758984375, 1.365625, 1.0640625), 0.0001, 4.53125, 0.9692578125, 99.91546875, 0.003, 11, 0.003625, 0.007125000000000001, 22, 98.77734375, 25, 0.02, 0.15, 0.97]
+  DMAX_DEFAULT = 1.9131874999999998
+  HIGHLIGHT_BAND_PCT = [71.875, 98.5]
   HIGHLIGHT_CLIP_FRAC_MAX = 0.02
-  HOLDER_LUMA_THR = 0.024140625
+  HOLDER_LUMA_THR = 0.026601562500000002
   LENS_MODFLAGS_OFFSET = 4
   LENS_MODFLAG_VIGNETTING = 2
   LENS_V_OFFSET = 336
@@ -46,21 +46,21 @@ Detection constants at time of run:
   MASK_USED = 0
   MIN_PATCH_DENSITY = 0.05
   MIN_WIN_FRAC = 0.016
-  OFFSET_DEFAULT = 0.006250000000000007
+  OFFSET_DEFAULT = 0.01914062500000001
   PATCH_CHROMA_FLOOR = 0.02
   PATCH_CHROMA_MAX = 0.35
   PATCH_LUMA_FLOOR = 0.02
   PATCH_STRIDE_DIV = 2
-  PATCH_UNIFORMITY_MAX = 0.45
+  PATCH_UNIFORMITY_MAX = 0.575
   PATCH_WIN_FRAC = 0.049375
   PRINT_CLIP_BUDGET = 0.003
-  PRINT_GAMMA = 4.53125
-  PRINT_HI_CEIL = 0.9692578125
-  PRINT_HI_PCT = 99.91546875
+  PRINT_GAMMA = 4.501953125
+  PRINT_HI_CEIL = 0.9648046875
+  PRINT_HI_PCT = 99.91933593750001
   PRINT_TUNE_ITERS = 11
   PRINT_TUNE_SUBSAMPLE_FRAC = 0.003
-  P_HIGH = 99.72265625000001
-  P_LOW = 0.5
+  P_HIGH = 99.54453125000002
+  P_LOW = 1.73046875
   SHADOW_MIN_LUMA = 0.005
   VIG_BINS = 22
   VIG_DOWNSAMPLE_FRAC = 0.003625
@@ -72,572 +72,640 @@ Detection constants at time of run:
   VIG_TAIL_CUT_REL = 0.97
   WB_HIGH_BAND_PCT = [70.0, 95.0]
   WB_HIGH_DESAT = 0.0
-  WB_HIGH_PRIOR = [1.758984375, 1.365625, 1.0640625]
-  WB_LOW_BAND_PCT = [0.0, 20.0]
+  WB_HIGH_PRIOR = [1.81171875, 1.36953125, 1.0640625]
+  WB_LOW_BAND_PCT = [8.4375, 20.1171875]
   WB_LOW_DESAT = 0.0
-  WB_LOW_PRIOR = [1.0890625, 0.74609375, 0.694140625]
+  WB_LOW_PRIOR = [1.0921874999999999, 0.73828125, 0.68046875]
   WB_REGION_MIN_FRAC = 0.0001
   _AI_WORKERS = 1
   _FRAME_CACHE = True
   _PROC_WORKERS_ENV = 0
+  _PROG_W_A = 2.8
+  _PROG_W_B1 = 6.0
+  _PROG_W_B2 = 2.2
+  _PROG_W_PREFIX = 4.3
+  _PROG_W_TOTAL = 12.5
+  _PROG_W_VIG = 1.5
   _TUNABLE_NAMES = ['BORDER_DARK_THR', 'BORDER_MAX_FRAC', 'BORDER_PAD_FRAC', 'HOLDER_LUMA_THR', 'CROP_JUNK_LINE_FRAC', 'CROP_LEAK_MARGIN_D', 'CROP_REBATE_MARGIN_D', 'CROP_REBATE_LINE_FRAC', 'CROP_REBATE_TERM_FRAC', 'CROP_REBATE_MAX_FRAC', 'CROP_REBATE_HUE_TOL', 'CROP_REBATE_WIDE_MAX_D', 'CROP_REBATE_WIDE_LINE_FRAC', 'CROP_REBATE_BAND_HUE_TOL', 'CROP_REBATE_WIDE_FRAC', 'CROP_PAD_FRAC', 'CROP_SHADOW_REL', 'CROP_SHADOW_MAX_FRAC', 'CROP_SHADOW_CORE_FRAC', 'CROP_GAP_TOL_FRAC', 'BASE_GB_TOL', 'BASE_MIN_LUMA', 'BASE_MIN_RG_RATIO', 'BASE_UNIFORMITY_MAX', 'BASE_WIN_FRAC', 'CLIP_FRAC_MAX', 'BASE_SCAN_STRIDE_FRAC', 'BASE_MASK_SOLID_FRAC', 'BASE_AREA_MIN_FRAC', 'MIN_PATCH_DENSITY', 'PATCH_CHROMA_FLOOR', 'PATCH_CHROMA_MAX', 'PATCH_LUMA_FLOOR', 'PATCH_STRIDE_DIV', 'PATCH_UNIFORMITY_MAX', 'PATCH_WIN_FRAC', 'HIGHLIGHT_CLIP_FRAC_MAX', 'SHADOW_MIN_LUMA', 'MIN_WIN_FRAC', 'P_LOW', 'P_HIGH', 'DMAX_DEFAULT', 'OFFSET_DEFAULT', 'HIGHLIGHT_BAND_PCT', 'WB_LOW_DESAT', 'WB_HIGH_DESAT', 'WB_LOW_BAND_PCT', 'WB_HIGH_BAND_PCT', 'WB_LOW_PRIOR', 'WB_HIGH_PRIOR', 'WB_REGION_MIN_FRAC', 'PRINT_GAMMA', 'PRINT_HI_CEIL', 'PRINT_HI_PCT', 'PRINT_CLIP_BUDGET', 'PRINT_TUNE_ITERS', 'VIG_DOWNSAMPLE_FRAC', 'VIG_INSET_FRAC', 'VIG_BINS', 'VIG_PROFILE_PCT', 'VIG_MIN_BIN_SAMPLES', 'VIG_MIN_STRENGTH', 'VIG_PEAK_CENTER_FRAC', 'VIG_TAIL_CUT_REL']
 
 ================================================
 IMAGE: DSC_0002  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7972,0.7912,1.0000)  wb_high=(1.4204,1.1562,1.0000)
-  paper black=+15.63%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.21 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7535,0.7281,1.0000)  wb_high=(1.5317,1.2380,1.0000)
+  paper black=+18.80%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.20 EV
+
+  PRINT PARAM OVERRIDES (applied -> corrected):
+    paper gloss (specular highlights)      75.00% -> 61.00%
+    print exposure adjustment              +0.20 EV -> +0.25 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.797, 0.791, 1.000)  vs auto (0.797, 0.791, 1.000)
-    highlights chosen (1.471, 1.212, 1.000)  vs auto (1.420, 1.156, 1.000)
+    shadows    chosen (0.797, 0.791, 1.000)  vs auto (0.754, 0.728, 1.000)
+    highlights chosen (1.471, 1.212, 1.000)  vs auto (1.532, 1.238, 1.000)
 
 ================================================
 IMAGE: DSC_0003  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7026,0.6368,1.0000)  wb_high=(1.5873,1.2485,1.0000)
-  paper black=+9.89%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.18 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7281,0.6526,1.0000)  wb_high=(1.5911,1.2463,1.0000)
+  paper black=+12.25%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.20 EV
+
+  PRINT PARAM OVERRIDES (applied -> corrected):
+    print exposure adjustment              +0.20 EV -> +0.23 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.938, 0.701, 1.000)  vs auto (0.703, 0.637, 1.000)
-    highlights chosen (1.790, 1.402, 1.000)  vs auto (1.587, 1.248, 1.000)
+    shadows    chosen (0.938, 0.701, 1.000)  vs auto (0.728, 0.653, 1.000)
+    highlights chosen (1.790, 1.402, 1.000)  vs auto (1.591, 1.246, 1.000)
 
 ================================================
 IMAGE: DSC_0004  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.9866,0.9168)  wb_high=(1.6216,1.2923,1.0000)
-  paper black=+10.21%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.14 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(1.0000,0.9703,0.9870)  wb_high=(1.6537,1.3037,1.0000)
+  paper black=+13.34%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.15 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +10.21% -> +20.21%
-    paper grade (gamma)                    4.53 -> 4.83
-    print exposure adjustment              +0.14 EV -> +0.05 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +13.34% -> +20.21%
+    paper grade (gamma)                    4.50 -> 4.43
+    paper gloss (specular highlights)      75.00% -> 45.90%
+    print exposure adjustment              +0.15 EV -> +0.20 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.815, 0.745, 1.000)  vs auto (1.000, 0.987, 0.917)
-    highlights chosen (1.618, 1.328, 1.000)  vs auto (1.622, 1.292, 1.000)
+    shadows    chosen (0.815, 0.745, 1.000)  vs auto (1.000, 0.970, 0.987)
+    highlights chosen (1.618, 1.328, 1.000)  vs auto (1.654, 1.304, 1.000)
 
 ================================================
 IMAGE: DSC_0005  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6284,0.6576,1.0000)  wb_high=(1.3950,1.1756,1.0000)
-  paper black=+9.83%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.26 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.5970,0.6138,1.0000)  wb_high=(1.3378,1.0846,1.0000)
+  paper black=+12.47%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.31 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +9.83% -> +19.83%
-    print exposure adjustment              +0.26 EV -> +0.10 EV
-
-  WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.761, 0.798, 1.000)  vs auto (0.628, 0.658, 1.000)
-    highlights chosen (1.745, 1.421, 1.000)  vs auto (1.395, 1.176, 1.000)
-
-================================================
-IMAGE: DSC_0006  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.8135,0.7475,1.0000)  wb_high=(1.5050,1.2157,1.0000)
-  paper black=+7.09%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.37 EV
-
-  PRINT PARAM OVERRIDES (applied -> corrected):
-    print exposure adjustment              +0.37 EV -> +0.35 EV
-
-  WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.838, 0.574, 1.000)  vs auto (0.813, 0.748, 1.000)
-    highlights chosen (1.616, 1.292, 1.000)  vs auto (1.505, 1.216, 1.000)
-
-================================================
-IMAGE: DSC_0007  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6230,0.6250,1.0000)  wb_high=(1.3939,1.1450,1.0000)
-  paper black=+10.55%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.27 EV
-
-  PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +10.55% -> +20.55%
-    print exposure adjustment              +0.27 EV -> +0.11 EV
-
-  WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.883, 0.806, 1.000)  vs auto (0.623, 0.625, 1.000)
-    highlights chosen (1.650, 1.332, 1.000)  vs auto (1.394, 1.145, 1.000)
-
-================================================
-IMAGE: DSC_0008  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.5990,0.6162,1.0000)  wb_high=(1.4688,1.1680,1.0000)
-  paper black=+10.03%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.31 EV
-
-  PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +10.03% -> +15.03%
+    D max (dynamic range)                  1.91 -> 2.05
+    paper black (density correction)       +12.47% -> +19.83%
+    paper gloss (specular highlights)      75.00% -> 56.20%
     print exposure adjustment              +0.31 EV -> +0.23 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.459, 0.898)  vs auto (0.599, 0.616, 1.000)
-    highlights chosen (1.704, 1.388, 1.000)  vs auto (1.469, 1.168, 1.000)
+    shadows    chosen (0.761, 0.798, 1.000)  vs auto (0.597, 0.614, 1.000)
+    highlights chosen (1.745, 1.421, 1.000)  vs auto (1.338, 1.085, 1.000)
+
+================================================
+IMAGE: DSC_0006  (1998 x 1336 px)
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.8427,0.7555,1.0000)  wb_high=(1.5258,1.2112,1.0000)
+  paper black=+9.76%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.40 EV
+
+  PRINT PARAM OVERRIDES (applied -> corrected):
+    print exposure adjustment              +0.40 EV -> +0.35 EV
+
+  WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
+    shadows    chosen (0.838, 0.574, 1.000)  vs auto (0.843, 0.755, 1.000)
+    highlights chosen (1.616, 1.292, 1.000)  vs auto (1.526, 1.211, 1.000)
+
+================================================
+IMAGE: DSC_0007  (1998 x 1336 px)
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6404,0.6348,1.0000)  wb_high=(1.3881,1.1317,1.0000)
+  paper black=+13.10%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.32 EV
+
+  PRINT PARAM OVERRIDES (applied -> corrected):
+    paper black (density correction)       +13.10% -> +20.55%
+    paper gloss (specular highlights)      75.00% -> 65.40%
+    print exposure adjustment              +0.32 EV -> +0.20 EV
+
+  WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
+    shadows    chosen (0.883, 0.806, 1.000)  vs auto (0.640, 0.635, 1.000)
+    highlights chosen (1.650, 1.332, 1.000)  vs auto (1.388, 1.132, 1.000)
+
+================================================
+IMAGE: DSC_0008  (1998 x 1336 px)
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.5785,0.5844,1.0000)  wb_high=(1.4563,1.1478,1.0000)
+  paper black=+12.68%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.36 EV
+
+  PRINT PARAM OVERRIDES (applied -> corrected):
+    paper black (density correction)       +12.68% -> +15.03%
+    paper gloss (specular highlights)      75.00% -> 65.30%
+    print exposure adjustment              +0.36 EV -> +0.32 EV
+
+  WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
+    shadows    chosen (0.893, 0.582, 1.000)  vs auto (0.578, 0.584, 1.000)
+    highlights chosen (1.704, 1.388, 1.000)  vs auto (1.456, 1.148, 1.000)
 
 ================================================
 IMAGE: DSC_0009  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7040,0.6708,1.0000)  wb_high=(1.2994,1.0516,1.0000)
-  paper black=+8.16%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.24 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6890,0.6563,1.0000)  wb_high=(1.5187,1.2008,1.0000)
+  paper black=+10.88%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.20 EV
+
+  PRINT PARAM OVERRIDES (applied -> corrected):
+    print exposure adjustment              +0.20 EV -> +0.26 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.881, 0.743, 1.000)  vs auto (0.704, 0.671, 1.000)
-    highlights chosen (1.548, 1.266, 1.000)  vs auto (1.299, 1.052, 1.000)
+    shadows    chosen (0.881, 0.743, 1.000)  vs auto (0.689, 0.656, 1.000)
+    highlights chosen (1.548, 1.266, 1.000)  vs auto (1.519, 1.201, 1.000)
 
 ================================================
 IMAGE: DSC_0010  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.4909,0.7022,1.0000)  wb_high=(1.1256,1.0000,1.1764)
-  paper black=+12.33%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.22 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.4275,0.6128,1.0000)  wb_high=(1.1192,1.0000,1.2101)
+  paper black=+15.67%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.19 EV
   NOTE: highlights wb fell back to roll median
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +12.33% -> +27.33%
-    paper grade (gamma)                    4.53 -> 4.78
-    print exposure adjustment              +0.22 EV -> +0.00 EV
+    paper black (density correction)       +15.67% -> +27.33%
+    paper grade (gamma)                    4.50 -> 4.78
+    paper gloss (specular highlights)      75.00% -> 53.20%
+    print exposure adjustment              +0.19 EV -> +0.08 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.683, 0.678, 1.000)  vs auto (0.491, 0.702, 1.000)
-    highlights chosen (1.707, 1.337, 1.000)  vs auto (1.126, 1.000, 1.176)
+    shadows    chosen (0.683, 0.678, 1.000)  vs auto (0.428, 0.613, 1.000)
+    highlights chosen (1.707, 1.337, 1.000)  vs auto (1.119, 1.000, 1.210)
 
 ================================================
 IMAGE: DSC_0011  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6032,0.6361,1.0000)  wb_high=(1.1165,1.0000,1.2014)
-  paper black=+12.05%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.32 EV
-  NOTE: highlights wb fell back to roll median
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6218,0.6438,1.0000)  wb_high=(1.3762,1.1382,1.0000)
+  paper black=+14.36%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.32 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +12.05% -> +27.05%
-    paper grade (gamma)                    4.53 -> 5.23
-    print exposure adjustment              +0.32 EV -> -0.00 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +14.36% -> +27.05%
+    paper grade (gamma)                    4.50 -> 5.23
+    paper gloss (specular highlights)      75.00% -> 58.80%
+    print exposure adjustment              +0.32 EV -> +0.11 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.444, 0.493, 1.000)  vs auto (0.603, 0.636, 1.000)
-    highlights chosen (1.483, 1.262, 1.000)  vs auto (1.117, 1.000, 1.201)
+    shadows    chosen (0.444, 0.493, 1.000)  vs auto (0.622, 0.644, 1.000)
+    highlights chosen (1.483, 1.262, 1.000)  vs auto (1.376, 1.138, 1.000)
 
 ================================================
 IMAGE: DSC_0012  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6085,0.6308,1.0000)  wb_high=(1.3623,1.0664,1.0000)
-  paper black=+9.22%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.34 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.5606,0.5887,1.0000)  wb_high=(1.3716,1.0720,1.0000)
+  paper black=+11.90%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.36 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +9.22% -> +19.22%
-    paper grade (gamma)                    4.53 -> 5.13
-    print exposure adjustment              +0.34 EV -> +0.05 EV
+    paper black (density correction)       +11.90% -> +19.22%
+    paper grade (gamma)                    4.50 -> 5.13
+    paper gloss (specular highlights)      75.00% -> 62.30%
+    print exposure adjustment              +0.36 EV -> +0.12 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.694, 0.957)  vs auto (0.608, 0.631, 1.000)
-    highlights chosen (1.501, 1.262, 1.000)  vs auto (1.362, 1.066, 1.000)
+    shadows    chosen (0.860, 0.629, 1.000)  vs auto (0.561, 0.589, 1.000)
+    highlights chosen (1.555, 1.292, 1.000)  vs auto (1.372, 1.072, 1.000)
 
 ================================================
 IMAGE: DSC_0013  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.7323,0.7627)  wb_high=(1.6448,1.2591,1.0000)
-  paper black=+10.50%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.25 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(1.0000,0.7560,0.8714)  wb_high=(1.6782,1.2608,1.0000)
+  paper black=+15.41%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.24 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper grade (gamma)                    4.53 -> 5.33
-    print exposure adjustment              +0.25 EV -> +0.20 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper grade (gamma)                    4.50 -> 5.13
+    paper gloss (specular highlights)      75.00% -> 59.50%
+    print exposure adjustment              +0.24 EV -> +0.24 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.984, 0.989)  vs auto (1.000, 0.732, 0.763)
-    highlights chosen (1.577, 1.284, 1.000)  vs auto (1.645, 1.259, 1.000)
+    shadows    chosen (1.000, 0.984, 0.989)  vs auto (1.000, 0.756, 0.871)
+    highlights chosen (1.577, 1.284, 1.000)  vs auto (1.678, 1.261, 1.000)
 
 ================================================
 IMAGE: DSC_0014  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.5878,0.5987,1.0000)  wb_high=(1.7048,1.2855,1.0000)
-  paper black=+15.01%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.24 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.5851,0.6037,1.0000)  wb_high=(1.5470,1.1330,1.0000)
+  paper black=+17.31%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.32 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +15.01% -> +45.00%
-    paper grade (gamma)                    4.53 -> 5.39
-    print exposure adjustment              +0.24 EV -> -0.31 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +17.31% -> +45.00%
+    paper grade (gamma)                    4.50 -> 5.29
+    paper gloss (specular highlights)      75.00% -> 56.30%
+    print exposure adjustment              +0.32 EV -> -0.24 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.939, 0.889, 1.000)  vs auto (0.588, 0.599, 1.000)
-    highlights chosen (1.860, 1.470, 1.000)  vs auto (1.705, 1.285, 1.000)
+    shadows    chosen (0.939, 0.889, 1.000)  vs auto (0.585, 0.604, 1.000)
+    highlights chosen (1.860, 1.470, 1.000)  vs auto (1.547, 1.133, 1.000)
 
 ================================================
 IMAGE: DSC_0015  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.5555,0.5475,1.0000)  wb_high=(1.1577,1.0000,1.2827)
-  paper black=+13.52%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.31 EV
-  NOTE: highlights wb fell back to roll median
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.5506,0.5381,1.0000)  wb_high=(1.3128,1.0728,1.0000)
+  paper black=+15.24%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.35 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +13.52% -> +50.00%
-    paper grade (gamma)                    4.53 -> 7.00
-    print exposure adjustment              +0.31 EV -> -0.35 EV
+    D max (dynamic range)                  1.91 -> 2.05
+    paper black (density correction)       +15.24% -> +50.00%
+    paper grade (gamma)                    4.50 -> 6.50
+    paper gloss (specular highlights)      75.00% -> 53.80%
+    print exposure adjustment              +0.35 EV -> -0.30 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.933, 0.889, 1.000)  vs auto (0.556, 0.547, 1.000)
-    highlights chosen (1.814, 1.441, 1.000)  vs auto (1.158, 1.000, 1.283)
+    shadows    chosen (0.933, 0.889, 1.000)  vs auto (0.551, 0.538, 1.000)
+    highlights chosen (1.814, 1.441, 1.000)  vs auto (1.313, 1.073, 1.000)
 
 ================================================
 IMAGE: DSC_0016  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7830,0.6702,1.0000)  wb_high=(1.3780,1.0907,1.0000)
-  paper black=+6.77%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.36 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7383,0.6314,1.0000)  wb_high=(1.4591,1.1394,1.0000)
+  paper black=+9.70%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.36 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.77% -> +26.77%
-    paper grade (gamma)                    4.53 -> 6.79
-    print exposure adjustment              +0.36 EV -> -0.11 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +9.70% -> +26.77%
+    paper grade (gamma)                    4.50 -> 6.79
+    paper gloss (specular highlights)      75.00% -> 49.90%
+    print exposure adjustment              +0.36 EV -> -0.00 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.405, 0.452)  vs auto (0.783, 0.670, 1.000)
-    highlights chosen (1.621, 1.332, 1.000)  vs auto (1.378, 1.091, 1.000)
+    shadows    chosen (1.000, 0.405, 0.452)  vs auto (0.738, 0.631, 1.000)
+    highlights chosen (1.621, 1.332, 1.000)  vs auto (1.459, 1.139, 1.000)
 
 ================================================
 IMAGE: DSC_0017  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6648,0.6520,1.0000)  wb_high=(1.7720,1.3386,1.0000)
-  paper black=+6.64%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.26 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6666,0.6434,1.0000)  wb_high=(1.5123,1.1888,1.0000)
+  paper black=+9.53%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.31 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.64% -> +15.15%
-    paper grade (gamma)                    4.53 -> 4.90
-    print exposure adjustment              +0.26 EV -> +0.07 EV
+    paper black (density correction)       +9.53% -> +15.15%
+    paper grade (gamma)                    4.50 -> 4.90
+    paper gloss (specular highlights)      75.00% -> 55.80%
+    print exposure adjustment              +0.31 EV -> +0.18 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.578, 0.511, 1.000)  vs auto (0.665, 0.652, 1.000)
-    highlights chosen (1.517, 1.266, 1.000)  vs auto (1.772, 1.339, 1.000)
+    shadows    chosen (0.578, 0.511, 1.000)  vs auto (0.667, 0.643, 1.000)
+    highlights chosen (1.517, 1.266, 1.000)  vs auto (1.512, 1.189, 1.000)
 
 ================================================
 IMAGE: DSC_0018  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.9477,0.9537)  wb_high=(1.5711,1.2466,1.0000)
-  paper black=+6.58%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.26 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(1.0000,0.9183,0.9638)  wb_high=(1.4159,1.1321,1.0000)
+  paper black=+9.65%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.32 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.58% -> +11.58%
-    paper grade (gamma)                    4.53 -> 4.93
-    print exposure adjustment              +0.26 EV -> +0.13 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +9.65% -> +11.58%
+    paper grade (gamma)                    4.50 -> 4.48
+    paper gloss (specular highlights)      75.00% -> 41.40%
+    print exposure adjustment              +0.32 EV -> +0.25 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.727, 0.958)  vs auto (1.000, 0.948, 0.954)
-    highlights chosen (1.550, 1.262, 1.000)  vs auto (1.571, 1.247, 1.000)
+    shadows    chosen (1.000, 0.727, 0.958)  vs auto (1.000, 0.918, 0.964)
+    highlights chosen (1.550, 1.262, 1.000)  vs auto (1.416, 1.132, 1.000)
 
 ================================================
 IMAGE: DSC_0019  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.8599,0.7953,1.0000)  wb_high=(1.5373,1.1835,1.0000)
-  paper black=+5.26%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.38 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.8160,0.7543,1.0000)  wb_high=(1.5468,1.1785,1.0000)
+  paper black=+8.24%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.40 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +5.26% -> -4.74%
-    paper grade (gamma)                    4.53 -> 4.53
-    print exposure adjustment              +0.38 EV -> +0.44 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +8.24% -> -4.74%
+    paper grade (gamma)                    4.50 -> 4.53
+    paper gloss (specular highlights)      75.00% -> 61.00%
+    print exposure adjustment              +0.40 EV -> +0.58 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.860, 0.795, 1.000)  vs auto (0.860, 0.795, 1.000)
-    highlights chosen (1.581, 1.306, 1.000)  vs auto (1.537, 1.183, 1.000)
+    shadows    chosen (0.860, 0.795, 1.000)  vs auto (0.816, 0.754, 1.000)
+    highlights chosen (1.581, 1.306, 1.000)  vs auto (1.547, 1.179, 1.000)
 
 ================================================
 IMAGE: DSC_0020  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.8906,0.9767)  wb_high=(1.2236,1.0000,1.1187)
-  paper black=+6.88%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.33 EV
-  NOTE: highlights wb fell back to roll median
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.9937,0.8584,1.0000)  wb_high=(1.3362,1.0661,1.0000)
+  paper black=+10.19%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.35 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.88% -> +36.88%
-    paper grade (gamma)                    4.53 -> 6.15
-    print exposure adjustment              +0.33 EV -> -0.16 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +10.19% -> +36.88%
+    paper grade (gamma)                    4.50 -> 6.15
+    paper gloss (specular highlights)      75.00% -> 68.10%
+    print exposure adjustment              +0.35 EV -> -0.10 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.461, 0.494, 1.000)  vs auto (1.000, 0.891, 0.977)
-    highlights chosen (1.543, 1.279, 1.000)  vs auto (1.224, 1.000, 1.119)
+    shadows    chosen (0.516, 0.360, 1.000)  vs auto (0.994, 0.858, 1.000)
+    highlights chosen (1.543, 1.279, 1.000)  vs auto (1.336, 1.066, 1.000)
 
 ================================================
 IMAGE: DSC_0021  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.8926,0.7829,1.0000)  wb_high=(1.5370,1.1790,1.0000)
-  paper black=+6.37%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.42 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.8411,0.7356,1.0000)  wb_high=(1.5502,1.1730,1.0000)
+  paper black=+9.23%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.45 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.37% -> +16.37%
-    paper grade (gamma)                    4.53 -> 5.16
-    print exposure adjustment              +0.42 EV -> +0.16 EV
+    D max (dynamic range)                  1.91 -> 2.08
+    paper black (density correction)       +9.23% -> +16.37%
+    paper grade (gamma)                    4.50 -> 5.16
+    paper gloss (specular highlights)      75.00% -> 58.20%
+    print exposure adjustment              +0.45 EV -> +0.27 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.800, 0.375, 1.000)  vs auto (0.893, 0.783, 1.000)
-    highlights chosen (1.579, 1.249, 1.000)  vs auto (1.537, 1.179, 1.000)
+    shadows    chosen (0.800, 0.375, 1.000)  vs auto (0.841, 0.736, 1.000)
+    highlights chosen (1.579, 1.249, 1.000)  vs auto (1.550, 1.173, 1.000)
 
 ================================================
 IMAGE: DSC_0022  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.7917,0.9486)  wb_high=(1.4021,1.1158,1.0000)
-  paper black=+14.58%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.30 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.9288,0.7657,1.0000)  wb_high=(1.4164,1.1075,1.0000)
+  paper black=+17.77%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.32 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +14.58% -> +11.70%
-    paper grade (gamma)                    4.53 -> 5.16
-    print exposure adjustment              +0.30 EV -> +0.22 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +17.77% -> +11.70%
+    paper grade (gamma)                    4.50 -> 4.81
+    paper gloss (specular highlights)      75.00% -> 55.80%
+    print exposure adjustment              +0.32 EV -> +0.32 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.800, 0.375, 1.000)  vs auto (1.000, 0.792, 0.949)
-    highlights chosen (1.648, 1.306, 1.000)  vs auto (1.402, 1.116, 1.000)
+    shadows    chosen (0.800, 0.375, 1.000)  vs auto (0.929, 0.766, 1.000)
+    highlights chosen (1.661, 1.319, 1.000)  vs auto (1.416, 1.107, 1.000)
 
 ================================================
 IMAGE: DSC_0023  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7913,0.7934,1.0000)  wb_high=(1.5400,1.2171,1.0000)
-  paper black=+12.90%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.25 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7850,0.7577,1.0000)  wb_high=(1.4909,1.1889,1.0000)
+  paper black=+14.62%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.31 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +12.90% -> +7.90%
-    print exposure adjustment              +0.25 EV -> +0.29 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +14.62% -> +7.90%
+    paper grade (gamma)                    4.50 -> 4.40
+    paper gloss (specular highlights)      75.00% -> 54.10%
+    print exposure adjustment              +0.31 EV -> +0.42 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.437, 0.398, 1.000)  vs auto (0.791, 0.793, 1.000)
-    highlights chosen (1.658, 1.337, 1.000)  vs auto (1.540, 1.217, 1.000)
+    shadows    chosen (0.437, 0.398, 1.000)  vs auto (0.785, 0.758, 1.000)
+    highlights chosen (1.658, 1.337, 1.000)  vs auto (1.491, 1.189, 1.000)
 
 ================================================
 IMAGE: DSC_0024  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6711,0.6514,1.0000)  wb_high=(1.3380,1.0317,1.0000)
-  paper black=+12.72%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.27 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6543,0.6200,1.0000)  wb_high=(1.3290,1.0126,1.0000)
+  paper black=+15.19%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.31 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +12.72% -> -2.28%
-    print exposure adjustment              +0.27 EV -> +0.47 EV
+    D max (dynamic range)                  1.91 -> 2.05
+    paper black (density correction)       +15.19% -> -2.28%
+    paper grade (gamma)                    4.50 -> 4.15
+    paper gloss (specular highlights)      75.00% -> 50.10%
+    print exposure adjustment              +0.31 EV -> +0.64 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.632, 0.384, 1.000)  vs auto (0.671, 0.651, 1.000)
-    highlights chosen (1.584, 1.258, 1.000)  vs auto (1.338, 1.032, 1.000)
+    shadows    chosen (0.632, 0.384, 1.000)  vs auto (0.654, 0.620, 1.000)
+    highlights chosen (1.584, 1.258, 1.000)  vs auto (1.329, 1.013, 1.000)
 
 ================================================
 IMAGE: DSC_0025  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7664,0.6645,1.0000)  wb_high=(1.1719,1.0000,1.1310)
-  paper black=+11.25%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.28 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7650,0.6571,1.0000)  wb_high=(1.1846,1.0000,1.1571)
+  paper black=+14.10%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.30 EV
   NOTE: highlights wb fell back to roll median
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +11.25% -> +1.25%
-    print exposure adjustment              +0.28 EV -> +0.31 EV
+    D max (dynamic range)                  1.91 -> 2.05
+    paper black (density correction)       +14.10% -> +1.25%
+    paper grade (gamma)                    4.50 -> 3.90
+    paper gloss (specular highlights)      75.00% -> 47.80%
+    print exposure adjustment              +0.30 EV -> +0.40 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.793, 0.501, 1.000)  vs auto (0.766, 0.664, 1.000)
-    highlights chosen (1.623, 1.328, 1.000)  vs auto (1.172, 1.000, 1.131)
+    shadows    chosen (0.793, 0.501, 1.000)  vs auto (0.765, 0.657, 1.000)
+    highlights chosen (1.623, 1.328, 1.000)  vs auto (1.185, 1.000, 1.157)
 
 ================================================
 IMAGE: DSC_0026  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.9112,0.7937,1.0000)  wb_high=(1.2053,1.0000,1.1794)
-  paper black=+14.31%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.21 EV
-  NOTE: highlights wb fell back to roll median
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.8862,0.7831,1.0000)  wb_high=(1.4940,1.1548,1.0000)
+  paper black=+17.72%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.15 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +14.31% -> +9.31%
-    paper grade (gamma)                    4.53 -> 4.98
-    print exposure adjustment              +0.21 EV -> +0.15 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +17.72% -> +9.31%
+    paper grade (gamma)                    4.50 -> 4.83
+    paper gloss (specular highlights)      75.00% -> 55.40%
+    print exposure adjustment              +0.15 EV -> +0.24 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.465, 0.629, 1.000)  vs auto (0.911, 0.794, 1.000)
-    highlights chosen (1.745, 1.397, 1.000)  vs auto (1.205, 1.000, 1.179)
+    shadows    chosen (0.465, 0.629, 1.000)  vs auto (0.886, 0.783, 1.000)
+    highlights chosen (1.745, 1.397, 1.000)  vs auto (1.494, 1.155, 1.000)
 
 ================================================
 IMAGE: DSC_0027  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.8683,0.7421,1.0000)  wb_high=(1.6349,1.2783,1.0000)
-  paper black=+10.36%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.19 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.8608,0.7522,1.0000)  wb_high=(1.6676,1.2828,1.0000)
+  paper black=+12.95%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.21 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +10.36% -> +15.36%
-    paper grade (gamma)                    4.53 -> 5.25
-    print exposure adjustment              +0.19 EV -> -0.01 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +12.95% -> +18.00%
+    paper grade (gamma)                    4.50 -> 5.05
+    paper gloss (specular highlights)      75.00% -> 59.80%
+    print exposure adjustment              +0.21 EV -> +0.07 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.588, 0.666)  vs auto (0.868, 0.742, 1.000)
-    highlights chosen (1.823, 1.421, 1.000)  vs auto (1.635, 1.278, 1.000)
+    shadows    chosen (0.681, 0.504, 1.000)  vs auto (0.861, 0.752, 1.000)
+    highlights chosen (1.823, 1.421, 1.000)  vs auto (1.668, 1.283, 1.000)
 
 ================================================
 IMAGE: DSC_0029  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7238,0.8566,1.0000)  wb_high=(1.2124,1.0643,1.0000)
-  paper black=+6.01%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.41 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6952,0.8081,1.0000)  wb_high=(1.3535,1.1238,1.0000)
+  paper black=+9.06%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.39 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.01% -> +16.00%
-    paper grade (gamma)                    4.53 -> 5.00
-    print exposure adjustment              +0.41 EV -> +0.11 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +9.06% -> +18.65%
+    paper grade (gamma)                    4.50 -> 5.00
+    paper gloss (specular highlights)      75.00% -> 46.70%
+    print exposure adjustment              +0.39 EV -> +0.21 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.459, 0.440, 1.000)  vs auto (0.724, 0.857, 1.000)
-    highlights chosen (1.551, 1.323, 1.000)  vs auto (1.212, 1.064, 1.000)
+    shadows    chosen (0.459, 0.440, 1.000)  vs auto (0.695, 0.808, 1.000)
+    highlights chosen (1.551, 1.323, 1.000)  vs auto (1.354, 1.124, 1.000)
 
 ================================================
 IMAGE: DSC_0030  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6922,0.6585,1.0000)  wb_high=(1.3761,1.1467,1.0000)
-  paper black=+8.69%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.31 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6350,0.5979,1.0000)  wb_high=(1.3707,1.1379,1.0000)
+  paper black=+11.62%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.33 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +8.69% -> +28.69%
-    paper grade (gamma)                    4.53 -> 5.27
-    print exposure adjustment              +0.31 EV -> -0.10 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +11.62% -> +28.69%
+    paper grade (gamma)                    4.50 -> 5.27
+    paper gloss (specular highlights)      75.00% -> 60.40%
+    print exposure adjustment              +0.33 EV -> -0.01 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.933, 0.586, 1.000)  vs auto (0.692, 0.659, 1.000)
-    highlights chosen (1.664, 1.388, 1.000)  vs auto (1.376, 1.147, 1.000)
+    shadows    chosen (0.933, 0.586, 1.000)  vs auto (0.635, 0.598, 1.000)
+    highlights chosen (1.664, 1.388, 1.000)  vs auto (1.371, 1.138, 1.000)
 
 ================================================
 IMAGE: DSC_0031  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.7487,0.7872,1.0000)  wb_high=(1.6441,1.2820,1.0000)
-  paper black=+5.69%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.42 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7258,0.7709,1.0000)  wb_high=(1.6364,1.2798,1.0000)
+  paper black=+8.70%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.44 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +5.69% -> +15.69%
-    paper grade (gamma)                    4.53 -> 5.12
-    print exposure adjustment              +0.42 EV -> +0.11 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +8.70% -> +17.69%
+    paper grade (gamma)                    4.50 -> 5.12
+    paper gloss (specular highlights)      75.00% -> 54.40%
+    print exposure adjustment              +0.44 EV -> +0.16 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.749, 0.787, 1.000)  vs auto (0.749, 0.787, 1.000)
-    highlights chosen (1.650, 1.364, 1.000)  vs auto (1.644, 1.282, 1.000)
+    shadows    chosen (0.749, 0.787, 1.000)  vs auto (0.726, 0.771, 1.000)
+    highlights chosen (1.650, 1.364, 1.000)  vs auto (1.636, 1.280, 1.000)
 
 ================================================
 IMAGE: DSC_0032  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.6596,0.6038,1.0000)  wb_high=(1.3656,1.0627,1.0000)
-  paper black=+6.59%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.38 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.6388,0.5774,1.0000)  wb_high=(1.3098,1.0157,1.0000)
+  paper black=+9.58%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.42 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +6.59% -> -3.41%
-    print exposure adjustment              +0.38 EV -> +0.52 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +9.58% -> -1.41%
+    paper gloss (specular highlights)      75.00% -> 56.20%
+    print exposure adjustment              +0.42 EV -> +0.61 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.987, 0.728, 1.000)  vs auto (0.660, 0.604, 1.000)
-    highlights chosen (1.486, 1.245, 1.000)  vs auto (1.366, 1.063, 1.000)
+    shadows    chosen (0.987, 0.728, 1.000)  vs auto (0.639, 0.577, 1.000)
+    highlights chosen (1.486, 1.245, 1.000)  vs auto (1.310, 1.016, 1.000)
 
 ================================================
 IMAGE: DSC_0033  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.8088,0.8665,1.0000)  wb_high=(1.2857,1.0953,1.0000)
-  paper black=+4.47%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.32 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.7657,0.8319,1.0000)  wb_high=(1.2842,1.0919,1.0000)
+  paper black=+7.21%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.34 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +4.47% -> +46.60%
-    paper grade (gamma)                    4.53 -> 6.80
-    print exposure adjustment              +0.32 EV -> -0.40 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +7.21% -> +50.00%
+    paper grade (gamma)                    4.50 -> 6.95
+    paper gloss (specular highlights)      75.00% -> 54.10%
+    print exposure adjustment              +0.34 EV -> -0.38 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.423, 0.424, 1.000)  vs auto (0.809, 0.867, 1.000)
-    highlights chosen (1.694, 1.388, 1.000)  vs auto (1.286, 1.095, 1.000)
+    shadows    chosen (0.423, 0.424, 1.000)  vs auto (0.766, 0.832, 1.000)
+    highlights chosen (1.694, 1.388, 1.000)  vs auto (1.284, 1.092, 1.000)
 
 ================================================
 IMAGE: DSC_0034  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.9533,0.9580)  wb_high=(1.5528,1.2425,1.0000)
-  paper black=+3.40%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.38 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(1.0000,0.9480,0.9983)  wb_high=(1.4587,1.1690,1.0000)
+  paper black=+6.29%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.43 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +3.40% -> +28.40%
-    paper grade (gamma)                    4.53 -> 6.03
-    print exposure adjustment              +0.38 EV -> -0.13 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +6.29% -> +28.40%
+    paper grade (gamma)                    4.50 -> 6.03
+    paper gloss (specular highlights)      75.00% -> 53.10%
+    print exposure adjustment              +0.43 EV -> -0.01 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.686, 0.735)  vs auto (1.000, 0.953, 0.958)
-    highlights chosen (1.600, 1.337, 1.000)  vs auto (1.553, 1.243, 1.000)
+    shadows    chosen (1.000, 0.805, 0.733)  vs auto (1.000, 0.948, 0.998)
+    highlights chosen (1.615, 1.346, 1.000)  vs auto (1.459, 1.169, 1.000)
 
 ================================================
 IMAGE: DSC_0035  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.9125,0.8948,1.0000)  wb_high=(1.5554,1.2091,1.0000)
-  paper black=+11.50%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.27 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.8431,0.8343,1.0000)  wb_high=(1.5374,1.1936,1.0000)
+  paper black=+14.43%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.30 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +11.50% -> +46.50%
-    paper grade (gamma)                    4.53 -> 6.67
-    print exposure adjustment              +0.27 EV -> -0.31 EV
+    D max (dynamic range)                  1.91 -> 2.06
+    paper black (density correction)       +14.43% -> +46.50%
+    paper grade (gamma)                    4.50 -> 6.67
+    paper gloss (specular highlights)      75.00% -> 53.50%
+    print exposure adjustment              +0.30 EV -> -0.24 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.816, 0.434, 1.000)  vs auto (0.912, 0.895, 1.000)
-    highlights chosen (1.394, 1.175, 1.000)  vs auto (1.555, 1.209, 1.000)
+    shadows    chosen (0.866, 0.574, 1.000)  vs auto (0.843, 0.834, 1.000)
+    highlights chosen (1.580, 1.288, 1.000)  vs auto (1.537, 1.194, 1.000)
 
 ================================================
 IMAGE: DSC_0036  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.9110,0.6648)  wb_high=(1.6427,1.2763,1.0000)
-  paper black=+14.09%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.19 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(1.0000,0.9117,0.7003)  wb_high=(1.6917,1.2943,1.0000)
+  paper black=+18.66%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.17 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +14.09% -> +19.09%
-    print exposure adjustment              +0.19 EV -> +0.11 EV
+    paper black (density correction)       +18.66% -> +19.09%
+    print exposure adjustment              +0.17 EV -> +0.11 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.816, 0.949)  vs auto (1.000, 0.911, 0.665)
-    highlights chosen (1.644, 1.314, 1.000)  vs auto (1.643, 1.276, 1.000)
+    shadows    chosen (1.000, 0.816, 0.949)  vs auto (1.000, 0.912, 0.700)
+    highlights chosen (1.644, 1.314, 1.000)  vs auto (1.692, 1.294, 1.000)
 
 ================================================
 IMAGE: DSC_0037  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.9243,0.6633)  wb_high=(1.6295,1.2569,1.0000)
-  paper black=+12.90%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.22 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(1.0000,0.9085,0.6821)  wb_high=(1.6806,1.2752,1.0000)
+  paper black=+17.41%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.21 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper black (density correction)       +12.90% -> +17.90%
-    print exposure adjustment              +0.22 EV -> +0.15 EV
+    paper black (density correction)       +17.41% -> +17.90%
+    print exposure adjustment              +0.21 EV -> +0.15 EV
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (1.000, 0.761, 0.754)  vs auto (1.000, 0.924, 0.663)
-    highlights chosen (1.656, 1.310, 1.000)  vs auto (1.629, 1.257, 1.000)
+    shadows    chosen (1.000, 0.761, 0.754)  vs auto (1.000, 0.909, 0.682)
+    highlights chosen (1.656, 1.310, 1.000)  vs auto (1.681, 1.275, 1.000)
 
 ================================================
 IMAGE: DSC_0038  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.2500,0.2500,1.0000)  wb_high=(1.1673,1.0000,2.0000)
-  paper black=+19.06%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=-0.01 EV
-  NOTE: highlights wb fell back to roll median
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.2500,0.2500,1.0000)  wb_high=(1.3101,1.0231,1.0000)
+  paper black=+16.99%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.15 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper grade (gamma)                    4.53 -> 5.20
+    paper grade (gamma)                    4.50 -> 5.20
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
     shadows    chosen (0.375, 0.682, 1.000)  vs auto (0.250, 0.250, 1.000)
-    highlights chosen (1.532, 1.212, 1.000)  vs auto (1.167, 1.000, 2.000)
+    highlights chosen (1.532, 1.212, 1.000)  vs auto (1.310, 1.023, 1.000)
 
 ================================================
 IMAGE: DSC_0039  (1998 x 1336 px)
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(1.0000,0.6312,0.5000)  wb_high=(1.0000,1.0384,2.0000)
-  paper black=+22.53%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=-0.01 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.2500,1.0000,0.5000)  wb_high=(1.0000,1.3039,2.0000)
+  paper black=+24.21%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.03 EV
   NOTE: highlights wb fell back to roll median
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
-    shadows    chosen (0.393, 0.555, 1.000)  vs auto (1.000, 0.631, 0.500)
-    highlights chosen (1.933, 1.542, 1.000)  vs auto (1.000, 1.038, 2.000)
+    shadows    chosen (0.393, 0.555, 1.000)  vs auto (0.250, 1.000, 0.500)
+    highlights chosen (1.933, 1.542, 1.000)  vs auto (1.000, 1.304, 2.000)
 
 ================================================
 IMAGE: DSC_0040  (1998 x 1336 px)  [GLOBAL BASE WINNER]
-  D min=55.62%, 30.43%, 17.77%  D_max=1.722  offset=0.006
-  wb_low=(0.2500,0.2500,1.0000)  wb_high=(1.6907,1.2184,1.0000)
-  paper black=+16.30%  paper grade(gamma)=4.53  paper gloss=75.00%  print exposure=+0.08 EV
+  D min=55.62%, 30.43%, 17.77%  D_max=1.913  offset=0.019
+  wb_low=(0.2500,0.2500,1.0000)  wb_high=(1.5438,1.1365,1.0000)
+  paper black=+18.64%  paper grade(gamma)=4.50  paper gloss=75.00%  print exposure=+0.12 EV
 
   PRINT PARAM OVERRIDES (applied -> corrected):
-    paper grade (gamma)                    4.53 -> 5.82
+    paper grade (gamma)                    4.50 -> 5.82
 
   WB WHEEL OVERRIDES (auto -> chosen) — tuning ground truth:
     shadows    chosen (0.420, 0.522, 1.000)  vs auto (0.250, 0.250, 1.000)
-    highlights chosen (1.522, 1.216, 1.000)  vs auto (1.691, 1.218, 1.000)
+    highlights chosen (1.522, 1.216, 1.000)  vs auto (1.544, 1.137, 1.000)
 
 ================================================
 SUMMARY
   Total corrected patches: 0
     film_base  0
     highlights 0
-  Total print overrides: 86
+  Total print overrides: 146
+    D_max      24
+    offset     0
     black      30
-    gamma      24
-    soft_clip  0
-    exposure   32
+    gamma      27
+    soft_clip  30
+    exposure   35
   Total wb wheel overrides: 76
     shadows    38
     highlights 38
   Crop corrections: 0
-  Bad inversions flagged: 0 / 38
-  wb fallbacks (patch missing): 8
+  wb fallbacks (patch missing): 3
   Images with corrections: 38 / 38

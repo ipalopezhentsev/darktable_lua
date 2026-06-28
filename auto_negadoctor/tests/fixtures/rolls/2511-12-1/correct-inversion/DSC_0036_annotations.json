@@ -4,7 +4,7 @@
   "print_overrides": {
     "black": {
       "applied": 0.14593295979591595,
-      "corrected": 0.42593295979591594
+      "corrected": 0.41093295979591593
     },
     "exposure": {
       "applied": 1.2574578282603857,
@@ -12,7 +12,7 @@
     },
     "gamma": {
       "applied": 4.501953125,
-      "corrected": 5.151953124999998
+      "corrected": 5.301953124999997
     }
   },
   "wb_overrides": {
@@ -41,7 +41,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

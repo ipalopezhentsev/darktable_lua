@@ -12,7 +12,7 @@
     },
     "gamma": {
       "applied": 4.501953125,
-      "corrected": 4.201953125000001
+      "corrected": 4.551953125
     },
     "soft_clip": {
       "applied": 0.75,
@@ -45,7 +45,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

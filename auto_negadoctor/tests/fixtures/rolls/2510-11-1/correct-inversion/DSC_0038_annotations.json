@@ -3,16 +3,16 @@
   "patch_corrections": {},
   "print_overrides": {
     "gamma": {
-      "applied": 4.53125,
+      "applied": 4.501953125,
       "corrected": 5.2
     }
   },
   "wb_overrides": {
     "highlights": {
       "applied": [
-        1.1672757470982007,
-        1.0,
-        2.0
+        1.3101372461889764,
+        1.0230911852123985,
+        1.0
       ],
       "corrected": [
         1.532,
@@ -33,7 +33,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

@@ -12,11 +12,11 @@
     },
     "exposure": {
       "applied": 2.0,
-      "corrected": 1.3695294416393153
+      "corrected": 1.3895294416393154
     },
     "gamma": {
       "applied": 4.501953125,
-      "corrected": 4.901953124999999
+      "corrected": 5.101953124999998
     },
     "offset": {
       "applied": 0.01914062500000001,
@@ -53,7 +53,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

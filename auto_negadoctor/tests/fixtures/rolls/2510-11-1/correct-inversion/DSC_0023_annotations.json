@@ -2,20 +2,32 @@
   "stem": "DSC_0023",
   "patch_corrections": {},
   "print_overrides": {
+    "D_max": {
+      "applied": 1.9131874999999998,
+      "corrected": 2.0631874999999984
+    },
     "black": {
-      "applied": 0.1290150554653339,
+      "applied": 0.14622128670628612,
       "corrected": 0.0790150554653339
     },
     "exposure": {
-      "applied": 1.1916905973433303,
-      "corrected": 1.225400248717051
+      "applied": 1.2376296123297945,
+      "corrected": 1.335400248717051
+    },
+    "gamma": {
+      "applied": 4.501953125,
+      "corrected": 4.401953125
+    },
+    "soft_clip": {
+      "applied": 0.75,
+      "corrected": 0.541
     }
   },
   "wb_overrides": {
     "highlights": {
       "applied": [
-        1.5399628232573954,
-        1.2171160361674145,
+        1.4908670186319486,
+        1.1889135223653902,
         1.0
       ],
       "corrected": [
@@ -26,8 +38,8 @@
     },
     "shadows": {
       "applied": [
-        0.7913164585447714,
-        0.7933697571919227,
+        0.7849586489686773,
+        0.7577341892383016,
         1.0
       ],
       "corrected": [
@@ -37,7 +49,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

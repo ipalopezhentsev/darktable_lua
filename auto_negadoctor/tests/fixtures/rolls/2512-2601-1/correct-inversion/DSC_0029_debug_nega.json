@@ -11,10 +11,10 @@
     "missing_exif": false
   },
   "border": [
-    58,
+    59,
     45,
     46,
-    35
+    36
   ],
   "film_base": {
     "local": {
@@ -50,34 +50,34 @@
   "patches": {
     "highlights": {
       "rect": [
-        1087,
+        1088,
         45,
         98,
         98
       ],
       "rgb_neg_linear": [
-        0.09672078490257263,
-        0.029615165665745735,
-        0.010526635684072971
+        0.09672541171312332,
+        0.029615361243486404,
+        0.010525062680244446
       ],
-      "chroma": 0.19187548756599426,
-      "preview_luma": 0.44552281498908997,
+      "chroma": 0.23110637068748474,
+      "preview_luma": 0.4687166213989258,
       "used_fallback": false
     }
   },
   "picked_min": [
-    0.04331781715154648,
-    0.011996736750006676,
-    0.005284224636852741
+    0.05891939625144005,
+    0.01779806613922119,
+    0.008355311118066311
   ],
   "picked_max": [
-    0.30187302827835083,
-    0.14232492446899414,
-    0.10047467797994614
+    0.29581940174102783,
+    0.13937503099441528,
+    0.09866800904273987
   ],
   "wb_high_boot": [
-    1.314900319646695,
-    1.10305111315416,
+    1.300486606079768,
+    1.097160160394394,
     1.0
   ],
   "source_16bit_tiff": false,
@@ -170,23 +170,23 @@
       0.2128586769104004
     ],
     "wb_high": [
-      1.4982812567899502,
-      1.2287653817345354,
+      1.5116601546703758,
+      1.231924135574127,
       1.0
     ],
     "wb_low": [
-      0.9368568953401759,
-      0.9081403232245858,
+      0.9495965310310354,
+      0.912346226359484,
       1.0
     ],
-    "D_max": 1.7217812499999998,
-    "offset": 0.006250000000000007,
-    "black": -0.2440193581422788,
-    "gamma": 4.53125,
+    "D_max": 1.9131874999999998,
+    "offset": 0.01914062500000001,
+    "black": -0.20079054758732404,
+    "gamma": 4.501953125,
     "soft_clip": 0.75,
-    "exposure": 1.5390116664885396
+    "exposure": 1.4943551194877025
   },
-  "params_hex": "010000006b6f393f5c96af3ea0f7593e00000000aec7bf3f2f489d3f0000803f0000803fdad56f3fe27b683f0000803f0000803f5463dc3fcdcccc3b36e079be000091400000403f56fec43f",
+  "params_hex": "010000006b6f393f5c96af3ea0f7593e00000000147ec13fb1af9d3f0000803f0000803fc218733f868f693f0000803f0000803f54e3f43fcdcc9c3c0a9c4dbe001090400000403f0747bf3f",
   "params_analytical": {
     "film_stock": 1,
     "Dmin": [
@@ -195,28 +195,27 @@
       0.2128586769104004
     ],
     "wb_high": [
-      1.4982812567899502,
-      1.2287653817345354,
+      1.5116601546703758,
+      1.231924135574127,
       1.0
     ],
     "wb_low": [
-      0.9368568953401759,
-      0.9081403232245858,
+      0.9495965310310354,
+      0.912346226359484,
       1.0
     ],
-    "D_max": 1.7217812499999998,
-    "offset": 0.006250000000000007,
-    "black": -0.2440193581422788,
-    "gamma": 4.53125,
+    "D_max": 1.9131874999999998,
+    "offset": 0.01914062500000001,
+    "black": -0.20079054758732404,
+    "gamma": 4.501953125,
     "soft_clip": 0.75,
-    "exposure": 1.5390116664885396
+    "exposure": 1.4943551194877025
   },
   "params_ai": null,
   "params_ai_hex": null,
   "scene": null,
   "scene_tuning": null,
-  "processing_time_s": 3.49,
-  "run_wall_time_s": 24.44,
+  "processing_time_s": 5.11,
   "constants": {
     "_PROC_WORKERS_ENV": 0,
     "_AI_WORKERS": 1,
@@ -384,10 +383,10 @@
     "BORDER_DARK_THR": 0.02,
     "BORDER_MAX_FRAC": 0.08,
     "BORDER_PAD_FRAC": 0.004,
-    "HOLDER_LUMA_THR": 0.024140625,
-    "CROP_JUNK_LINE_FRAC": 0.08000000000000002,
-    "CROP_LEAK_MARGIN_D": 0.03,
-    "CROP_REBATE_MARGIN_D": 0.14562500000000003,
+    "HOLDER_LUMA_THR": 0.026601562500000002,
+    "CROP_JUNK_LINE_FRAC": 0.09687500000000002,
+    "CROP_LEAK_MARGIN_D": 0.03421875,
+    "CROP_REBATE_MARGIN_D": 0.12687500000000002,
     "CROP_REBATE_LINE_FRAC": 0.18265625,
     "CROP_REBATE_TERM_FRAC": 0.04,
     "CROP_REBATE_MAX_FRAC": 0.026875000000000003,
@@ -397,7 +396,7 @@
     "CROP_REBATE_BAND_HUE_TOL": 0.009375,
     "CROP_REBATE_WIDE_FRAC": 0.55,
     "CROP_PAD_FRAC": 0.005000000000000001,
-    "CROP_SHADOW_REL": 0.7375,
+    "CROP_SHADOW_REL": 0.7468750000000001,
     "CROP_SHADOW_MAX_FRAC": 0.0309375,
     "CROP_SHADOW_CORE_FRAC": 0.0166875,
     "CROP_GAP_TOL_FRAC": 0.0153125,
@@ -415,43 +414,43 @@
     "PATCH_CHROMA_MAX": 0.35,
     "PATCH_LUMA_FLOOR": 0.02,
     "PATCH_STRIDE_DIV": 2,
-    "PATCH_UNIFORMITY_MAX": 0.45,
+    "PATCH_UNIFORMITY_MAX": 0.575,
     "PATCH_WIN_FRAC": 0.049375,
     "HIGHLIGHT_CLIP_FRAC_MAX": 0.02,
     "SHADOW_MIN_LUMA": 0.005,
     "MIN_WIN_FRAC": 0.016,
-    "P_LOW": 0.5,
-    "P_HIGH": 99.72265625000001,
-    "DMAX_DEFAULT": 1.7217812499999998,
-    "OFFSET_DEFAULT": 0.006250000000000007,
+    "P_LOW": 1.73046875,
+    "P_HIGH": 99.54453125000002,
+    "DMAX_DEFAULT": 1.9131874999999998,
+    "OFFSET_DEFAULT": 0.01914062500000001,
     "HIGHLIGHT_BAND_PCT": [
-      73.75,
-      96.75
+      71.875,
+      98.5
     ],
     "WB_LOW_DESAT": 0.0,
     "WB_HIGH_DESAT": 0.0,
     "WB_LOW_BAND_PCT": [
-      0.0,
-      20.0
+      8.4375,
+      20.1171875
     ],
     "WB_HIGH_BAND_PCT": [
       70.0,
       95.0
     ],
     "WB_LOW_PRIOR": [
-      1.0890625,
-      0.74609375,
-      0.694140625
+      1.0921874999999999,
+      0.73828125,
+      0.68046875
     ],
     "WB_HIGH_PRIOR": [
-      1.758984375,
-      1.365625,
+      1.81171875,
+      1.36953125,
       1.0640625
     ],
     "WB_REGION_MIN_FRAC": 0.0001,
-    "PRINT_GAMMA": 4.53125,
-    "PRINT_HI_CEIL": 0.9692578125,
-    "PRINT_HI_PCT": 99.91546875,
+    "PRINT_GAMMA": 4.501953125,
+    "PRINT_HI_CEIL": 0.9648046875,
+    "PRINT_HI_PCT": 99.91933593750001,
     "PRINT_CLIP_BUDGET": 0.003,
     "PRINT_TUNE_ITERS": 11,
     "VIG_DOWNSAMPLE_FRAC": 0.003625,
@@ -464,5 +463,6 @@
     "VIG_TAIL_CUT_REL": 0.97,
     "MASK_USED": 0,
     "MASK_BORDER": 2
-  }
+  },
+  "preset": "default_better_crop_and_inversion"
 }

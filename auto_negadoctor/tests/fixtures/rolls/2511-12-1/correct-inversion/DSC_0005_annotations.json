@@ -1,7 +1,20 @@
 {
   "stem": "DSC_0005",
   "patch_corrections": {},
-  "print_overrides": {},
+  "print_overrides": {
+    "D_max": {
+      "applied": 1.9131874999999998,
+      "corrected": 1.9631874999999999
+    },
+    "exposure": {
+      "applied": 1.3536474495748436,
+      "corrected": 1.3936474495748437
+    },
+    "soft_clip": {
+      "applied": 0.75,
+      "corrected": 0.648
+    }
+  },
   "wb_overrides": {
     "highlights": {
       "applied": [
@@ -28,7 +41,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

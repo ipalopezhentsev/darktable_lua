@@ -3,19 +3,19 @@
   "patch_corrections": {},
   "print_overrides": {
     "black": {
-      "applied": 0.020840812955314175,
+      "applied": 0.042815149583235984,
       "corrected": -0.07915918704468583
     },
     "exposure": {
-      "applied": 1.2780845379274246,
-      "corrected": 1.3900490125524811
+      "applied": 1.3066548061854224,
+      "corrected": 1.4400490125524812
     }
   },
   "wb_overrides": {
     "highlights": {
       "applied": [
-        1.4234328558947202,
-        1.1479928836173563,
+        1.4328362778028938,
+        1.1486051557085648,
         1.0
       ],
       "corrected": [
@@ -26,9 +26,9 @@
     },
     "shadows": {
       "applied": [
-        0.9944916691340437,
-        0.7902635496780969,
-        1.0
+        1.0,
+        0.7903357929418966,
+        0.9796903812495616
       ],
       "corrected": [
         0.832,
@@ -37,7 +37,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

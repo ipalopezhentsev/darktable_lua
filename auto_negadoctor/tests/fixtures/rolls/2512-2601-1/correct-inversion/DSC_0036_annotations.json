@@ -8,7 +8,11 @@
     },
     "exposure": {
       "applied": 2.0,
-      "corrected": 1.6738381204777397
+      "corrected": 1.7138381204777398
+    },
+    "gamma": {
+      "applied": 4.501953125,
+      "corrected": 4.701953124999999
     }
   },
   "wb_overrides": {
@@ -37,7 +41,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

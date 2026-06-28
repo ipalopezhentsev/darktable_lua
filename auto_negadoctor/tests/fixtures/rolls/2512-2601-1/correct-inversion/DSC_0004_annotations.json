@@ -2,9 +2,13 @@
   "stem": "DSC_0004",
   "patch_corrections": {},
   "print_overrides": {
+    "black": {
+      "applied": 0.1240961151123238,
+      "corrected": 0.1340961151123238
+    },
     "exposure": {
       "applied": 1.4532913838463324,
-      "corrected": 1.4232913838463324
+      "corrected": 1.3932913838463323
     },
     "gamma": {
       "applied": 4.501953125,
@@ -41,7 +45,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }

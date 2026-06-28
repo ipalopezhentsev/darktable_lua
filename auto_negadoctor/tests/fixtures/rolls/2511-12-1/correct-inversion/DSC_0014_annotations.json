@@ -5,6 +5,10 @@
     "exposure": {
       "applied": 1.2668698737945943,
       "corrected": 1.2168698737945942
+    },
+    "soft_clip": {
+      "applied": 0.75,
+      "corrected": 0.613
     }
   },
   "wb_overrides": {
@@ -33,7 +37,5 @@
       ]
     }
   },
-  "patch_notes": {},
-  "bad_inversion": false,
-  "bad_inversion_note": ""
+  "patch_notes": {}
 }
