@@ -87,6 +87,13 @@ class DustDebugUI(DebugUIBase):
         self._session_dir = session_dir
         images, constants = detect_dust.load_debug_spots_dir(session_dir)
         self._run_mode = False
+        # A `--review` session dir starts with ONLY review_meta.json (no frames):
+        # the first roll is built in-window at startup, like a roll switch. Allow
+        # the empty session so the window opens immediately (don't treat as run mode).
+        if not images and (Path(session_dir) / "review_meta.json").exists():
+            self.ALLOW_EMPTY_SESSION = True
+            self.sensor_mode = False
+            return [], constants
         if not images:
             # No precomputed debug_spots.json — the export dir / roll folder has
             # only JPGs. Build minimal img_dicts and let the UI RUN DETECTION ITSELF
@@ -370,7 +377,27 @@ class DustDebugUI(DebugUIBase):
         # GT = the user's annotation (corrected output); live = the currently-
         # selected preset's detection (default.json default, tracks the dropdown).
         imgs = getattr(self, "images", None) or []
-        self.review_mode = any(im.get("review") for im in imgs)
+        # Calibration review is driven by review_meta.json (calibration session dir
+        # + roll list), present EVEN with no frames loaded — the first roll is built
+        # IN-WINDOW at startup (same path as a roll switch), so the UI opens at once
+        # instead of blocking on the build. (Legacy pre-built sessions also carry
+        # per-frame `review` payloads.)
+        self._review_session_dir = None
+        self._review_rolls = []
+        self._review_current_roll = None
+        self._run_calib_mod = None
+        meta = None
+        try:
+            meta = json.loads((Path(self.session_dir)
+                               / "review_meta.json").read_text())
+        except Exception:
+            meta = None
+        if meta:
+            self._review_session_dir = meta.get("session_dir")
+            self._review_rolls = list(meta.get("rolls") or [])
+            self._review_current_roll = meta.get("current_roll")
+        self.review_mode = (any(im.get("review") for im in imgs)
+                            or bool(meta and self._review_rolls))
         self.review_source = "fitted"    # one of REVIEW_CYCLE
         # Which preset the "live" R-source reflects (the 'Detect with:' dropdown);
         # default.json is the precomputed default. Per-frame live is recomputed
@@ -385,6 +412,11 @@ class DustDebugUI(DebugUIBase):
                     rev["live_default"] = copy.deepcopy(rev["live"])
                     rev["live_preset"] = "(live default)"
             self._apply_review_source()
+            # roll_var always exists in review (the dropdown WIDGET is only built
+            # for >1 roll), so install/switch code can set it without a guard.
+            self.roll_var = tk.StringVar(
+                value=(self._review_current_roll
+                       or (self._review_rolls[0] if self._review_rolls else "")))
 
     def reset_selection(self):
         self.selected_detected = set()
@@ -404,6 +436,15 @@ class DustDebugUI(DebugUIBase):
         # overlay — the same UI-first feel as auto_negadoctor.
         if getattr(self, "_run_mode", False) and root.winfo_exists():
             self.root.after(200, self._start_background_detect)
+        # Calibration review. If opened EMPTY (meta-only), build the first roll
+        # IN-WINDOW now (same path as a roll switch) so the window appears at once
+        # instead of blocking before launch; prefetch of the others chains on once
+        # it lands. If frames were pre-built (legacy), seed the cache + prefetch.
+        if getattr(self, "review_mode", False) and root.winfo_exists():
+            if not self.images:
+                self.root.after(200, self._start_review_first_roll)
+            elif len(getattr(self, "_review_rolls", []) or []) > 1:
+                self.root.after(1500, self._seed_roll_cache)
 
     def reset_for_new_image(self):
         self.thread_draw_mode = False
@@ -444,6 +485,12 @@ class DustDebugUI(DebugUIBase):
         self._bg_active = True
         self._bg_done = 0
         self._bg_total = len(self.images)
+        # full-res detection has no sub-frame progress, so with few frames the
+        # per-frame "done" target jumps coarsely (1 frame: 0 -> 100) and the bar
+        # just sat at the animator's creep cap (~target+12 → 12% / 29%) until the
+        # burst finished. Credit the IN-FLIGHT frames too (a pool worker is busy on
+        # them) so the target climbs as detection proceeds. Bounded by the pool.
+        self._bg_workers = max(1, int(os.environ.get("RETOUCH_UI_WORKERS", "3")))
         self._bg_q = queue.Queue()
         cfg = (self._cfg_for_selection() if hasattr(self, "_preset_var")
                else detect_dust.DEFAULT_TUNING)
@@ -458,7 +505,7 @@ class DustDebugUI(DebugUIBase):
             # full-res detection is memory-heavy — a small pool (override via
             # RETOUCH_UI_WORKERS) streams results without OOM. detect() releases the
             # GIL in cv2/numpy, so threads give real parallelism.
-            n = max(1, int(os.environ.get("RETOUCH_UI_WORKERS", "3")))
+            n = self._bg_workers
 
             def one(it):
                 i, p = it
@@ -551,7 +598,17 @@ class DustDebugUI(DebugUIBase):
             self._detect_status.config(
                 text="" if done else f"detecting {self._bg_done}/{self._bg_total}…")
         if getattr(self, "_analyzing", False):
-            self._set_analyzing_pct(100.0 * self._bg_done / max(1, self._bg_total))
+            total = max(1, self._bg_total)
+            if done:
+                frac = 1.0
+            else:
+                # done frames + half-credit for the frames currently in flight on
+                # the pool, so a single long detect still visibly advances (and the
+                # target stays monotonic as done overtakes in-flight).
+                inflight = min(getattr(self, "_bg_workers", 1),
+                               total - self._bg_done)
+                frac = (self._bg_done + 0.5 * inflight) / total
+            self._set_analyzing_pct(100.0 * frac)
 
     # ------------------------------------------------------------------
     # Preset dropdown + on-demand re-detection (calibration preview / --review)
@@ -593,24 +650,283 @@ class DustDebugUI(DebugUIBase):
         combo = self.make_readonly_combobox(row, self._preset_var, choices)
         combo.pack(side="right", padx=2, pady=2)
         combo.bind("<<ComboboxSelected>>", lambda e: self._on_preset_combo_changed())
+        self._preset_combo = combo
+        # In review the combo only drives 'live', so grey it out unless 'live' is
+        # the source on screen (GT/fitted are unmovable).
+        self._update_preset_combo_state()
         ttk.Label(row, text="Detect with:").pack(side="right", padx=(8, 2))
         self._detect_status = ttk.Label(row, text="")
         self._detect_status.pack(side="right", padx=8)
+        # Multi-roll review: a roll dropdown rebuilds the chosen roll's
+        # fitted/live/GT review in-window. The button row is already crowded, so
+        # give the dropdown its OWN row below it (otherwise it would squeeze the
+        # 'Detect with:' combo off the right edge at the default width).
+        self._build_roll_switcher(parent, row)
+
+    # ------------------------------------------------------------------
+    # Calibration-review roll switcher: show a DIFFERENT roll's fitted/live/GT
+    # review in-window. Each roll's review is built (detection under the fitted
+    # constants + the live preset) at most ONCE per session and kept in an
+    # in-memory cache; the rolls the user hasn't opened are PREFETCHED on a
+    # background thread after the window settles, so a switch is usually instant.
+    # `_roll_cache[roll]` is (images, constants), or None for a roll with no images.
+    # ------------------------------------------------------------------
+
+    def _build_roll_switcher(self, parent, row):
+        """A 'Roll:' dropdown for a multi-roll review session, on its own toolbar
+        row (the button row has no spare width)."""
+        if not (getattr(self, "review_mode", False)
+                and len(getattr(self, "_review_rolls", []) or []) > 1):
+            return
+        rr = ttk.Frame(parent)
+        rr.pack(side="top", fill="x")
+        self.roll_combo = self.make_readonly_combobox(
+            rr, self.roll_var, list(self._review_rolls))
+        self.roll_combo.pack(side="right", padx=2, pady=2)
+        self.roll_combo.bind("<<ComboboxSelected>>",
+                             lambda e: self._on_roll_selected())
+        ttk.Label(rr, text="Roll:").pack(side="right", padx=(8, 2))
+        self.attach_tooltip(self.roll_combo,
+                            "Switch which roll of this calibration session you "
+                            "review; built once then cached / prefetched")
+
+    def _import_run_calibration(self):
+        """Lazily import the feature's tests/run_calibration.py (where the review
+        build lives) under a private module name. Cached after the first switch."""
+        if getattr(self, "_run_calib_mod", None) is not None:
+            return self._run_calib_mod
+        import importlib.util
+        path = Path(__file__).resolve().parent / "tests" / "run_calibration.py"
+        spec = importlib.util.spec_from_file_location("retouch_run_calibration", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self._run_calib_mod = mod
+        return mod
+
+    def _start_review_first_roll(self):
+        """Empty (meta-only) review startup: build the CURRENT roll in-window now,
+        exactly like a roll switch — the window is already up, so the user sees the
+        progress overlay instead of waiting before launch. Prefetch of the others
+        chains on once this one lands (_poll_roll_build)."""
+        if hasattr(self, "_roll_cache"):
+            return
+        self._roll_cache = {}
+        self._roll_build_active = False
+        self._roll_wait_target = self._review_current_roll
+        if hasattr(self, "roll_combo"):
+            self.roll_combo.config(state="disabled")
+        self._show_canvas_message(f"Detecting roll {self._review_current_roll} …")
+        self._kick_prefetch()
+
+    def _seed_roll_cache(self):
+        """Seed the cache with the currently-loaded roll and start prefetching the
+        rest in the background (called once, after the initial roll is shown)."""
+        if hasattr(self, "_roll_cache"):
+            return                                   # already seeded
+        self._roll_cache = {}
+        self._roll_build_active = False
+        self._roll_wait_target = None
+        if self._review_current_roll:
+            self._roll_cache[self._review_current_roll] = (
+                copy.deepcopy(self.images), copy.deepcopy(self.constants))
+        self._kick_prefetch()
+
+    def _on_roll_selected(self):
+        self.roll_combo.selection_clear()
+        self.root.after_idle(lambda: self.canvas.focus_set())
+        if not hasattr(self, "_roll_cache"):     # clicked before the prefetch seed
+            self._seed_roll_cache()
+        if self._roll_wait_target is not None:   # a switch is already in flight
+            self.roll_var.set(self._roll_wait_target)
+            return
+        name = self.roll_var.get()
+        if name == self._review_current_roll:
+            return
+        self._switch_to_roll(name)
+
+    def _switch_to_roll(self, roll_id):
+        entry = self._roll_cache.get(roll_id, "MISS")
+        if isinstance(entry, tuple):                 # already built -> instant
+            self._install_roll(roll_id)
+            self._kick_prefetch()
+            return
+        if entry is None:                            # known to have no images
+            self.roll_var.set(self._review_current_roll)
+            from tkinter import messagebox
+            messagebox.showerror("Roll unavailable",
+                                 f"Roll '{roll_id}' has no images.",
+                                 parent=self.root)
+            return
+        self._roll_wait_target = roll_id
+        self.roll_var.set(roll_id)
+        self.roll_combo.config(state="disabled")
+        self._show_canvas_message(f"Detecting roll {roll_id} …")
+        self._kick_prefetch()
+
+    def _kick_prefetch(self):
+        if not getattr(self, "_review_rolls", None):
+            return
+        if getattr(self, "_roll_build_active", False):
+            return
+        wt = self._roll_wait_target
+        nxt = wt if (wt is not None and wt not in self._roll_cache) else None
+        if nxt is None:
+            nxt = next((r for r in self._review_rolls
+                        if r not in self._roll_cache), None)
+        if nxt is None:
+            return
+        self._roll_build_active = True
+        self._roll_build_q = queue.Queue()
+        threading.Thread(target=self._roll_build_worker, args=(nxt,),
+                         daemon=True).start()
+        self.root.after(150, self._poll_roll_build)
+
+    def _roll_build_worker(self, roll_id):
+        def progress(pct):                           # real build progress -> overlay
+            self._roll_build_q.put(("progress", roll_id, pct))
+        try:
+            images, constants = self._build_and_load_roll(roll_id, progress=progress)
+            if images:
+                self._roll_build_q.put(("done", roll_id, images, constants))
+            else:
+                self._roll_build_q.put(("skip", roll_id))
+        except Exception as e:
+            self._roll_build_q.put(("error", roll_id, e))
+
+    def _poll_roll_build(self):
+        # Drain everything queued; apply progress for the roll the user is waiting
+        # on (prefetch builds also report, ignored), stop at the first terminal.
+        terminal = None
+        try:
+            while True:
+                item = self._roll_build_q.get_nowait()
+                if item[0] == "progress":
+                    if self._roll_wait_target == item[1]:
+                        self._set_analyzing_pct(item[2])
+                    continue
+                terminal = item
+                break
+        except queue.Empty:
+            pass
+        if terminal is None:
+            self.root.after(100, self._poll_roll_build)
+            return
+        item = terminal
+        self._roll_build_active = False
+        tag = item[0]
+        if tag == "done":
+            self._roll_cache[item[1]] = (item[2], item[3])
+        else:                                        # ("skip"/"error", roll_id[, e])
+            self._roll_cache[item[1]] = None
+        wt = self._roll_wait_target
+        if wt is not None:
+            cached = self._roll_cache.get(wt, "MISS")
+            if isinstance(cached, tuple):
+                self._roll_wait_target = None
+                self._install_roll(wt)
+            elif cached is None:
+                self._roll_wait_target = None
+                self._set_analyzing_pct(100.0)
+                self._clear_canvas_message()
+                if hasattr(self, "roll_combo"):
+                    self.roll_combo.config(state="readonly")
+                self.roll_var.set(self._review_current_roll)
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Roll switch failed",
+                    f"Could not build roll '{wt}'.", parent=self.root)
+        self._kick_prefetch()
+
+    def _build_and_load_roll(self, roll_id, progress=None):
+        """Build roll `roll_id`'s review into a throwaway dir and load it into
+        memory (frames carry absolute source-JPG paths, so the dir can go right
+        after). Returns (images, constants), or (None, None) if no images. Runs on
+        a background thread — no Tk access."""
+        import shutil
+        import tempfile
+        import detect_dust
+        tmp = Path(tempfile.mkdtemp(prefix="retouch_rollbuild_"))
+        try:
+            rc = self._import_run_calibration()
+            rid = rc.build_roll_review(self._review_session_dir, roll_id, str(tmp),
+                                       progress=progress)
+            if rid is None:
+                return None, None
+            images, constants = detect_dust.load_debug_spots_dir(str(tmp))
+            return images, constants
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _install_roll(self, roll_id):
+        """Swap the whole image set to a cached roll (instant — no detection),
+        reusing the progressive add_image path + re-seating the review state."""
+        entry = self._roll_cache.get(roll_id)
+        if not isinstance(entry, tuple):
+            return
+        images, constants = entry
+        self.constants = constants or self.constants
+        self.data["constants"] = self.constants
+        self.reset_images()
+        # Defer thumbnails to ONE sequential loader (load_thumbnails_batched);
+        # add_image(render_thumb=True) would spawn a full-res decode thread PER
+        # frame and freeze the main-thread render for ~seconds (the cached-switch
+        # "freeze" the user saw).
+        for data in copy.deepcopy(images):     # keep the cache entry pristine
+            self.add_image(data, render_thumb=False)
+        self._review_current_roll = roll_id
+        self.roll_var.set(roll_id)
+        # Re-seat the review state for the new frames (mirror init_selection_state).
+        self.review_source = "fitted"
+        self._review_live_preset = "(live default)"
+        if hasattr(self, "_preset_var") and self._review_preset is None:
+            self._preset_var.set("(live default)")
+        for im in self.images:
+            rev = im.get("review")
+            if rev and rev.get("live") is not None and "live_default" not in rev:
+                rev["live_default"] = copy.deepcopy(rev["live"])
+                rev["live_preset"] = "(live default)"
+        self._apply_review_source()
+        self._update_preset_combo_state()   # roll switch resets to fitted -> disable
+        self._set_analyzing_pct(100.0)
+        self._clear_canvas_message()
+        if hasattr(self, "roll_combo"):
+            self.roll_combo.config(state="readonly")
+        if self.images:
+            self._load_image_by_idx(0)        # render frame 0 (fast, uncontested)
+        self.load_thumbnails_batched()        # then fill thumbs in the background
+        self._update_review_btn()
+        self.update_counts()
+        self.canvas.focus_set()
 
     # ------------------------------------------------------------------
     # Menu hooks (the base builds the generic View / Navigate / Help bar)
     # ------------------------------------------------------------------
 
     def extend_view_menu(self, view):
-        view.add_checkbutton(label="Show rejected candidates",
+        # Toggle settings are CHECKBUTTONS named for the thing itself (not
+        # "Show X") — the checkmark IS the current state.
+        view.add_checkbutton(label="Rejected candidates",
                              variable=self.show_rejected_var,
                              command=self._redraw_markers)
-        view.add_checkbutton(label="Show source brush",
+        view.add_checkbutton(label="Source brush",
                              variable=self.show_source_brush_var,
                              command=self._redraw_markers)
-        view.add_separator()
-        view.add_command(label="Review source: fitted / GT / live", accelerator="R",
-                         command=self._toggle_review_source)
+        # The calibration-review source switcher is a RADIOBUTTON submenu (the
+        # bullet shows the current source) and is present ONLY in a --review
+        # session (run_calibration.py --review).
+        if getattr(self, "review_mode", False):
+            view.add_separator()
+            self._mv_review = tk.StringVar(value=self.review_source)
+            rev_menu = tk.Menu(view, tearoff=0)
+            rev_labels = {"fitted": "Fitted (this session)",
+                          "gt": "Ground truth (annotation)", "live": "Live (preset)"}
+            for src in self.REVIEW_CYCLE:
+                rev_menu.add_radiobutton(
+                    label=rev_labels.get(src, src), value=src,
+                    variable=self._mv_review,
+                    command=lambda s=src: self._set_review_source(s))
+            view.add_cascade(label="Calibration review source  (R cycles)",
+                             menu=rev_menu)
 
     def extend_help_menu(self, helpm):
         # _show_legend / _show_shortcuts (both non-modal popups) live in the base.
@@ -688,13 +1004,24 @@ class DustDebugUI(DebugUIBase):
         default, tracks the 'Detect with:' dropdown). Sources the current frame
         lacks (e.g. GT on an un-annotated frame) are skipped. Review sessions only."""
         if not getattr(self, "review_mode", False):
+            self._update_review_btn()    # snap the menu bullet back (no-op)
             self._set_info_text("Not reviewing a calibration session "
                                 "(open one via run_calibration.py --review).")
             return
         img = self.images[self.current_idx] if self.images else None
         order = self._frame_review_sources(img) or list(self.REVIEW_CYCLE)
         cur = self.review_source if self.review_source in order else order[0]
-        self.review_source = order[(order.index(cur) + 1) % len(order)]
+        self._set_review_source(order[(order.index(cur) + 1) % len(order)])
+
+    def _set_review_source(self, src):
+        """Switch the review preview to a specific source (fitted / GT / live);
+        used by both the R-key cycle and the View-menu radiobuttons."""
+        if not getattr(self, "review_mode", False):
+            self._update_review_btn()    # snap the menu bullet back (no-op)
+            self._set_info_text("Not reviewing a calibration session "
+                                "(open one via run_calibration.py --review).")
+            return
+        self.review_source = src
         # The detected lists differ between sources, so spot indices change —
         # rebuild the (empty) annotation state for every frame and refresh.
         self._refresh_review_display()
@@ -706,7 +1033,22 @@ class DustDebugUI(DebugUIBase):
         "live":   ("Src: live",   "#ffd080"),
     }
 
+    def _update_preset_combo_state(self):
+        """Enable/disable the 'Detect with:' combo. In a calibration-review session
+        it only drives the 'live' source (GT + fitted are unmovable), so disable it
+        unless 'live' is the source on screen. Outside review it's the ad-hoc
+        per-frame redetect, so it stays enabled."""
+        if not hasattr(self, "_preset_combo"):
+            return
+        live = (not getattr(self, "review_mode", False)
+                or getattr(self, "review_source", "fitted") == "live")
+        try:
+            self._preset_combo.config(state="readonly" if live else "disabled")
+        except Exception:
+            pass
+
     def _update_review_btn(self):
+        self._set_menu_var("_mv_review", self.review_source)
         if not hasattr(self, "review_btn"):
             return
         if not getattr(self, "review_mode", False):
@@ -783,6 +1125,7 @@ class DustDebugUI(DebugUIBase):
             self.annotations[img["stem"]] = self.new_annotation_state(img)
         self.reset_selection()
         self._update_review_btn()
+        self._update_preset_combo_state()   # combo enabled only when live shows
         self._populate_items_list()
         self._redraw()
         self.update_counts()

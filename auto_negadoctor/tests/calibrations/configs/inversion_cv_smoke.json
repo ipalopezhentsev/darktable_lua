@@ -1,0 +1,23 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "comment": "Leave-one-roll-out CROSS-VALIDATION of a re-tune of the print-tune tone levers (PRINT_GAMMA / PRINT_HI_CEIL / PRINT_HI_PCT / PRINT_CLIP_BUDGET) -- the constants spec 03/04 found carry the SYSTEMATIC brightness/contrast bias vs the GT (exposure pinned too high, gamma off). These are all FAST-path (re-tune on cached frames, no whole-pipeline re-run), so a 4-fold CV is tractable without downsampling. Each fold fits CMA-ES on the OTHER rolls and scores on the held-out roll vs the current preset -> VERDICT (ADOPT / DO NOT ADOPT) + per-constant cross-fold stability. The final all-rolls fit is OFF here (cv_final_fit:false) so this is a VERDICT-FIRST run; re-run with --cv-final-fit (or set it true) to also produce the adoptable fitted_preset.json -- adopt only if the verdict is ADOPT. To extend the re-tune to the wb/offset constants (WB_*_DESAT, OFFSET_DEFAULT, the wb_high family) add them to params, but those are FULL-path (whole pipeline per trial) so add --downsample 2 to keep the K-fold cost reasonable.",
+  "fit": {
+    "method": "cmaes",
+    "cross_validate": "leave_one_roll_out",
+    "cv_final_fit": false,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": {
+      "PRINT_GAMMA": {},
+      "PRINT_HI_CEIL": {},
+      "PRINT_HI_PCT": {},
+      "PRINT_CLIP_BUDGET": {}
+    },
+    "sigma": 0.3,
+    "popsize": 12,
+    "max_iters": 30,
+    "seed": 1
+  }
+}

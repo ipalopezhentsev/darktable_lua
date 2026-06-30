@@ -1,0 +1,24 @@
+{
+  "kind": "inversion",
+  "rolls": [
+    "2506-1",
+    "2510-11-1",
+    "2511-12-1",
+    "2512-2601-1"
+  ],
+  "comment": "first run on 4 rolls! starting with 2x downsampling. compare with _02",
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 6,
+    "downsample": 2,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  },
+  "metric": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
+  "created": "2026-06-27T17:30:44",
+  "git_commit": "91b1d9e",
+  "command_line": "run_calibration.py --config calibrations/configs/inversion_descent_downsample2.json --comment first run on 4 rolls! starting with 2x downsampling. compare with _02"
+}

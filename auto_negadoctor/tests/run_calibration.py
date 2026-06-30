@@ -306,6 +306,7 @@ def _make_inversion_fast(rolls, clip_budget, downsample=1):
         frames, _ = an.process_roll(roll["images"], roll["exif"],
                                     progress=_proc_cb(roll["id"]))
         gt = rqt._load_ground_truth(roll["fixtures"])
+        gt_base = rqt._load_gt_base(roll["fixtures"])
         by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
         prep_items = [(stem, by_stem[stem], g) for stem, g in gt.items()
                       if by_stem.get(stem) and "params" in by_stem[stem]
@@ -317,8 +318,11 @@ def _make_inversion_fast(rolls, clip_budget, downsample=1):
                 enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
             except Exception:
                 return None
-            gt_f = rqt._render_crop_rows(lin, fr["border"],
-                                         rqt.gt_params_for_frame(fr, g))
+            # GT render = FIXED stored GT-folder settings + annotations (the
+            # candidate render varies per trial). Trial-invariant: built once.
+            gt_f = rqt._render_crop_rows(
+                lin, fr["border"],
+                rqt.gt_params_for_frame(fr, g, gt_base.get(stem)))
             if gt_f is None:
                 return None
             # tune_print_params runs per trial; downsample the buffer it sees
@@ -333,7 +337,10 @@ def _make_inversion_fast(rolls, clip_budget, downsample=1):
                 "d_max": fr["d_max"], "offset": fr["offset"],
                 "wb_low": fr["wb_low"], "wb_high": fr["wb_high"],
                 "picked_min": fr["picked_min"], "picked_max": fr["picked_max"],
-                "gt_f": gt_f, "lin_tune": lin_tune, "border_tune": border_tune,
+                # GT histogram is FIXED (GT params are fixed) -> hoist it OUT of
+                # the per-trial loop: precompute the B side once here.
+                "gt_stats": nm.histogram_b_stats(gt_f, rqt.HIST_BINS),
+                "lin_tune": lin_tune, "border_tune": border_tune,
             }
 
         done = _map_frames_prep(roll["id"], "GT", _prep_one, prep_items)
@@ -359,7 +366,7 @@ def _make_inversion_fast(rolls, clip_budget, downsample=1):
             prod_f = rqt._render_crop_rows(c["lin"], c["border"], tuned)
             if prod_f is None:
                 return None
-            d = nm.histogram_distance(prod_f, c["gt_f"], bins=rqt.HIST_BINS)
+            d = nm.histogram_distance_to(prod_f, c["gt_stats"])
             return {"roll": rid, "stem": stem,
                     "total": d["total"], "luma": d["luma"],
                     "color": d["color"], "hi999": abs(d["hi999"]),
@@ -393,6 +400,7 @@ def _make_inversion_full(rolls, clip_budget, fit_params=(), downsample=1):
         frames, _ = an.process_roll(roll["images"], roll["exif"],
                                     cfg=an.DEFAULT_TUNING, prep=prefix)
         gt = rqt._load_ground_truth(roll["fixtures"])
+        gt_base = rqt._load_gt_base(roll["fixtures"])
         by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
         prep_items = [(stem, by_stem[stem], g) for stem, g in gt.items()
                       if by_stem.get(stem) and "params" in by_stem[stem]
@@ -404,11 +412,15 @@ def _make_inversion_full(rolls, clip_budget, fit_params=(), downsample=1):
                 enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
             except Exception:
                 return None
-            gt_f = rqt._render_crop_rows(lin, fr["border"],
-                                         rqt.gt_params_for_frame(fr, g))
+            # GT render = FIXED stored GT-folder settings + annotations (the
+            # candidate render varies per trial). Trial-invariant: built once.
+            gt_f = rqt._render_crop_rows(
+                lin, fr["border"],
+                rqt.gt_params_for_frame(fr, g, gt_base.get(stem)))
             if gt_f is None:
                 return None
-            return stem, {"lin": lin, "border": fr["border"], "gt_f": gt_f}
+            return stem, {"lin": lin, "border": fr["border"],
+                          "gt_stats": nm.histogram_b_stats(gt_f, rqt.HIST_BINS)}
 
         done = _map_frames_prep(roll["id"], "GT", _prep_one, prep_items)
         cache = {stem: c for stem, c in done}
@@ -430,7 +442,7 @@ def _make_inversion_full(rolls, clip_budget, fit_params=(), downsample=1):
         prod_f = rqt._render_crop_rows(c["lin"], c["border"], params)
         if prod_f is None:
             return None
-        d = nm.histogram_distance(prod_f, c["gt_f"], bins=rqt.HIST_BINS)
+        d = nm.histogram_distance_to(prod_f, c["gt_stats"])
         return {"roll": rid, "stem": stem,
                 "total": d["total"], "luma": d["luma"],
                 "color": d["color"], "hi999": abs(d["hi999"]),
@@ -590,9 +602,11 @@ def _review_payload(kind, fr, roll_meta):
     return {"params": fr["params"], "params_hex": fr["params_hex"]}  # inversion
 
 
-def _review_run(kind, roll, cfg):
-    """Run the pipeline once with `cfg` and return {stem: payload} + roll_meta."""
-    frames, roll_meta = an.process_roll(roll["images"], roll["exif"], cfg=cfg)
+def _review_run(kind, roll, cfg, progress=None):
+    """Run the pipeline once with `cfg` and return {stem: payload} + roll_meta.
+    `progress(done, total)` (optional) is forwarded to process_roll."""
+    frames, roll_meta = an.process_roll(roll["images"], roll["exif"], progress,
+                                        cfg=cfg)
     out = {}
     for fr in frames:
         if fr.get("error") or "params" not in fr or not fr.get("border"):
@@ -611,11 +625,14 @@ def _review_gt_payloads(kind, roll, base_frames):
     out = {}
     if kind == "inversion":
         gt = rqt._load_ground_truth(roll["fixtures"])
+        gt_base = rqt._load_gt_base(roll["fixtures"])
         for stem, g in gt.items():
             fr = by_stem.get(stem)
             if not fr or "params" not in fr:
                 continue
-            p = rqt.gt_params_for_frame(fr, g)
+            # GT = the FIXED stored GT-folder base + annotations (unmovable —
+            # the preset dropdown only re-runs 'live', never this).
+            p = rqt.gt_params_for_frame(fr, g, gt_base.get(stem))
             out[stem] = {"params": p, "params_hex": nm.encode_negadoctor_params(p)}
     elif kind == "crop":
         for f in roll["fixtures"]:
@@ -635,26 +652,46 @@ def _review_gt_payloads(kind, roll, base_frames):
     return out
 
 
-def review_session(session_dir, roll_id=None):
-    """Open the debug UI on a finished session showing its FITTED result, with the R
-    toggle flipping to the LIVE (current source-code) result. N toggles vignette."""
+def build_roll_review(session_dir, roll_id, review_dir, progress=None):
+    """Build the fitted/live/GT review payloads for ONE roll of a finished session
+    into `review_dir` (the debug-session dir the UI loads), REPLACING any previous
+    roll's frames there, and (re)write `review_meta.json` so the UI can offer an
+    in-window roll switcher. Returns the resolved roll id, or None if the roll has
+    no local source images. Shared by review_session (the first roll, before the UI
+    launches) and the UI's roll switcher (subsequent rolls, via a lazy import — it
+    runs IN the UI process on a background thread, no window restart).
+
+    `progress(pct)` (optional, 0..100) is called as the two pipeline passes run, so
+    the UI's switch overlay shows real progress instead of stalling."""
     session = Path(session_dir)
     config = json.loads((session / "config.json").read_text())
     results = json.loads((session / "results.json").read_text())
     kind = config["kind"]
     fitted = results.get("fitted") or {}
-    roll_ids = [roll_id] if roll_id else config["rolls"]
-    rolls = discover_image_rolls(roll_ids)
+    rolls = discover_image_rolls([roll_id] if roll_id else config["rolls"])
     if not rolls:
-        print("No local TIFFs for the session's rolls — repopulate them "
-              "(fixtures/rolls/README.md) to review.")
         return None
     roll = rolls[0]
 
-    review_dir = Path(tempfile.mkdtemp(prefix="nega_review_"))
-    live_payloads, live_frames, _ = _review_run(kind, roll, an.DEFAULT_TUNING)
+    review_dir = Path(review_dir)
+    review_dir.mkdir(parents=True, exist_ok=True)
+    # Drop the previous roll's frame files so the UI reload sees ONLY this roll.
+    for p in review_dir.glob("*_debug_nega.json"):
+        p.unlink()
+
+    # Two full pipeline passes (live + fitted) dominate the wall time; map each to
+    # a band of the overlay bar (the GT build + write are cheap → snap to 100).
+    def _phase(lo, hi):
+        def cb(done, total):
+            if progress and total:
+                progress(lo + (hi - lo) * done / total)
+        return cb if progress else None
+
+    live_payloads, live_frames, _ = _review_run(kind, roll, an.DEFAULT_TUNING,
+                                                _phase(0, 48))
     fit_payloads, frames, roll_meta = _review_run(kind, roll,
-                                                  reg.to_tuning(fitted))
+                                                  reg.to_tuning(fitted),
+                                                  _phase(50, 98))
     gt_payloads = _review_gt_payloads(kind, roll, live_frames)
 
     for fr in frames:
@@ -665,15 +702,49 @@ def review_session(session_dir, roll_id=None):
                   "live": live_payloads.get(fr["stem"],
                                             fit_payloads[fr["stem"]])}
         if fr["stem"] in gt_payloads:        # only frames with an annotation
+            # GT is UNMOVABLE: the FIXED stored GT-folder settings + annotations
+            # (built in _review_gt_payloads). The preset dropdown re-runs only the
+            # 'live' source; GT/fitted stay frozen, so no preset-tracking overrides.
             review["gt"] = gt_payloads[fr["stem"]]
         fr["review"] = review
     an.write_debug_sessions(frames, roll_meta, review_dir)
+    # The UI reads this to populate its roll dropdown + drive the switcher.
+    (review_dir / "review_meta.json").write_text(json.dumps({
+        "session_dir": str(session), "kind": kind,
+        "rolls": list(config["rolls"]), "current_roll": roll["id"],
+    }, indent=2))
+    if progress:
+        progress(100)
+    return roll["id"]
 
-    ui = TESTS_DIR.parent / "debug_ui.py"
-    print(f"Opening debug UI for {session.name} (close the window to return)")
-    print(f"  R: FITTED ({kind} from this session) -> GT (your annotation) -> "
-          "live (current preset)   N: vignette on/off")
+
+def review_session(session_dir, roll_id=None):
+    """Open the debug UI on a finished session showing its FITTED result, with the R
+    toggle flipping to the LIVE (current source-code) result. N toggles vignette.
+    A multi-roll session also gets an in-window roll dropdown.
+
+    The UI opens IMMEDIATELY on a meta-only dir and builds the first roll IN-WINDOW
+    (progress overlay) — the same path a roll switch uses — instead of blocking here
+    on the build before the window appears."""
+    session = Path(session_dir)
+    config = json.loads((session / "config.json").read_text())
+    rolls = config.get("rolls") or []
+    if not rolls:
+        print("This session has no rolls to review.")
+        return None
+    current = roll_id or rolls[0]
+    review_dir = Path(tempfile.mkdtemp(prefix="nega_review_"))
     try:
+        (review_dir / "review_meta.json").write_text(json.dumps({
+            "session_dir": str(session), "kind": config["kind"],
+            "rolls": list(rolls), "current_roll": current}, indent=2))
+        ui = TESTS_DIR.parent / "debug_ui.py"
+        print(f"Opening debug UI for {session.name} — building roll {current} "
+              "in-window (close the window to return)")
+        print("  R: FITTED (from this session) -> GT (your annotation) -> "
+              "live (current preset)   N: vignette on/off")
+        if len(rolls) > 1:
+            print(f"  Roll dropdown: switch among {len(rolls)} rolls in-window")
         subprocess.run([sys.executable, str(ui), str(review_dir)])
     finally:
         shutil.rmtree(review_dir, ignore_errors=True)
@@ -731,6 +802,10 @@ def build_spec(kind, fit_params):
 
 def run_session(config):
     return runner.run_session(ADAPTER, config)
+
+
+def run_cross_validation(config):
+    return runner.run_cross_validation(ADAPTER, config)
 
 
 if __name__ == "__main__":

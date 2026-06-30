@@ -1,0 +1,15 @@
+{
+  "kind": "inversion",
+  "rolls": [],
+  "comment": "PROBE (all-rolls grid, NO cross-validation): locate the picture-EMD-vs-DMAX_DEFAULT curve. The learned-residual analysis found GT D_max sits ~+0.31 above the analytical DMAX_DEFAULT constant with recenter skill 0.84 (in PARAM space), and DMAX_DEFAULT was NOT in the print-tune LORO (inversion_cv_01), so it is untested in PICTURE space. This is the cheap first test BEFORE spending a 4x LORO on it: full path (DMAX_DEFAULT re-runs the whole pipeline per trial) with downsample 2 for the search -- re-validate any pick at --downsample 1. CAUTION: D_max divides every downstream picker and the print tuner re-derives exposure/black to hit the ceiling, so the PICTURE may be insensitive even though the PARAM differs (the param-vs-picture non-uniqueness that made the print-tune LORO come back DO NOT ADOPT). Read the result as a curve: if median EMD clearly drops at a higher D_max, follow up with --cross-validate (add --cv-final-fit) to check it GENERALIZES; if the EMD is flat across the range, D_max is a non-lever in picture space and the remaining GT gap is per-frame taste -> milestone 3 (gemma3:12b semantic labels).",
+  "fit": {
+    "method": "grid",
+    "downsample": 2,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": {
+      "DMAX_DEFAULT": {}
+    }
+  }
+}

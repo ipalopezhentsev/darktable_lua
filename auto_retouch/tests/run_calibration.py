@@ -213,16 +213,17 @@ def _gt_review_payload(ann, fitted_detected, min_dim):
     return {"detected": detected, "rejected": rejected}
 
 
-def review_session(session_dir, roll_id=None):
-    """Open the dust debug UI on a finished session showing its FITTED detection,
-    with R cycling FITTED -> GT (your annotation, the corrected output) -> LIVE
-    (the current source-code detection) -> FITTED — the same three-way review
-    auto_negadoctor offers. All sources are precomputed here and written into a
-    throwaway session dir as the frames' `review` payload, so the toggle in the
-    UI is instant (no re-detection)."""
-    import shutil
-    import subprocess
-    import tempfile
+def build_roll_review(session_dir, roll_id, review_dir, progress=None):
+    """Build the fitted/live/GT review for ONE roll of a finished session into
+    `review_dir` (the debug-session dir the UI loads), REPLACING any previous
+    roll's frames there, and (re)write `review_meta.json` so the UI can offer an
+    in-window roll switcher. Returns the resolved roll id, or None if the roll has
+    no images. Shared by review_session (the first roll, before the UI launches)
+    and the UI's roll switcher (subsequent rolls, via a lazy import — it runs IN
+    the UI process on a background thread, no window restart).
+
+    `progress(pct)` (optional, 0..100) is called as the two detection passes run,
+    so the UI's switch overlay shows real progress instead of stalling."""
     from PIL import Image
     session = Path(session_dir)
     config = json.loads((session / "config.json").read_text())
@@ -231,11 +232,11 @@ def review_session(session_dir, roll_id=None):
     fitted = results.get("fitted") or {}
     rolls = discover_rolls([roll_id] if roll_id else config["rolls"])
     if not rolls:
-        print("No roll images for this session — drop them into fixtures/rolls/.")
         return None
     roll = rolls[0]
+    n = max(1, len(roll["images"]))
 
-    def _detect_all(cfg):
+    def _detect_all(cfg, lo, hi):
         items = [(p.stem, str(p)) for p in roll["images"]]
 
         def one(it):
@@ -247,42 +248,91 @@ def review_session(session_dir, roll_id=None):
                 print(f"  {stem}: detect failed ({ex})")
                 return stem, {"detected": [], "rejected": []}
 
-        res = ADAPTER.map_frames(one, items, ADAPTER.proc_workers(len(items)))
+        # Detection is full-res + slow, so report progress per finished frame,
+        # mapped to the [lo, hi] band of the overlay bar.
+        state = {"d": 0}
+
+        def tick():
+            state["d"] += 1
+            if progress:
+                progress(lo + (hi - lo) * state["d"] / n)
+
+        res = ADAPTER.map_frames(one, items, ADAPTER.proc_workers(len(items)),
+                                 on_done=(tick if progress else None))
         return dict(res)
 
     print(f"Detecting {len(roll['images'])} frame(s) twice (fitted + live)…")
-    fit = _detect_all(reg.to_tuning(fitted))
-    live = _detect_all(dd.DEFAULT_TUNING)
+    fit = _detect_all(reg.to_tuning(fitted), 0, 48)
+    live = _detect_all(dd.DEFAULT_TUNING, 50, 98)
     anns = _load_annotations(roll["fixtures"])     # the user's GT, per stem
 
+    review_dir = Path(review_dir)
+    review_dir.mkdir(parents=True, exist_ok=True)
+    # Drop the previous roll's frame files so the UI reload sees ONLY this roll.
+    for p in review_dir.glob("*_debug_spots.json"):
+        p.unlink()
+    for p in roll["images"]:
+        stem = p.stem
+        try:
+            with Image.open(p) as im:
+                w, h = im.size
+        except Exception:
+            continue
+        fp = fit.get(stem, {"detected": [], "rejected": []})
+        lp = live.get(stem, fp)
+        review = {"fitted": fp, "live": lp}
+        gt = _gt_review_payload(anns.get(stem, {}), fp["detected"],
+                                min(int(w), int(h)))
+        if gt is not None:                     # only annotated frames carry GT
+            review["gt"] = gt
+        data = {
+            "stem": stem, "image_path": str(p),
+            "width": int(w), "height": int(h),
+            "detected": fp["detected"], "rejected": fp["rejected"],
+            "review_kind": kind,
+            "review": review,
+        }
+        (review_dir / f"{stem}_debug_spots.json").write_text(
+            json.dumps(data, indent=2, cls=dd.NumpyEncoder))
+    # The UI reads this to populate its roll dropdown + drive the switcher.
+    (review_dir / "review_meta.json").write_text(json.dumps({
+        "session_dir": str(session), "kind": kind,
+        "rolls": list(config["rolls"]), "current_roll": roll["id"],
+    }, indent=2))
+    if progress:
+        progress(100)
+    return roll["id"]
+
+
+def review_session(session_dir, roll_id=None):
+    """Open the dust debug UI on a finished session showing its FITTED detection,
+    with R cycling FITTED -> GT (your annotation, the corrected output) -> LIVE
+    (the current source-code detection) -> FITTED. A multi-roll session also gets
+    an in-window roll dropdown.
+
+    The UI opens IMMEDIATELY on a meta-only dir and builds the first roll IN-WINDOW
+    (progress overlay) — the same path a roll switch uses — instead of blocking here
+    on the detection before the window appears."""
+    import shutil
+    import subprocess
+    import tempfile
+    session = Path(session_dir)
+    config = json.loads((session / "config.json").read_text())
+    rolls = config.get("rolls") or []
+    if not rolls:
+        print("This session has no rolls to review.")
+        return None
+    current = roll_id or rolls[0]
     review_dir = Path(tempfile.mkdtemp(prefix="retouch_review_"))
     try:
-        for p in roll["images"]:
-            stem = p.stem
-            try:
-                with Image.open(p) as im:
-                    w, h = im.size
-            except Exception:
-                continue
-            fp = fit.get(stem, {"detected": [], "rejected": []})
-            lp = live.get(stem, fp)
-            review = {"fitted": fp, "live": lp}
-            gt = _gt_review_payload(anns.get(stem, {}), fp["detected"],
-                                    min(int(w), int(h)))
-            if gt is not None:                     # only annotated frames carry GT
-                review["gt"] = gt
-            data = {
-                "stem": stem, "image_path": str(p),
-                "width": int(w), "height": int(h),
-                "detected": fp["detected"], "rejected": fp["rejected"],
-                "review_kind": kind,
-                "review": review,
-            }
-            (review_dir / f"{stem}_debug_spots.json").write_text(
-                json.dumps(data, indent=2, cls=dd.NumpyEncoder))
+        (review_dir / "review_meta.json").write_text(json.dumps({
+            "session_dir": str(session), "kind": config["kind"],
+            "rolls": list(rolls), "current_roll": current}, indent=2))
         ui = TESTS_DIR.parent / "debug_ui.py"
-        print(f"Opening dust debug UI for {session.name} "
-              f"(R: FITTED [{kind}] -> GT -> live)")
+        print(f"Opening dust debug UI for {session.name} — building roll {current} "
+              f"in-window (R: FITTED [{config['kind']}] -> GT -> live)")
+        if len(rolls) > 1:
+            print(f"  Roll dropdown: switch among {len(rolls)} rolls in-window")
         subprocess.run([sys.executable, str(ui), str(review_dir)])
     finally:
         shutil.rmtree(review_dir, ignore_errors=True)

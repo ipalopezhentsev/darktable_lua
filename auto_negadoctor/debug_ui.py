@@ -30,6 +30,7 @@ Interaction (same idiom as the crop UI: select, then Ctrl+Click / scroll):
 import sys
 import os
 import copy
+import json
 import math
 import queue
 import threading
@@ -440,6 +441,16 @@ class NegadoctorDebugUI(DebugUIBase):
         # in-window feel as switching a preset, no separate modal popup.
         if self.run_mode and root.winfo_exists():
             self.root.after(150, self._start_initial_analysis)
+        # Calibration review. If the session opened EMPTY (meta-only), build the
+        # first roll IN-WINDOW now (same path as a roll switch) so the window
+        # appears immediately instead of blocking before launch; prefetch of the
+        # other rolls chains on automatically once it lands. If frames were already
+        # loaded (legacy pre-built session), just seed the cache + prefetch.
+        if getattr(self, "review_mode", False) and root.winfo_exists():
+            if not self.images:
+                self.root.after(150, self._start_review_first_roll)
+            elif len(getattr(self, "_review_rolls", []) or []) > 1:
+                self.root.after(1500, self._seed_roll_cache)
 
     def load_session(self, session_dir):
         import auto_negadoctor
@@ -448,8 +459,54 @@ class NegadoctorDebugUI(DebugUIBase):
         if self.run_mode:
             return [], {}
         images, constants = auto_negadoctor.load_debug_nega_dir(session_dir)
+        # A `--review` session dir starts with ONLY review_meta.json (no frames):
+        # the first roll is built in-window at startup, like a roll switch. Allow
+        # the empty session so the window opens immediately.
+        if not images and (Path(session_dir) / "review_meta.json").exists():
+            self.ALLOW_EMPTY_SESSION = True
+            return [], {}
         self._relocate_negatives(images, session_dir)
+        self._repair_missing_exif(images)
         return images, constants
+
+    def _repair_missing_exif(self, images):
+        """Self-heal a loaded base whose exif was lost (`missing_exif=True`) — e.g.
+        a session persisted by the OLD code that read exif_params.txt only from the
+        session dir, or one copied away from its roll. Re-derive each such frame's
+        exif + exposure_factor from the roll's exif_params.txt (found next to the
+        relocated negatives, `_find_exif_params`), so the loaded base — and what
+        "(as exported)" / the preset cache restore from it — carries honest exif
+        without needing a re-run. Frames with valid exif are untouched. NOTE: a
+        wrong factor also skews that frame's Dmin; switch the preset (a real
+        re-analysis) to fully recompute the params from the repaired exif."""
+        if not images:
+            return
+        import auto_negadoctor as an
+        if not any((d.get("exif") or {}).get("missing_exif") for d in images):
+            return
+        paths = [d.get("negative_path") for d in images
+                 if d.get("negative_path") and Path(d["negative_path"]).exists()]
+        exif_by_stem = an.parse_exif_params(self._find_exif_params(paths))
+        if not exif_by_stem:
+            return
+        fixed = 0
+        for d in images:
+            if not (d.get("exif") or {}).get("missing_exif"):
+                continue
+            e = exif_by_stem.get(d.get("stem"))
+            if not e:
+                continue
+            factor, missing = an.nm.exposure_factor(
+                e.get("exposure_s"), e.get("iso"), e.get("aperture"))
+            if missing:
+                continue
+            d["exif"] = {"exposure_s": e.get("exposure_s"),
+                         "aperture": e.get("aperture"), "iso": e.get("iso"),
+                         "exposure_factor": factor, "missing_exif": False}
+            fixed += 1
+        if fixed:
+            print(f"Repaired missing exif on {fixed} frame(s) from "
+                  f"{self._find_exif_params(paths)}")
 
     # The negative_path baked into {stem}_debug_nega.json points at the throwaway
     # %TEMP%/darktable_autonegadoctor_* export dir from the run that produced the
@@ -541,7 +598,12 @@ class NegadoctorDebugUI(DebugUIBase):
                 self.start_preset, self.ai_tune, progress, on_frame_done=on_frame)
             wall = time.perf_counter() - self._init_wall_t0
             an.write_results(frames, roll, self.session_dir, ai_tune=self.ai_tune)
-            an.write_debug_sessions(frames, roll, self.session_dir, wall_time_s=wall)
+            # Stamp the start preset's full constant block + name into the
+            # session so a freshly-run roll is already self-contained (a later
+            # preset switch re-stamps it via _persist_active_session).
+            an.write_debug_sessions(frames, roll, self.session_dir, wall_time_s=wall,
+                                    cfg=self._cfg_for_preset(self.start_preset),
+                                    preset=self.start_preset)
             # canonical reload = analytical + any AI variant + the constants dict
             images, constants = an.load_debug_nega_dir(self.session_dir)
             q.put(("done", images, constants))
@@ -617,6 +679,9 @@ class NegadoctorDebugUI(DebugUIBase):
             self.images[:] = images
         self._orig_images = copy.deepcopy(self.images)
         self._seed_preset_cache()
+        # Now that the run finished, the saved-state baseline = the start preset's
+        # constants/name (the init-time capture saw an empty session).
+        self._capture_exported_baseline()
         self._restore_global_base_override()
         if self.images:
             self._neg_cache_key = None
@@ -643,6 +708,36 @@ class NegadoctorDebugUI(DebugUIBase):
                 return hits
         return []
 
+    def _cfg_for_preset(self, preset_name):
+        """The Tuning cfg for a preset label. None / "(as exported)" -> the
+        live DEFAULT_TUNING (the un-switched export base)."""
+        import auto_negadoctor as an
+        if preset_name and preset_name != self._PRESET_AS_EXPORTED:
+            return an._tuning.load(preset_name)
+        return an.DEFAULT_TUNING
+
+    def _find_exif_params(self, image_paths=None):
+        """Locate exif_params.txt for a (re)analysis. It lives next to the source
+        negatives — in run mode the session dir, but for a re-opened fixture
+        folder it stays with the roll a level or two ABOVE the annotation
+        subfolder (alongside the TIFFs, like the negatives `_relocate_negatives`
+        walks up to find). Search the negatives' directory first, then the session
+        dir, then a few parents; fall back to the session-dir path."""
+        cands = []
+        if image_paths:
+            cands.append(Path(image_paths[0]).parent)
+        d = Path(self.session_dir)
+        for _ in range(self._NEG_SEARCH_PARENTS + 1):
+            cands.append(d)
+            if d.parent == d:
+                break
+            d = d.parent
+        for c in cands:
+            p = c / "exif_params.txt"
+            if p.exists():
+                return str(p)
+        return os.path.join(str(self.session_dir), "exif_params.txt")
+
     def _call_process_roll(self, preset_name, ai_tune, progress_cb,
                            on_frame_done=None):
         """Run auto_negadoctor.process_roll under `preset_name` (None / the
@@ -650,14 +745,11 @@ class NegadoctorDebugUI(DebugUIBase):
         `on_frame_done(fr, roll)` streams each finalized frame. No Tk access —
         safe to call from a worker thread."""
         import auto_negadoctor as an
-        cfg = (an._tuning.load(preset_name)
-               if preset_name and preset_name != self._PRESET_AS_EXPORTED
-               else an.DEFAULT_TUNING)
+        cfg = self._cfg_for_preset(preset_name)
         image_paths = self._source_image_paths()
         if not image_paths:
             raise RuntimeError("no source negatives for this session")
-        exif = an.parse_exif_params(
-            os.path.join(str(self.session_dir), "exif_params.txt"))
+        exif = an.parse_exif_params(self._find_exif_params(image_paths))
         return an.process_roll(image_paths, exif, progress_cb, ai_tune=ai_tune,
                                session_dir=str(self.session_dir), cfg=cfg,
                                on_frame_done=on_frame_done)
@@ -1145,6 +1237,13 @@ class NegadoctorDebugUI(DebugUIBase):
         print(f"Applied results written to: {path} ({len(lines)} frame(s))")
 
     def _on_close(self):
+        # Flush the active preset into the session one last time before the base
+        # writes the report (non-review). Only if the preset was actually switched
+        # this session: switch-persist already keeps disk in sync, and gating on a
+        # real switch means merely VIEWING a committed folder never rewrites it.
+        if (self.images and getattr(self, "_session_switched", False)
+                and not getattr(self, "review_mode", False)):
+            self._persist_active_session(self._current_preset_label)
         # In apply mode emit the decisions FIRST (uses the in-memory annotations
         # for every frame), then let the base save/report/destroy run.
         if self.apply_mode:
@@ -1218,9 +1317,13 @@ class NegadoctorDebugUI(DebugUIBase):
         # the deep copy is cheap.
         self._orig_images = copy.deepcopy(self.images)
         # label the originally-run preset (so the dropdown shows what produced
-        # the current look); "(as exported)" otherwise / for a re-opened session.
-        self._current_preset_label = (self.start_preset if self.start_preset
-                                      else self._PRESET_AS_EXPORTED)
+        # the current look): an explicit --preset wins, else the `preset` name
+        # baked into a re-opened session's debug_nega.json (provenance — "ensure
+        # it really was what I chose"), else "(as exported)".
+        loaded_preset = (self.images[0].get("preset")
+                         if getattr(self, "images", None) else None)
+        self._current_preset_label = (self.start_preset or loaded_preset
+                                      or self._PRESET_AS_EXPORTED)
         # Per-preset analytical-result cache (label -> deep copy of the img_dict
         # list it produced). The analytical result is a pure function of (preset
         # file + source negatives), both fixed for the session, so switching
@@ -1232,6 +1335,12 @@ class NegadoctorDebugUI(DebugUIBase):
         # from here (presets are rarely hand-edited while the UI is open).
         self._preset_cache = {}
         self._seed_preset_cache()
+        # Remember the saved-state constants + preset name so "(as exported)"
+        # re-bakes the ORIGINAL look (run-mode re-captures after analysis).
+        self._capture_exported_baseline()
+        # Has the active preset changed this session? Gates the on-close re-bake
+        # so merely VIEWING a folder (e.g. apply-from-folder) never rewrites it.
+        self._session_switched = False
         self._reanalyzing = False
         self._reanalysis_queue = None
         self._analyzing = False        # first-scan canvas overlay active
@@ -1268,6 +1377,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.show_histogram = True
         self._hist_data = None
         self.show_clipping = False     # on-image red/blue clip overlay (L)
+        self.show_local_base = False   # per-frame LOCAL film-base box (off by
+                                       # default — the global winner box stays on)
         self._clip_stats = None        # {"hi": pct, "lo": pct, "total": n}
         self._display_base_pil = None
         self._amask_cache_stem = None
@@ -1281,7 +1392,27 @@ class NegadoctorDebugUI(DebugUIBase):
         # currently-selected PRESET's result (precomputed under default.json, then
         # tracked by the preset dropdown — see _apply_reanalysis_result).
         _imgs = getattr(self, "images", None) or []
-        self.review_mode = any(im.get("review") for im in _imgs)
+        # Calibration review is driven by review_meta.json (calibration session dir
+        # + roll list), written by `--review`. It is present EVEN when no frames are
+        # loaded yet — the first roll is built IN-WINDOW at startup (same path as a
+        # roll switch), so the UI opens immediately instead of blocking on the build.
+        # (Legacy pre-built sessions also carry per-frame `review` payloads.)
+        self._review_session_dir = None
+        self._review_rolls = []
+        self._review_current_roll = None
+        self._run_calib_mod = None
+        meta = None
+        try:
+            meta = json.loads((Path(self.session_dir)
+                               / "review_meta.json").read_text())
+        except Exception:
+            meta = None
+        if meta:
+            self._review_session_dir = meta.get("session_dir")
+            self._review_rolls = list(meta.get("rolls") or [])
+            self._review_current_roll = meta.get("current_roll")
+        self.review_mode = (any(im.get("review") for im in _imgs)
+                            or bool(meta and self._review_rolls))
         self.review_kind = next((im.get("review_kind") for im in _imgs
                                  if im.get("review")), None)
         self.review_source = "fitted"  # one of REVIEW_CYCLE
@@ -1304,6 +1435,11 @@ class NegadoctorDebugUI(DebugUIBase):
                 if rev and rev.get("live") is not None and "live_default" not in rev:
                     rev["live_default"] = copy.deepcopy(rev["live"])
             self._apply_review_source()
+            # roll_var always exists in review (the dropdown WIDGET is only built
+            # for >1 roll), so install/switch code can set it without a guard.
+            self.roll_var = tk.StringVar(
+                value=(self._review_current_roll
+                       or (self._review_rolls[0] if self._review_rolls else "")))
         self._live_job = None
         self._wheel_settle_job = None  # debounced heavy bookkeeping after a wheel drag
         self._print_settle_job = None  # debounced heavy bookkeeping after a print-slider drag
@@ -1458,24 +1594,66 @@ class NegadoctorDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def extend_view_menu(self, view):
-        view.add_command(label="Inverted / negative", accelerator="V",
-                         command=self._toggle_view)
-        view.add_command(label="Corrected / default render", accelerator="X",
-                         command=self._toggle_compare)
+        # Toggle settings are CHECKBUTTONS named for the thing itself — the
+        # checkmark shows the CURRENT state (checked = the alternate/on state),
+        # not the action. The matching V/X/A/N/B/T/L keys and toolbar buttons
+        # drive the SAME state; each _update_*_btn re-sets the menu var from the
+        # real state, so the checkmark always matches (even when a toggle no-ops).
+        self._mv_negative = tk.BooleanVar(value=self.view_negative)
+        view.add_checkbutton(label="Negative (raw, uninverted) view",
+                             accelerator="V", variable=self._mv_negative,
+                             command=self._toggle_view)
+        self._mv_default = tk.BooleanVar(value=self.compare_default)
+        view.add_checkbutton(label="Algorithm default render (vs corrected)",
+                             accelerator="X", variable=self._mv_default,
+                             command=self._toggle_compare)
         view.add_separator()
-        view.add_command(label="Variant: analytical / AI", accelerator="A",
-                         command=self._toggle_variant)
-        view.add_command(label="Vignette correction on / off", accelerator="N",
-                         command=self._toggle_vignette)
-        view.add_command(label="Review source: fitted / GT / live", accelerator="R",
-                         command=self._toggle_review_source)
+        self._mv_variant_ai = tk.BooleanVar(value=(self.variant == "ai"))
+        view.add_checkbutton(label="AI (LLM) scene-tuned variant",
+                             accelerator="A", variable=self._mv_variant_ai,
+                             command=self._toggle_variant)
+        self._mv_vignette = tk.BooleanVar(value=self.vignette_on)
+        view.add_checkbutton(label="Vignette correction", accelerator="N",
+                             variable=self._mv_vignette,
+                             command=self._toggle_vignette)
         view.add_separator()
-        view.add_command(label="Cycle analysis-crop view", accelerator="M",
-                         command=self._cycle_mask_view)
-        view.add_command(label="Histogram on / off", accelerator="T",
-                         command=self._toggle_histogram)
-        view.add_command(label="Clip overlay on / off", accelerator="L",
-                         command=self._toggle_clipping)
+        # Three-state views are RADIOBUTTON submenus — the bullet shows the
+        # current state. The keys (M cycles the crop view, R cycles the review
+        # source) still work; each radiobutton jumps straight to one state.
+        self._mv_mask = tk.IntVar(value=self.mask_view)
+        mask_menu = tk.Menu(view, tearoff=0)
+        for val, lbl in MASK_BTN_LABELS.items():
+            mask_menu.add_radiobutton(label=lbl, value=val,
+                                      variable=self._mv_mask,
+                                      command=lambda v=val: self._set_mask_view(v))
+        view.add_cascade(label="Analysis-crop view  (M cycles)", menu=mask_menu)
+        # The review-source switcher is meaningful only in a calibration-review
+        # session (run_calibration.py --review); omit it entirely otherwise.
+        if getattr(self, "review_mode", False):
+            self._mv_review = tk.StringVar(value=self.review_source)
+            rev_menu = tk.Menu(view, tearoff=0)
+            rev_labels = {"fitted": "Fitted (this session)",
+                          "gt": "Ground truth (annotation)", "live": "Live (preset)"}
+            for src in self.REVIEW_CYCLE:
+                rev_menu.add_radiobutton(
+                    label=rev_labels.get(src, src), value=src,
+                    variable=self._mv_review,
+                    command=lambda s=src: self._set_review_source(s))
+            view.add_cascade(label="Calibration review source  (R cycles)",
+                             menu=rev_menu)
+        view.add_separator()
+        self._mv_local_base = tk.BooleanVar(value=self.show_local_base)
+        view.add_checkbutton(label="Local film-base box",
+                             variable=self._mv_local_base,
+                             command=self._toggle_local_base)
+        self._mv_histogram = tk.BooleanVar(value=self.show_histogram)
+        view.add_checkbutton(label="RGB histogram", accelerator="T",
+                             variable=self._mv_histogram,
+                             command=self._toggle_histogram)
+        self._mv_clipping = tk.BooleanVar(value=self.show_clipping)
+        view.add_checkbutton(label="Clip overlay", accelerator="L",
+                             variable=self._mv_clipping,
+                             command=self._toggle_clipping)
 
     def build_feature_menus(self, menubar):
         sel = tk.Menu(menubar, tearoff=0)
@@ -1579,6 +1757,10 @@ class NegadoctorDebugUI(DebugUIBase):
         self.mask_btn = btn(MASK_BTN_LABELS[0], self._cycle_mask_view,
                             tip="Cycle the analysis-crop view: normal / rejected "
                                 "area tinted / rejected area hidden (M)")
+        self.local_base_btn = btn("Local base", self._toggle_local_base,
+                                  tip="Show or hide this frame's LOCAL film-base "
+                                      "box; the global winner box always shows")
+        self._update_local_base_btn()
         self.hist_btn = btn("Histogram ✓", self._toggle_histogram,
                             tip="Show or hide the RGB histogram panel (T)")
         self.clip_btn = btn("Clip", self._toggle_clipping,
@@ -1588,18 +1770,28 @@ class NegadoctorDebugUI(DebugUIBase):
         # on the fly (off the Tk thread), then refresh every frame's render.
         # RIGHT-aligned in its own frame so it (and the progress bar) stay
         # visible even when the left button row is crowded at the default width.
-        pr = tk.Frame(row, bg="#3f3f3f")
+        # A MULTI-roll review session adds a 'Roll:' dropdown next to the preset
+        # combo — two combos won't fit the (already crowded) button row at the
+        # default width, so give them their OWN full-width row below the buttons.
+        # Otherwise keep the preset combo right-aligned in the button row as before.
+        if (getattr(self, "review_mode", False)
+                and len(getattr(self, "_review_rolls", []) or []) > 1):
+            pr_row = tk.Frame(parent, bg="#3f3f3f")
+            pr_row.pack(side=tk.TOP, fill=tk.X)
+            pr = tk.Frame(pr_row, bg="#3f3f3f")
+        else:
+            pr = tk.Frame(row, bg="#3f3f3f")
         pr.pack(side=tk.RIGHT, padx=(8, 4))
+        # Roll dropdown (LEFT of the preset combo) — no-op outside multi-roll review.
+        self._build_roll_switcher(pr)
         tk.Label(pr, text="Preset:", bg="#3f3f3f", fg="#cccccc",
                  font=("", 8)).pack(side=tk.LEFT, padx=(2, 2))
         self.preset_var = tk.StringVar(value=self._current_preset_label)
         # In a review session the dropdown chooses which preset the "live" R-source
-        # reflects, so "(as exported)" (= the fitted base) is not offered — only the
-        # bundled presets, defaulting to default.json (the precomputed live).
-        if getattr(self, "review_mode", False):
-            values = self._preset_names()
-        else:
-            values = [self._PRESET_AS_EXPORTED] + self._preset_names()
+        # reflects. "(as exported)" maps to the precomputed live (= live_default,
+        # the saved/baked base), so it's offered alongside the bundled presets and
+        # is the safe fallback when a fitted preset is no longer bundled.
+        values = [self._PRESET_AS_EXPORTED] + self._preset_names()
         if self._current_preset_label not in values:   # a start --preset path/name
             values.append(self._current_preset_label)
         # A long preset name stays readable: the shared helper sizes the entry to
@@ -1609,6 +1801,9 @@ class NegadoctorDebugUI(DebugUIBase):
             pr, self.preset_var, values)
         self.preset_combo.pack(side=tk.LEFT, padx=1, pady=2)
         self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        # In review mode the dropdown only drives 'live', so grey it out unless
+        # 'live' is the source on screen (GT/fitted are unmovable).
+        self._update_preset_combo_state()
         # No status text next to the dropdown — the dropdown already shows the
         # active preset, and analysis PROGRESS is the centered canvas overlay.
 
@@ -1617,6 +1812,280 @@ class NegadoctorDebugUI(DebugUIBase):
                                       fg="#cccccc", font=("Courier", 9),
                                       anchor="w", padx=8, pady=2)
         self.canvas_status.pack(side=tk.TOP, fill=tk.X)
+
+    # ------------------------------------------------------------------
+    # Calibration-review roll switcher: rebuild a DIFFERENT roll's
+    # fitted/live/GT review in-window (no window restart) and reload it.
+    # ------------------------------------------------------------------
+
+    def _build_roll_switcher(self, parent):
+        """A 'Roll:' dropdown (left of the preset combo) for a multi-roll review
+        session; picking a roll rebuilds its review on a background thread. The
+        WIDGET is built only for >1 roll, but `roll_var` always exists in review
+        (see init_selection_state) so the install/switch code can set it freely."""
+        if not (getattr(self, "review_mode", False)
+                and len(getattr(self, "_review_rolls", []) or []) > 1):
+            return
+        tk.Label(parent, text="Roll:", bg="#3f3f3f", fg="#cccccc",
+                 font=("", 8)).pack(side=tk.LEFT, padx=(2, 2))
+        self.roll_combo = self.make_readonly_combobox(
+            parent, self.roll_var, list(self._review_rolls))
+        self.roll_combo.pack(side=tk.LEFT, padx=(1, 6), pady=2)
+        self.roll_combo.bind("<<ComboboxSelected>>", self._on_roll_selected)
+        self.attach_tooltip(self.roll_combo,
+                            "Switch which roll of this calibration session you "
+                            "review; rebuilds its fitted/live/GT analysis in-window")
+
+    def _import_run_calibration(self):
+        """Lazily import the feature's tests/run_calibration.py (where the review
+        build lives) under a private module name, so the UI process can rebuild a
+        roll without shelling out. Cached after the first switch."""
+        if getattr(self, "_run_calib_mod", None) is not None:
+            return self._run_calib_mod
+        import importlib.util
+        path = Path(__file__).resolve().parent / "tests" / "run_calibration.py"
+        spec = importlib.util.spec_from_file_location("nega_run_calibration", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self._run_calib_mod = mod
+        return mod
+
+    # The roll switcher does NOT re-analyze on every pick. Each roll's review is
+    # built (process_roll under the fitted constants + the live preset) at most
+    # ONCE per session and kept in an in-memory cache; the rolls the user hasn't
+    # opened yet are PREFETCHED on a background thread after the window settles, so
+    # a switch is usually instant (the fitted/live params are already computed).
+    # `_roll_cache[roll]` is (images, constants), or None for a roll with no images.
+
+    def _start_review_first_roll(self):
+        """Empty (meta-only) review startup: build the CURRENT roll in-window now,
+        exactly like a roll switch — the window is already up, so the user sees the
+        progress overlay instead of waiting on a terminal before launch. Prefetch of
+        the other rolls chains on once this one lands (_poll_roll_build)."""
+        if hasattr(self, "_roll_cache"):
+            return
+        self._roll_cache = {}
+        self._roll_build_active = False
+        self._roll_wait_target = self._review_current_roll
+        if hasattr(self, "preset_combo"):
+            self.preset_combo.config(state="disabled")
+        if hasattr(self, "roll_combo"):
+            self.roll_combo.config(state="disabled")
+        self._show_canvas_message(f"Analyzing roll {self._review_current_roll}…")
+        self._kick_prefetch()
+
+    def _seed_roll_cache(self):
+        """Seed the cache with the currently-loaded roll and start prefetching the
+        rest in the background (called once, after the initial roll is shown)."""
+        if hasattr(self, "_roll_cache"):
+            return                                   # already seeded
+        self._roll_cache = {}
+        self._roll_build_active = False
+        self._roll_wait_target = None     # the roll the user is waiting to see
+        if self._review_current_roll:
+            self._roll_cache[self._review_current_roll] = (
+                copy.deepcopy(self.images), copy.deepcopy(self.constants))
+        self._kick_prefetch()
+
+    def _on_roll_selected(self, event=None):
+        self.roll_combo.selection_clear()
+        self.root.after_idle(lambda: self.canvas.focus_set())
+        if not hasattr(self, "_roll_cache"):   # clicked before the prefetch seed
+            self._seed_roll_cache()
+        if self._roll_wait_target is not None:  # a switch is already in flight
+            self.roll_var.set(self._roll_wait_target)
+            return
+        name = self.roll_var.get()
+        if name == self._review_current_roll:
+            return
+        self._switch_to_roll(name)
+
+    def _switch_to_roll(self, roll_id):
+        """Show `roll_id`: instant from cache, else wait on the background builder
+        (it prioritizes the roll the user is waiting for)."""
+        entry = self._roll_cache.get(roll_id, "MISS")
+        if isinstance(entry, tuple):                 # already built -> instant
+            self._install_roll(roll_id)
+            self._kick_prefetch()
+            return
+        if entry is None:                            # known to have no images
+            self.roll_var.set(self._review_current_roll)
+            messagebox.showerror("Roll unavailable",
+                                 f"Roll '{roll_id}' has no local source images.",
+                                 parent=self.root)
+            return
+        # Not built yet — wait for the builder (overlay up, combos disabled).
+        self._roll_wait_target = roll_id
+        self.roll_var.set(roll_id)
+        if hasattr(self, "preset_combo"):
+            self.preset_combo.config(state="disabled")
+        self.roll_combo.config(state="disabled")
+        self._show_canvas_message(f"Analyzing roll {roll_id}…")
+        self._kick_prefetch()
+
+    def _kick_prefetch(self):
+        """Ensure the background builder is running; it builds the next uncached
+        roll (the wait target first), caches it, and chains to the rest."""
+        if not getattr(self, "_review_rolls", None):
+            return
+        if getattr(self, "_roll_build_active", False):
+            return                                   # the running build chains on
+        # Build the roll the user is waiting on first; else the next uncached one.
+        wt = self._roll_wait_target
+        nxt = wt if (wt is not None and wt not in self._roll_cache) else None
+        if nxt is None:
+            nxt = next((r for r in self._review_rolls
+                        if r not in self._roll_cache), None)
+        if nxt is None:
+            return
+        self._roll_build_active = True
+        self._roll_build_q = queue.Queue()
+        threading.Thread(target=self._roll_build_worker, args=(nxt,),
+                         daemon=True).start()
+        self.root.after(150, self._poll_roll_build)
+
+    def _roll_build_worker(self, roll_id):
+        def progress(pct):                           # real build progress -> overlay
+            self._roll_build_q.put(("progress", roll_id, pct))
+        try:
+            images, constants = self._build_and_load_roll(roll_id, progress=progress)
+            if images:
+                self._roll_build_q.put(("done", roll_id, images, constants))
+            else:
+                self._roll_build_q.put(("skip", roll_id))
+        except Exception as e:    # surfaced to the user on the Tk thread
+            self._roll_build_q.put(("error", roll_id, e))
+
+    def _poll_roll_build(self):
+        # Drain everything queued; apply progress for the roll the user is waiting
+        # on (prefetch builds also report, but their progress is ignored), and stop
+        # at the first terminal (done/skip/error).
+        terminal = None
+        try:
+            while True:
+                item = self._roll_build_q.get_nowait()
+                if item[0] == "progress":
+                    if self._roll_wait_target == item[1]:
+                        self._set_analyzing_pct(item[2])
+                    continue
+                terminal = item
+                break
+        except queue.Empty:
+            pass
+        if terminal is None:
+            self.root.after(100, self._poll_roll_build)
+            return
+        item = terminal
+        self._roll_build_active = False
+        tag = item[0]
+        if tag == "done":
+            self._roll_cache[item[1]] = (item[2], item[3])
+        elif tag == "skip":
+            self._roll_cache[item[1]] = None
+        else:                                        # ("error", roll_id, exc)
+            self._roll_cache[item[1]] = None         # don't retry in a loop
+            if self._roll_wait_target == item[1]:
+                self._roll_wait_target = None
+                self._clear_canvas_message()
+                self._reenable_roll_combos()
+                self.roll_var.set(self._review_current_roll)
+                messagebox.showerror(
+                    "Roll build failed",
+                    f"Could not build roll '{item[1]}':\n{item[2]}",
+                    parent=self.root)
+        # If the user is waiting on a roll that just became ready, show it.
+        wt = self._roll_wait_target
+        if wt is not None:
+            cached = self._roll_cache.get(wt, "MISS")
+            if isinstance(cached, tuple):
+                self._roll_wait_target = None
+                self._install_roll(wt)
+            elif cached is None:                     # the waited roll had no images
+                self._roll_wait_target = None
+                self._clear_canvas_message()
+                self._reenable_roll_combos()
+                self.roll_var.set(self._review_current_roll)
+                messagebox.showerror(
+                    "Roll unavailable",
+                    f"Roll '{wt}' has no local source images.", parent=self.root)
+        self._kick_prefetch()                        # continue with the rest
+
+    def _reenable_roll_combos(self):
+        # Preset combo follows the review source (disabled unless 'live'); the
+        # roll combo always re-enables.
+        self._update_preset_combo_state()
+        if hasattr(self, "roll_combo"):
+            self.roll_combo.config(state="readonly")
+
+    def _build_and_load_roll(self, roll_id, progress=None):
+        """Build roll `roll_id`'s review into a throwaway dir and load it into
+        memory (images carry absolute source-TIFF paths, so the dir can go right
+        after). Returns (images, constants), or (None, None) if the roll has no
+        images. Runs on a background thread — no Tk access."""
+        import shutil
+        import tempfile
+        import auto_negadoctor as an
+        tmp = Path(tempfile.mkdtemp(prefix="nega_rollbuild_"))
+        try:
+            rc = self._import_run_calibration()
+            rid = rc.build_roll_review(self._review_session_dir, roll_id, str(tmp),
+                                       progress=progress)
+            if rid is None:
+                return None, None
+            images, constants = an.load_debug_nega_dir(str(tmp))
+            self._relocate_negatives(images, str(tmp))
+            return images, constants
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _install_roll(self, roll_id):
+        """Swap the whole image set to a cached roll (instant — no analysis),
+        reusing the progressive add_image path + re-seating the review state."""
+        entry = self._roll_cache.get(roll_id)
+        if not isinstance(entry, tuple):
+            return
+        images, constants = entry
+        self.constants = constants or self.constants
+        self.data["constants"] = self.constants
+        self.reset_images()
+        # Defer thumbnails to ONE sequential loader (load_thumbnails_batched);
+        # add_image(render_thumb=True) would spawn a decode thread PER frame and
+        # the dozens of concurrent full-res inversions would freeze the main-thread
+        # render for ~seconds (the cached-switch "freeze" the user saw).
+        for data in copy.deepcopy(images):     # keep the cache entry pristine
+            self.add_image(data, render_thumb=False)
+        self._review_current_roll = roll_id
+        self.roll_var.set(roll_id)
+        # Re-seat the review state for the new frames (mirror init_selection_state's
+        # review branch): start on FITTED, snapshot each frame's live_default, drop
+        # the per-preset cache (it held the previous roll), reset the preset label.
+        self.review_kind = next((im.get("review_kind") for im in self.images
+                                 if im.get("review")), self.review_kind)
+        self.review_source = "fitted"
+        self._preset_cache.clear()
+        self._current_preset_label = self._review_default_preset
+        if hasattr(self, "preset_var"):
+            self.preset_var.set(self._current_preset_label)
+        for im in self.images:
+            rev = im.get("review")
+            if rev and rev.get("live") is not None and "live_default" not in rev:
+                rev["live_default"] = copy.deepcopy(rev["live"])
+        self._apply_review_source()
+        self._orig_images = copy.deepcopy(self.images)
+        self._restore_global_base_override()
+        # Stem-keyed caches + the AI variant belong to the old roll — drop them.
+        self.variant = "analytical"
+        self._neg_cache_key = None
+        self._neg_cache = None
+        self._amask_cache_stem = None
+        self._amask_cache = None
+        self._clear_canvas_message()
+        self._reenable_roll_combos()
+        if self.images:
+            self._load_image_by_idx(0)        # render frame 0 (fast, uncontested)
+        self.load_thumbnails_batched()        # then fill thumbs in the background
+        self._update_review_btn()
+        self.canvas.focus_set()
 
     # ------------------------------------------------------------------
     # Preset selector: re-run the whole analysis under a different Tuning
@@ -1656,7 +2125,12 @@ class NegadoctorDebugUI(DebugUIBase):
         if not self.images:
             return
         import auto_negadoctor as an
-        effective = self.start_preset or getattr(an, "DEFAULT_PRESET", "default")
+        # The loaded images were produced by --preset if given, else the `preset`
+        # baked into a re-opened session (a migrated GT folder may be e.g.
+        # "default_better_…", NOT default), else $NEGA_PRESET/"default".
+        baked = self.images[0].get("preset") if self.images else None
+        effective = (self.start_preset or baked
+                     or getattr(an, "DEFAULT_PRESET", "default"))
         if effective and effective != self._PRESET_AS_EXPORTED:
             self._preset_cache[effective] = copy.deepcopy(self.images)
 
@@ -1672,15 +2146,19 @@ class NegadoctorDebugUI(DebugUIBase):
             return
         if name == self._current_preset_label:
             return
-        # Review: re-selecting the default preset restores the precomputed
-        # default.json live instantly (no re-run) from the per-frame live_default
-        # snapshot — the cache was cleared because the seed held the fitted export.
-        if getattr(self, "review_mode", False) and name == self._review_default_preset:
+        # Review: re-selecting the default preset (or "(as exported)", which means
+        # the same precomputed/saved live base) restores the default.json live
+        # instantly (no re-run) from the per-frame live_default snapshot — the
+        # cache was cleared because the seed held the fitted export.
+        if getattr(self, "review_mode", False) and name in (
+                self._review_default_preset, self._PRESET_AS_EXPORTED):
             self._current_preset_label = name
             for img in self.images:
                 rev = img.get("review")
                 if rev and rev.get("live_default") is not None:
                     rev["live"] = copy.deepcopy(rev["live_default"])
+            # GT is UNMOVABLE (fixed stored GT-folder settings + annotations); the
+            # dropdown only drives 'live', so re-render ONLY when viewing live.
             if self.review_source == "live":
                 self._apply_review_source()
                 self._after_reanalysis(name)
@@ -1717,9 +2195,10 @@ class NegadoctorDebugUI(DebugUIBase):
     def _apply_reanalysis_result(self, new_images, label):
         """Install a preset re-analysis. NORMALLY replaces the working img_dicts.
         In a calibration-review session the working dicts carry the fitted/GT/live
-        `review` payload and the dropdown is the authority for the 'live' source
-        ONLY, so redirect each frame's new params into review['live'] and re-render
-        only when 'live' is the source on screen (fitted/GT stay frozen)."""
+        `review` payload and the dropdown is the authority ONLY for the 'live'
+        source, so redirect each frame's new params into review['live'] and
+        re-render only when live is on screen. GT is UNMOVABLE — the fixed stored
+        GT-folder settings + annotations — and fitted stays frozen too."""
         self._current_preset_label = label
         if getattr(self, "review_mode", False):
             by_stem = {im["stem"]: im for im in new_images}
@@ -1737,7 +2216,61 @@ class NegadoctorDebugUI(DebugUIBase):
                 self._update_review_btn()
             return
         self.images[:] = new_images
+        self._session_switched = True
+        self._persist_active_session(label)
         self._after_reanalysis(label)
+
+    def _persist_active_session(self, label):
+        """Bake the active preset's FULL state into the on-disk session so a
+        copied folder is self-contained ground truth (and preset-deletion
+        resilient — the render reads the baked params, never the named preset).
+
+        Re-writes every {stem}_debug_nega.json from self.images with the active
+        preset's constant block + its name, refreshes the in-memory constants
+        (so the report + UI agree), and refreshes the `applied` baseline of any
+        EXISTING annotation file against the new params. Non-review only — in a
+        review session the dropdown drives review['live'], not the base."""
+        if getattr(self, "review_mode", False) or not self.images:
+            return
+        import auto_negadoctor as an
+        named = bool(label) and label != self._PRESET_AS_EXPORTED
+        preset_name = label if named else getattr(self, "_exported_preset_name", None)
+        constants = None
+        if named:
+            try:
+                constants = an.frame_constants(an._tuning.load(label))
+            except Exception as e:   # preset deleted/unreadable since baking
+                print(f"WARN: preset '{label}' unreadable; baking saved "
+                      f"constants instead: {e}")
+        if constants is None:                   # "(as exported)" OR preset gone
+            constants = dict(getattr(self, "_exported_constants", None)
+                             or self.constants or {})
+        try:
+            an.write_session_dicts(self.images, self.session_dir,
+                                   constants=constants, preset=preset_name)
+        except Exception as e:
+            print(f"WARN: could not persist session under '{label}': {e}")
+            return
+        self.constants = constants
+        self.data["constants"] = constants
+        # Refresh `applied` in already-annotated frames against the new base
+        # (don't create files for un-annotated frames — keeps the GT folder clean).
+        for img in self.images:
+            stem = img["stem"]
+            ann_path = os.path.join(self.session_dir,
+                                    f"{stem}{self.ANNOTATION_SUFFIX}")
+            if os.path.exists(ann_path):
+                self._auto_save(stem)
+
+    def _capture_exported_baseline(self):
+        """Remember the constants + preset name the baked "(as exported)" state
+        was written with, so switching back to it re-bakes the ORIGINAL look
+        (a migrated GT folder's "(as exported)" is its saved preset, NOT default)."""
+        self._exported_constants = dict(self.constants or {})
+        self._exported_preset_name = (
+            (self.images[0].get("preset") if getattr(self, "images", None)
+             else None)
+            or getattr(self, "start_preset", None))
 
     def _start_reanalysis(self, preset_name):
         """Kick off process_roll under `preset_name` on a background thread; the
@@ -1795,7 +2328,7 @@ class NegadoctorDebugUI(DebugUIBase):
 
     def _finish_reanalysis(self, result):
         self._reanalyzing = False
-        self.preset_combo.config(state="readonly")
+        self._update_preset_combo_state()   # readonly (review: only when live)
         self._clear_canvas_message()
         if result["error"] is not None or not result["images"]:
             messagebox.showerror(
@@ -2157,6 +2690,8 @@ class NegadoctorDebugUI(DebugUIBase):
         self.bind_key("<T>", lambda e: self._toggle_histogram())
         self.bind_key("<l>", lambda e: self._toggle_clipping())
         self.bind_key("<L>", lambda e: self._toggle_clipping())
+        # NOTE: B is reserved by the base class for previous-image navigation;
+        # the local film-base box is toggled via the View menu / toolbar only.
         # P (display colour management) is bound by the base class.
         # ] brighter / [ darker: black + exposure in unison (see _brighten)
         self.bind_key("<bracketright>", lambda e: self._brighten(False))
@@ -2280,6 +2815,7 @@ class NegadoctorDebugUI(DebugUIBase):
         img_dict = self.images[self.current_idx]
         neg_path = img_dict.get("negative_path")
         if not self.view_negative and (not neg_path or not Path(neg_path).exists()):
+            self._update_view_btn()      # snap the menu checkmark back (no-op)
             return
         self.view_negative = not self.view_negative
         if self.view_negative:
@@ -2308,6 +2844,7 @@ class NegadoctorDebugUI(DebugUIBase):
         label = "Negative" if self.view_negative else "Inverted"
         self.view_btn.config(text=label,
                              fg="#ffff88" if self.view_negative else "white")
+        self._set_menu_var("_mv_negative", self.view_negative)
 
     def _has_corrections(self):
         ann = self.annotations[self.images[self.current_idx]["stem"]]
@@ -2755,8 +3292,10 @@ class NegadoctorDebugUI(DebugUIBase):
         self._refresh_histogram()
         self._redraw()
 
-    def _cycle_mask_view(self):
-        self.mask_view = (self.mask_view + 1) % 3
+    def _set_mask_view(self, val):
+        """Jump the analysis-crop view to a specific state (0/1/2); used by both
+        the M-key cycle and the View-menu radiobuttons."""
+        self.mask_view = val % 3
         if self._display_base_pil is None:
             self._display_base_pil = self.pil_image
         self.pil_image = self._decorate(self._display_base_pil)
@@ -2764,9 +3303,13 @@ class NegadoctorDebugUI(DebugUIBase):
         self._refresh_histogram()
         self._redraw()
 
+    def _cycle_mask_view(self):
+        self._set_mask_view(self.mask_view + 1)
+
     def _update_mask_btn(self):
         self.mask_btn.config(text=MASK_BTN_LABELS[self.mask_view],
                              fg="#ffff88" if self.mask_view else "white")
+        self._set_menu_var("_mv_mask", self.mask_view)
 
     # ------------------------------------------------------------------
     # Histogram of the displayed (converted) image
@@ -2909,6 +3452,7 @@ class NegadoctorDebugUI(DebugUIBase):
     def _toggle_compare(self):
         """X: flip between the corrected render and the algorithm's default."""
         if not self._has_corrections():
+            self._update_compare_btn()   # snap the menu checkmark back (no-op)
             return
         self.compare_default = not self.compare_default
         self._update_compare_btn()
@@ -2919,6 +3463,7 @@ class NegadoctorDebugUI(DebugUIBase):
         label = "Default" if self.compare_default else "Corrected"
         self.compare_btn.config(text=label,
                                 fg="#ffff88" if self.compare_default else "white")
+        self._set_menu_var("_mv_default", self.compare_default)
 
     # ------------------------------------------------------------------
     # Snapshot / restore / compare (S / Z / D)
@@ -3045,6 +3590,7 @@ class NegadoctorDebugUI(DebugUIBase):
         """A: flip the render base between the analytical algorithm and the
         vision-LLM AI variant. No-op on frames without an AI variant."""
         if not self._frame_has_ai():
+            self._update_variant_btn()   # snap the menu checkmark back (no-op)
             self._set_info_text("No AI variant for this frame (run with "
                                 "--ai-tune / the AI action to compute one).")
             return
@@ -3066,6 +3612,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self.variant_btn.config(
             text=label,
             fg="#9fff9f" if is_ai else ("white" if has_ai else "#888888"))
+        self._set_menu_var("_mv_variant_ai", is_ai)
 
     def _toggle_vignette(self):
         """N: apply / remove the roll's vignette correction in the preview so its
@@ -3085,6 +3632,7 @@ class NegadoctorDebugUI(DebugUIBase):
         self.vignette_btn.config(
             text="Vignette ✓" if on else "Vignette ✗",
             fg="white" if on else "#ffb060")
+        self._set_menu_var("_mv_vignette", on)
 
     def _frame_review_sources(self, img):
         """The review sources available for THIS frame, in cycle order. GT is
@@ -3129,6 +3677,7 @@ class NegadoctorDebugUI(DebugUIBase):
         default, tracks the preset dropdown). Sources the current frame lacks (e.g.
         GT on an un-annotated frame) are skipped. Only meaningful while reviewing."""
         if not getattr(self, "review_mode", False):
+            self._update_review_btn()    # snap the menu bullet back (no-op)
             self._set_info_text("Not reviewing a calibration session "
                                 "(open one via run_calibration.py --review).")
             return
@@ -3138,9 +3687,20 @@ class NegadoctorDebugUI(DebugUIBase):
         order = (self._frame_review_sources(img) if img else None) \
             or list(self.REVIEW_CYCLE)
         cur = self.review_source if self.review_source in order else order[0]
-        self.review_source = order[(order.index(cur) + 1) % len(order)]
+        self._set_review_source(order[(order.index(cur) + 1) % len(order)])
+
+    def _set_review_source(self, src):
+        """Switch the calibration-review preview to a specific source; used by the
+        R-key cycle and the View-menu radiobuttons."""
+        if not getattr(self, "review_mode", False):
+            self._update_review_btn()    # snap the menu bullet back (no-op)
+            self._set_info_text("Not reviewing a calibration session "
+                                "(open one via run_calibration.py --review).")
+            return
+        self.review_source = src
         self._apply_review_source()
         self._update_review_btn()
+        self._update_preset_combo_state()
         self._sync_wheels()
         self._populate_items_list()
         self._update_info_from_selection()
@@ -3153,7 +3713,23 @@ class NegadoctorDebugUI(DebugUIBase):
         "live":   ("Src: live",   "#ffd080"),
     }
 
+    def _update_preset_combo_state(self):
+        """Enable/disable the preset dropdown. In a calibration-review session it
+        only drives the 'live' source (GT + fitted are unmovable), so disable it
+        unless 'live' is the source on screen. Outside review it always re-runs
+        the base analysis, so it stays enabled. No-op while a (re)analysis owns
+        the combo state."""
+        if not hasattr(self, "preset_combo") or getattr(self, "_reanalyzing", False):
+            return
+        live = (not getattr(self, "review_mode", False)
+                or getattr(self, "review_source", "fitted") == "live")
+        try:
+            self.preset_combo.config(state="readonly" if live else "disabled")
+        except Exception:
+            pass
+
     def _update_review_btn(self):
+        self._set_menu_var("_mv_review", self.review_source)
         if not hasattr(self, "review_btn"):
             return
         if not self.review_mode:
@@ -3172,6 +3748,7 @@ class NegadoctorDebugUI(DebugUIBase):
         on = self.show_histogram
         self.hist_btn.config(text="Histogram ✓" if on else "Histogram",
                              fg="white" if on else "#aaaaaa")
+        self._set_menu_var("_mv_histogram", on)
 
     def _toggle_clipping(self):
         """L: toggle the on-image clip overlay (red highlights / blue shadows).
@@ -3189,6 +3766,23 @@ class NegadoctorDebugUI(DebugUIBase):
         on = self.show_clipping
         self.clip_btn.config(text="Clip ✓" if on else "Clip",
                              fg="#ff6666" if on else "white")
+        self._set_menu_var("_mv_clipping", on)
+
+    def _toggle_local_base(self):
+        """Show/hide the per-frame LOCAL film-base box (off by default; View
+        menu / toolbar). The roll-wide GLOBAL winner box is unaffected — it
+        always shows."""
+        self.show_local_base = not self.show_local_base
+        self._update_local_base_btn()
+        self._redraw_markers()
+
+    def _update_local_base_btn(self):
+        if not hasattr(self, "local_base_btn"):
+            return
+        on = self.show_local_base
+        self.local_base_btn.config(text="Local base ✓" if on else "Local base",
+                                   fg=PATCH_COLORS["film_base"] if on else "#aaaaaa")
+        self._set_menu_var("_mv_local_base", on)
 
     # ------------------------------------------------------------------
     # Drawing
@@ -3219,6 +3813,11 @@ class NegadoctorDebugUI(DebugUIBase):
         for patch in PATCHES:
             det = self._detected_rect(img_dict, patch)
             sel = (self.selected_patch == patch)
+            # The per-frame LOCAL film base is hidden by default (toggle via View
+            # → "Local film base" / key B); still show it while it's selected so
+            # editing the patch is never blind. The GLOBAL winner box is separate.
+            if patch == "film_base" and not self.show_local_base and not sel:
+                continue
             color = "#ffff00" if sel else PATCH_COLORS[patch]
             if det:
                 label = PATCH_SHORT[patch]

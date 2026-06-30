@@ -164,15 +164,24 @@ def main():
             app._toggle_review_source()                       # fitted -> GT
             assert app.review_source == "gt" and img["detected"] == d_gt, \
                 "R did not swap in GT"
+            # 'Detect with:' combo is DISABLED on a non-live (unmovable) source.
+            assert str(app._preset_combo.cget("state")) == "disabled", \
+                "preset combo must be disabled when viewing GT"
             app._toggle_review_source()                       # GT -> live
             assert app.review_source == "live" and img["detected"] == d_live, \
                 "R did not swap in live"
+            assert str(app._preset_combo.cget("state")) == "readonly", \
+                "preset combo must be enabled when viewing live"
             app._toggle_review_source()                       # live -> fitted (wrap)
             assert app.review_source == "fitted" and img["detected"] == d_fit, \
                 "R did not wrap back to fitted"
+            assert str(app._preset_combo.cget("state")) == "disabled", \
+                "preset combo must be disabled when viewing fitted"
             img.pop("review", None)
             img.pop("review_kind", None)
             app.review_mode = False
+            app._update_preset_combo_state()   # back to enabled (not reviewing)
+            assert str(app._preset_combo.cget("state")) == "readonly"
         step("review_cycle", review_cycle)
 
         step("clear_selection", lambda: app._clear_selection())

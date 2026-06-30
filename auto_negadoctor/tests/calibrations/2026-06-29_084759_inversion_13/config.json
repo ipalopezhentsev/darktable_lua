@@ -1,0 +1,22 @@
+{
+  "kind": "inversion",
+  "rolls": [
+    "2506-1",
+    "2510-11-1",
+    "2511-12-1",
+    "2512-2601-1"
+  ],
+  "fit": {
+    "method": "none",
+    "pca": true,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  },
+  "comment": "pca on 4 rolls. DEPRECATED BY _15",
+  "metric": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
+  "created": "2026-06-28T12:11:35",
+  "git_commit": "91b1d9e",
+  "command_line": "run_calibration.py --config calibrations/configs/inversion_pca.json --comment pca on 4 rolls"
+}

@@ -150,6 +150,12 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
   with `live_preset` rather than overwriting the base frame); other frames refresh
   their live LAZILY on navigation (`_ensure_live_for_current`, detection is
   full-res + slow), and `(live default)` restores the precomputed `live_default`.
+  **The 'Detect with:' combo is DISABLED unless `live` is the source on screen**
+  (`_update_preset_combo_state`, called from `_refresh_review_display` / toolbar
+  build / `_install_roll`): GT and fitted are unmovable, so the preset has no
+  effect there (mirrors auto_negadoctor; smoke-tested in `review_cycle`). GT here
+  is ALREADY unmovable by the preset — selecting one only redetects into
+  `review['live']`, never GT.
 
 ### Canonical Data Principle (auto_retouch)
 

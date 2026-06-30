@@ -577,6 +577,32 @@ def _load_ground_truth(fixtures):
     return {s: gt for s, gt in gt_by_stem.items() if gt}
 
 
+def _load_gt_base(fixtures):
+    """Per-stem AUTO base params stored in the GT folder's `*_debug_nega.json` —
+    the self-contained, baked-preset base the annotations were layered on top of.
+
+    This is the FIXED 'ground-truth settings' the GT picture must be rendered
+    from (annotations on top), independent of any default/candidate re-run: the
+    GT histogram is computed from these stored settings while the candidate
+    histogram uses the trial's params. Last-writer-wins across sessions (sorted,
+    matching `_load_ground_truth`). A stem whose `*_debug_nega.json` is missing
+    (or carries no params) gets no entry, so the caller falls back to the
+    production/live base for it. Returns {stem: params_dict}."""
+    base_by_stem = {}
+    for f in fixtures:
+        stem = f.name.replace("_annotations.json", "")
+        dbg = f.parent / f"{stem}_debug_nega.json"
+        if not dbg.exists():
+            continue
+        try:
+            params = (json.loads(dbg.read_text()) or {}).get("params")
+        except Exception:
+            continue
+        if params:
+            base_by_stem[stem] = params
+    return base_by_stem
+
+
 def _ground_truth_violations(stem, params, gt):
     """Compare current algorithm params against one stem's ground truth.
     Returns (violations, deltas): a list of strings and a {param: abs_delta}
@@ -793,14 +819,18 @@ HIST_REGRESS_EPS = 0.01              # median total EMD may grow this much over 
 HIST_HL_REGRESS_EPS = 0.01           # median |hi999| highlight delta may grow this much
 
 
-def gt_params_for_frame(fr, gt):
+def gt_params_for_frame(fr, gt, base=None):
     """Full negadoctor params that render the user's GT picture for this frame:
-    the production params with ONLY the annotated fields overridden. Annotations
-    are PARTIAL (some frames carry wb only), so a wb-only frame's GT picture is
-    the production tone with the user's wb — never production replaced by
-    defaults. Dmin/soft_clip stay = production (not annotated; offset and D_max
-    ARE annotatable now). Pure copy; does not mutate fr['params']."""
-    p = dict(fr["params"])
+    the base params with ONLY the annotated fields overridden. Annotations are
+    PARTIAL (some frames carry wb only), so a wb-only frame's GT picture is the
+    base tone with the user's wb — never the base replaced by defaults.
+    Dmin/soft_clip stay = base (not annotated; offset and D_max ARE annotatable
+    now). Pure copy; does not mutate the inputs.
+
+    `base` (optional) is the FIXED stored GT-folder auto base (`_load_gt_base`) —
+    the ground-truth settings the GT histogram is rendered from. When None, falls
+    back to the production/live `fr['params']` (back-compat)."""
+    p = dict(base if base is not None else fr["params"])
     if gt.get("wb_low"):
         p["wb_low"] = [float(v) for v in gt["wb_low"]]
     if gt.get("wb_high"):
@@ -847,6 +877,7 @@ def histogram_per_frame(frames, fixtures):
     source of the metric — reused by check_histogram_match (median-reduced) and
     by the calibration runner (run_calibration.py)."""
     gt_by_stem = _load_ground_truth(fixtures)
+    gt_base = _load_gt_base(fixtures)
     by_stem = {fr["stem"]: fr for fr in frames}
     records = []
     for stem, gt in sorted(gt_by_stem.items()):
@@ -857,7 +888,10 @@ def histogram_per_frame(frames, fixtures):
             enc_f, lin = an.load_frame(fr["path"], fr.get("vignette"))
         except Exception:
             continue
-        gt_f = _render_crop_rows(lin, fr["border"], gt_params_for_frame(fr, gt))
+        # GT picture = FIXED stored GT-folder settings + annotations; the
+        # candidate picture = the current production params.
+        gt_f = _render_crop_rows(lin, fr["border"],
+                                 gt_params_for_frame(fr, gt, gt_base.get(stem)))
         prod_f = _render_crop_rows(lin, fr["border"], fr["params"])
         if gt_f is None or prod_f is None:
             continue

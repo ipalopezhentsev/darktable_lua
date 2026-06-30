@@ -297,6 +297,87 @@ def rgb_histograms(img, bins=64):
     return hists, top
 
 
+def _bright_chroma(rows, lum, vmax):
+    """Mean color of the brightest ~1% of pixels (by luma), normalized to vmax.
+    Returns zeros when there are too few rows to be meaningful."""
+    if rows.shape[0] < 100:
+        return np.zeros(3)
+    thr = np.percentile(lum, 99.0)
+    sel = rows[lum >= thr]
+    return sel.mean(axis=0) / vmax if sel.size else np.zeros(3)
+
+
+def histogram_b_stats(b, bins=64):
+    """Precompute the GROUND-TRUTH (B) side of `histogram_distance` ONCE.
+
+    The B side is INDEPENDENT of the candidate A (the [0,hi) histogram scale is
+    dtype-only — float→1.0, uint8→256 — and a/b share one representation), so in
+    a calibration loop where the GT render is FIXED its histogram / percentiles /
+    means never change between trials. Hoist them here and feed
+    `histogram_distance_to(a, bstats)` per trial (A varies) instead of calling
+    `histogram_distance(a, b)` — numerically identical, but the GT histogram is
+    built once instead of every trial. Also smaller to cache than the full GT
+    render rows. `bins` MUST match the per-trial `histogram_distance_to`."""
+    hi, vmax = _hist_scale(b)
+    hb, top_b = rgb_histograms(b, bins)
+    rb = _as_rgb_rows(b)
+    lb = rb @ _LUMA_W
+    return {
+        "bins": bins, "hi": hi, "vmax": vmax,
+        "hb": hb, "top_b": top_b,
+        "lb_hist": _norm_hist(lb, bins, hi),
+        "lb_size": int(lb.size),
+        "lb_mean": float(lb.mean()) if lb.size else 0.0,
+        "rb_mean": rb.mean(axis=0) if rb.size else np.zeros(3),
+        "lb_pct": [float(np.percentile(lb, q)) / vmax if lb.size else 0.0
+                   for q in (99.0, 99.9, 99.99)],
+        "bright": _bright_chroma(rb, lb, vmax),
+    }
+
+
+def histogram_distance_to(a, bstats):
+    """`histogram_distance` against a PRECOMPUTED B side (`histogram_b_stats`).
+    Identical result to `histogram_distance(a, b)` for the `b`/`bins` the stats
+    were built from; only the A side is recomputed (the per-trial cost)."""
+    bins, hi, vmax = bstats["bins"], bstats["hi"], bstats["vmax"]
+    ha, top_a = rgb_histograms(a, bins)
+    per_channel = [cumhist_l1(ha[c], bstats["hb"][c]) for c in range(3)]
+
+    ra = _as_rgb_rows(a)
+    la = ra @ _LUMA_W
+    luma = cumhist_l1(_norm_hist(la, bins, hi), bstats["lb_hist"])
+    luma_signed = (float(bstats["lb_mean"] - float(la.mean())) / vmax
+                   if la.size and bstats["lb_size"] else 0.0)
+
+    # per-channel signed mean shift (B - A), and the common (overall) shift;
+    # the residual after removing the common shift is the pure chroma cast.
+    d_chan = (bstats["rb_mean"] - ra.mean(axis=0)) / vmax
+    color = float(np.mean(np.abs(d_chan - d_chan.mean())))
+
+    # top-highlight diagnostics: high luma percentiles + brightest-pixels color
+    def _pct(x, q):
+        return float(np.percentile(x, q)) / vmax if x.size else 0.0
+    p99b, p999b, p9999b = bstats["lb_pct"]
+    hi99 = p99b - _pct(la, 99.0)
+    hi999 = p999b - _pct(la, 99.9)
+    hi9999 = p9999b - _pct(la, 99.99)
+
+    hb_ = bstats["bright"] - _bright_chroma(ra, la, vmax)
+    hi_color = float(np.mean(np.abs(hb_ - hb_.mean())))
+
+    return {
+        "total": float(np.mean(per_channel)),
+        "per_channel": per_channel,
+        "luma": luma,
+        "color": color,
+        "luma_signed": luma_signed,
+        "hi99": hi99, "hi999": hi999, "hi9999": hi9999,
+        "hi_color": hi_color,
+        "top_a": top_a,
+        "top_b": bstats["top_b"],
+    }
+
+
 def histogram_distance(a, b, bins=64):
     """Decomposed EMD between two rendered sRGB outputs (A = the algorithm's
     render, B = the ground-truth render). Both must be the SAME representation:
@@ -320,51 +401,11 @@ def histogram_distance(a, b, bins=64):
       hi_color     chroma-cast divergence among the brightest ~1% of pixels —
                    highlight color neutrality (goal 3, top end).
       top_a, top_b near-white mass of A and B.
-    """
-    hi, vmax = _hist_scale(a)
-    ha, top_a = rgb_histograms(a, bins)
-    hb, top_b = rgb_histograms(b, bins)
-    per_channel = [cumhist_l1(ha[c], hb[c]) for c in range(3)]
 
-    ra = _as_rgb_rows(a)
-    rb = _as_rgb_rows(b)
-    la, lb = ra @ _LUMA_W, rb @ _LUMA_W
-    luma = cumhist_l1(_norm_hist(la, bins, hi), _norm_hist(lb, bins, hi))
-    luma_signed = (float(lb.mean() - la.mean()) / vmax
-                   if la.size and lb.size else 0.0)
-
-    # per-channel signed mean shift (B - A), and the common (overall) shift;
-    # the residual after removing the common shift is the pure chroma cast.
-    d_chan = (rb.mean(axis=0) - ra.mean(axis=0)) / vmax
-    color = float(np.mean(np.abs(d_chan - d_chan.mean())))
-
-    # top-highlight diagnostics: high luma percentiles + brightest-pixels color
-    def _pct(x, q):
-        return float(np.percentile(x, q)) / vmax if x.size else 0.0
-    hi99 = _pct(lb, 99.0) - _pct(la, 99.0)
-    hi999 = _pct(lb, 99.9) - _pct(la, 99.9)
-    hi9999 = _pct(lb, 99.99) - _pct(la, 99.99)
-
-    def _bright_chroma(rows, lum):
-        if rows.shape[0] < 100:
-            return np.zeros(3)
-        thr = np.percentile(lum, 99.0)
-        sel = rows[lum >= thr]
-        return sel.mean(axis=0) / vmax if sel.size else np.zeros(3)
-    hb_ = _bright_chroma(rb, lb) - _bright_chroma(ra, la)
-    hi_color = float(np.mean(np.abs(hb_ - hb_.mean())))
-
-    return {
-        "total": float(np.mean(per_channel)),
-        "per_channel": per_channel,
-        "luma": luma,
-        "color": color,
-        "luma_signed": luma_signed,
-        "hi99": hi99, "hi999": hi999, "hi9999": hi9999,
-        "hi_color": hi_color,
-        "top_a": top_a,
-        "top_b": top_b,
-    }
+    The B side is candidate-independent; in a fitting loop precompute it ONCE with
+    `histogram_b_stats(b, bins)` and call `histogram_distance_to(a, bstats)` per
+    trial (this function just composes the two)."""
+    return histogram_distance_to(a, histogram_b_stats(b, bins))
 
 
 # ---------------------------------------------------------------------------

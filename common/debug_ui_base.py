@@ -213,6 +213,12 @@ class DebugUIBase:
         # Load any previously saved annotations
         self._load_existing_annotations()
 
+        # Bumped whenever the whole image set is torn down + repopulated
+        # (reset_images, used by the calibration-review roll switcher), so a
+        # thumbnail render that was queued for the PREVIOUS set is discarded by
+        # index when it lands instead of painting the wrong frame's row.
+        self._img_generation = 0
+
         # View state
         self.current_idx = 0
         self.zoom = 1.0
@@ -376,10 +382,18 @@ class DebugUIBase:
         view.add_command(label="Zoom out", accelerator="-",
                          command=lambda: self._zoom_step(0.5))
         view.add_separator()
-        view.add_command(label="Hide / show markers", accelerator="H",
-                         command=self._toggle_hide_markers)
-        view.add_command(label="Display color management on / off",
-                         accelerator="P", command=self._toggle_color_manage)
+        # Toggle settings are CHECKBUTTONS named for the thing itself (not
+        # "Show X" / "X on / off") — the checkmark IS the current state. The H/P
+        # keys and any toolbar buttons drive the same state; the _toggle_*
+        # handlers keep these menu vars in sync so the checkmark stays correct.
+        self._mv_markers = tk.BooleanVar(value=not self.hide_markers)
+        view.add_checkbutton(label="Markers", accelerator="H",
+                             variable=self._mv_markers,
+                             command=self._toggle_hide_markers)
+        self._mv_color_manage = tk.BooleanVar(value=self.color_manage)
+        view.add_checkbutton(label="Display color management", accelerator="P",
+                             variable=self._mv_color_manage,
+                             command=self._toggle_color_manage)
         menubar.add_cascade(label="View", menu=view)
 
         self.build_feature_menus(menubar)        # feature cascades (Select/Adjust/…)
@@ -405,6 +419,15 @@ class DebugUIBase:
     def extend_help_menu(self, helpm):
         """Feature-specific Help-menu items; the Help cascade is only shown when
         this adds at least one (optional)."""
+
+    def _set_menu_var(self, name, value):
+        """Sync a View-menu checkbutton/radiobutton var to the real state, so the
+        checkmark/bullet stays correct no matter what drove the change (a key, a
+        toolbar button, or a toggle that no-op'd). No-op if the var doesn't exist
+        (e.g. a review-only var outside a review session)."""
+        var = getattr(self, name, None)
+        if var is not None:
+            var.set(value)
 
     # Shared toolbar button style (flat dark buttons, like the menu-driven UIs).
     TOOLBAR_BTN_STYLE = {"bg": "#585858", "fg": "white", "relief": "flat",
@@ -1387,12 +1410,17 @@ class DebugUIBase:
         darktable's color-managed view; OFF shows raw sRGB bytes (over-saturated
         on a wide-gamut panel). No effect if no monitor profile was detected."""
         if not self.color_management_available():
+            # A menu click already flipped the var — snap it back to reality.
+            if hasattr(self, "_mv_color_manage"):
+                self._mv_color_manage.set(self.color_manage)
             messagebox.showinfo(
                 "Display color management",
                 "No monitor ICC profile detected — display is already raw sRGB.\n"
                 "Set NEGA_DISPLAY_ICC=<path> to force one.")
             return
         self.color_manage = not self.color_manage
+        if hasattr(self, "_mv_color_manage"):
+            self._mv_color_manage.set(self.color_manage)
         self._redraw()
 
     def _redraw_markers(self):
@@ -1565,6 +1593,8 @@ class DebugUIBase:
             label = "Show Markers  (H)" if self.hide_markers else "Hide Markers  (H)"
             self.hide_btn.config(text=label,
                                  fg="#ffff88" if self.hide_markers else "white")
+        if hasattr(self, "_mv_markers"):     # checked = markers visible
+            self._mv_markers.set(not self.hide_markers)
         self._redraw_markers()
 
     def _fit_to_window(self):
@@ -1789,6 +1819,43 @@ class DebugUIBase:
     # Progressive population (ALLOW_EMPTY_SESSION subclasses)
     # ------------------------------------------------------------------
 
+    def reset_images(self):
+        """Tear the loaded image set + its thumbnail rows + annotation state down
+        so the session can be repopulated from scratch via add_image() — used by
+        the calibration-review roll switcher to load a different roll WITHOUT
+        closing the window. Leaves all window chrome (toolbar, panes, menus)
+        intact. Bumps _img_generation so any in-flight thumbnail render for the
+        old set is discarded when it lands."""
+        self._img_generation += 1
+        for row in getattr(self, "lb_rows", []):
+            try:
+                row.destroy()
+            except Exception:
+                pass
+        self.lb_rows = []
+        self.lb_photos = []
+        self.lb_img_labels = []
+        self.images = []
+        self.data["images"] = self.images
+        self.annotations = {}
+        self.item_list_data = {}
+        self.current_idx = 0
+
+    def load_thumbnails_batched(self):
+        """(Re)render the current images' thumbnails on a SINGLE background thread
+        (sequential). Use after a BULK repopulation (e.g. a calibration-review roll
+        switch added every frame with render_thumb=False): spawning one decode
+        thread per frame — as add_image(render_thumb=True) does — would otherwise
+        launch dozens of concurrent full-res decodes that saturate every core and
+        freeze the main-thread render for seconds."""
+        if not getattr(self, "lb_img_labels", None):
+            return
+        self._thumb_queue = queue.Queue()
+        self._thumb_thread = threading.Thread(target=self._thumb_loader_thread,
+                                              daemon=True)
+        self._thumb_thread.start()
+        self.root.after(50, self._poll_thumb_queue)
+
     def add_image(self, img_dict, render_thumb=True):
         """Append ONE image after construction: register its annotation state,
         build its thumbnail-strip row, and (optionally) render its thumbnail in
@@ -1823,19 +1890,23 @@ class DebugUIBase:
             self.root.after(50, self._poll_stream_thumbs)
         q = self._stream_q
 
+        gen = self._img_generation
+
         def work():
             try:
                 pil = self._load_thumb_pil(img_dict)
                 pil.thumbnail((210, 140), Image.LANCZOS)
             except Exception:
                 pil = None
-            q.put((i, pil))
+            q.put((gen, i, pil))
         threading.Thread(target=work, daemon=True).start()
 
     def _poll_stream_thumbs(self):
         try:
             while True:
-                i, pil = self._stream_q.get_nowait()
+                gen, i, pil = self._stream_q.get_nowait()
+                if gen != self._img_generation:
+                    continue                  # thumb for a torn-down image set
                 if pil is not None and i < len(self.lb_img_labels):
                     photo = ImageTk.PhotoImage(self._color_manage(pil))
                     self.lb_photos[i] = photo
@@ -1847,20 +1918,23 @@ class DebugUIBase:
 
     def _thumb_loader_thread(self):
         """Background: open + resize each image, push PIL Image to queue."""
+        gen = self._img_generation
         for i, img_dict in enumerate(self.images):
             try:
                 pil_img = self._load_thumb_pil(img_dict)
                 pil_img.thumbnail((210, 140), Image.LANCZOS)
             except Exception:
                 pil_img = None
-            self._thumb_queue.put((i, pil_img))
+            self._thumb_queue.put((gen, i, pil_img))
 
     def _poll_thumb_queue(self):
         """Main thread: drain queue, create PhotoImages, update labels."""
         try:
             while True:
-                i, pil_img = self._thumb_queue.get_nowait()
-                if pil_img is not None:
+                gen, i, pil_img = self._thumb_queue.get_nowait()
+                if gen != self._img_generation:
+                    continue                  # thumb for a torn-down image set
+                if pil_img is not None and i < len(self.lb_img_labels):
                     photo = ImageTk.PhotoImage(self._color_manage(pil_img))
                     self.lb_photos[i] = photo
                     self.lb_img_labels[i].config(image=photo, text="", width=0, height=0)

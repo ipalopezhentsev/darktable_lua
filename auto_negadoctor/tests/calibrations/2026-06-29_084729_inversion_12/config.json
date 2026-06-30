@@ -1,0 +1,20 @@
+{
+  "kind": "inversion",
+  "rolls": [
+    "2506-1"
+  ],
+  "fit": {
+    "method": "coordinate_descent",
+    "epsilon": 0.0005,
+    "max_iters": 6,
+    "tolerances": {
+      "clip_max_frac": 0.01
+    },
+    "params": "all"
+  },
+  "comment": "repeat afterchanging GT and making GT depend only on GT params, not defaults, and also extracted out of loop for speed, compare with _01",
+  "metric": "histogram_emd_total (render vs GT-render, picture-vs-picture)",
+  "created": "2026-06-29T00:15:00",
+  "git_commit": "91b1d9e",
+  "command_line": "run_calibration.py --config calibrations/configs/inversion_descent.json --rolls 2506-1 --comment repeat afterchanging GT and making GT depend only on GT params, not defaults, and also extracted out of loop for speed, compare with _01"
+}

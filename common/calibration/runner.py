@@ -39,6 +39,11 @@ import numpy as np
 BIG_PENALTY = 1e6   # per rejected / constraint-violating / clipping frame
 
 
+def _sorted(d):
+    """Param dict with keys in alphabetical order (for stable fitted_params.json)."""
+    return {k: d[k] for k in sorted(d)}
+
+
 # ---------------------------------------------------------------------------
 # Feature adapter
 # ---------------------------------------------------------------------------
@@ -747,11 +752,12 @@ def _git_commit(cwd):
         return None
 
 
-def _session_dir(calib_dir, kind):
+def _session_dir(calib_dir, kind, suffix=""):
     calib_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    nn = sum(1 for p in calib_dir.glob(f"*_{kind}_*") if p.is_dir()) + 1
-    d = calib_dir / f"{stamp}_{kind}_{nn:02d}"
+    tag = f"{kind}_{suffix}" if suffix else kind
+    nn = sum(1 for p in calib_dir.glob(f"*_{tag}_*") if p.is_dir()) + 1
+    d = calib_dir / f"{stamp}_{tag}_{nn:02d}"
     d.mkdir(parents=True)
     return d
 
@@ -971,22 +977,31 @@ def _write_report(adapter, path, config, results):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _append_index(adapter, kind, config, results, session_name):
-    idx = adapter.calib_dir / f"INDEX_{kind}.md"
+def _append_index_row(calib_dir, kind, *, session_name, comment, rolls, method,
+                      objective, headline, wall, commit):
+    idx = calib_dir / f"INDEX_{kind}.md"
     if not idx.is_file():
         idx.write_text(
             f"# Calibration history — {kind}\n\n"
             "Comparable rows (one metric per kind; see calibrations/README.md).\n\n"
             "| session | comment | rolls | method | objective | headline | wall_s | commit |\n"
             "|---|---|---|---|---|---|---|---|\n", encoding="utf-8")
-    comment = (config.get("comment") or "").replace("|", "\\|").replace("\n", " ")
+    comment = (comment or "").replace("|", "\\|").replace("\n", " ")
     row = (f"| [{session_name}]({session_name}/report.md) | {comment} "
-           f"| {','.join(config['rolls'])} | {_method_desc(config['fit'])} "
-           f"| {_fmt(results['objective_final'])} "
-           f"| {adapter.headline(kind, results['aggregate'])} "
-           f"| {results['wall_seconds']} | {config.get('git_commit')} |\n")
+           f"| {','.join(rolls)} | {method} | {_fmt(objective)} "
+           f"| {headline} | {wall} | {commit} |\n")
     with open(idx, "a", encoding="utf-8") as f:
         f.write(row)
+
+
+def _append_index(adapter, kind, config, results, session_name):
+    _append_index_row(
+        adapter.calib_dir, kind, session_name=session_name,
+        comment=config.get("comment"), rolls=config["rolls"],
+        method=_method_desc(config["fit"]),
+        objective=results["objective_final"],
+        headline=adapter.headline(kind, results["aggregate"]),
+        wall=results["wall_seconds"], commit=config.get("git_commit"))
 
 
 # ---------------------------------------------------------------------------
@@ -1082,7 +1097,7 @@ def run_session(adapter, config):
     (session / "results.json").write_text(json.dumps(results, indent=2))
     (session / "fitted_params.json").write_text(json.dumps(
         {"kind": kind, "git_commit": config["git_commit"],
-         "fitted": results["fitted"], "init": results["init"]}, indent=2))
+         "fitted": _sorted(results["fitted"]), "init": _sorted(results["init"])}, indent=2))
     # Complete DROP-IN preset = DEFAULT_TUNING + the fitted overrides. Adopting the
     # result is then `cp fitted_preset.json presets/<name>.json` — no source edits.
     adapter.schema.dump(reg.to_tuning(results["fitted"]),
@@ -1098,6 +1113,272 @@ def run_session(adapter, config):
         for n, v in best.items():
             print(f"  {n}: {_fmt(results['init'][n])} -> {_fmt(v)}")
     return session
+
+
+# ---------------------------------------------------------------------------
+# Cross-validation (leave-one-roll-out) — feature-agnostic
+# ---------------------------------------------------------------------------
+
+def _holdout_score(adapter, kind, held_roll, spec, tol, overrides):
+    """Build the kind's evaluator over a SINGLE held-out roll and score `overrides`
+    on it. The held-out roll never influenced these overrides (it was excluded from
+    the fold's fit), so this is an honest 'unseen roll' estimate. Per-roll results are
+    self-contained here — the inversion/crop/vignette prefixes are computed per roll —
+    so scoring a roll alone matches scoring it inside a multi-roll session."""
+    evaluate, _ = adapter.evaluators[kind]([held_roll], tol, list(spec))
+    return evaluate(overrides)
+
+
+def run_cross_validation(adapter, config):
+    """Leave-one-roll-out (LORO) cross-validation of a fit RECIPE (feature-agnostic).
+
+    For each roll, fit the configured --method on all the OTHER rolls and score the
+    fitted constants on the held-out roll; compare that to the CURRENT preset (init)
+    on the same roll. The mean held-out delta is the honest 'will this generalise?'
+    gate — overfit re-tunes look great on the rolls they were fit on but lose here.
+    Then fit ONCE on ALL rolls: those are the constants to ADOPT (more data -> better
+    values); the held-out comparison only says WHETHER to adopt them. Also reports each
+    constant's spread ACROSS folds: small = a universal constant (bake into the preset),
+    large = roll-specific taste (belongs in a per-frame/scene layer, not the preset).
+
+    Not a fit METHOD (those choose the inner search) but a MODE that wraps one — so it
+    lives in the base runner and every feature/kind inherits it. RECORD-ONLY like
+    run_session: writes a session dir; the user adopts by hand only if the verdict says
+    so."""
+    kind = config["kind"]
+    if kind not in adapter.evaluators:
+        raise ValueError(f"unknown kind {kind!r}")
+    reg = adapter.registry
+    fit = config["fit"]
+    if fit.get("method", "none") == "none":
+        raise ValueError("cross-validation needs a search --method — 'none' has "
+                         "nothing to validate (candidate would equal the current "
+                         "preset on every fold)")
+    spec = build_spec(reg, kind, fit.get("params"))
+    if not spec:
+        raise ValueError("fit.params is empty — nothing to cross-validate")
+
+    rolls = adapter.discover_rolls(config.get("rolls") or None)
+    if len(rolls) < 2:
+        print(f"SKIP: leave-one-roll-out needs >=2 {kind} rolls with local images "
+              f"(found {len(rolls)}). See the feature's fixtures README.")
+        return None
+    config["rolls"] = [r["id"] for r in rolls]
+    config["metric"] = adapter.metric_name[kind]
+    config["created"] = datetime.now().isoformat(timespec="seconds")
+    config["git_commit"] = _git_commit(adapter.calib_dir)
+    config["command_line"] = " ".join(sys.argv)
+    fit["cross_validate"] = "leave_one_roll_out"
+
+    tol = dict(fit.get("tolerances") or {})
+    if fit.get("downsample"):
+        tol["downsample"] = int(fit["downsample"])
+    init = {n: s["init"] for n, s in spec.items()}
+    K = len(rolls)
+    # The final all-rolls fit (the adoptable constants) is OPT-IN: by default a CV run
+    # only measures generalisation (the verdict + per-constant stability). Enable it to
+    # also produce fitted_preset.json — but adopt that only if the verdict is ADOPT.
+    do_final = bool(fit.get("cv_final_fit"))
+
+    print("=" * 70)
+    print(f"CROSS-VALIDATION (leave-one-roll-out)  kind={kind}  "
+          f"inner={_method_desc(fit)}")
+    print(f"  rolls={K} ({', '.join(config['rolls'])})  params={len(spec)}")
+    print(f"  metric: {config['metric']}  (lower = better)")
+    plan_final = (f" + 1 final fit on all {K} (adoptable constants)" if do_final
+                  else " (final all-rolls fit OFF — verdict + stability only)")
+    print(f"  plan: {K} fold fit(s) on {K - 1} roll(s) each{plan_final}")
+    print("=" * 70, flush=True)
+
+    snap = reg.snapshot(list(spec))     # restore the live module no matter what
+    t_wall = time.perf_counter()
+    folds = []
+    try:
+        for i, held in enumerate(rolls, 1):
+            train = [r for r in rolls if r["id"] != held["id"]]
+            print(f"\n--- fold {i}/{K}: hold out {held['id']}, fit on "
+                  f"{', '.join(r['id'] for r in train)} ---", flush=True)
+            train_eval, _ = adapter.evaluators[kind](train, tol, list(spec))
+            best, best_obj, trials, _ = optimize(
+                lambda o: train_eval(o)["objective"], spec, fit, adapter.proc_workers)
+            print(f"    scoring fold on held-out {held['id']}...", flush=True)
+            cand = _holdout_score(adapter, kind, held, spec, tol, best)
+            base = _holdout_score(adapter, kind, held, spec, tol, init)
+            folds.append({
+                "held_out": held["id"], "train": [r["id"] for r in train],
+                "train_objective": best_obj, "trials": trials, "fitted": best,
+                "holdout_candidate": cand["objective"],
+                "holdout_baseline": base["objective"],
+                "holdout_delta": cand["objective"] - base["objective"],
+                "candidate_aggregate": cand["aggregate"],
+                "baseline_aggregate": base["aggregate"],
+            })
+            print(f"    held-out {held['id']}: baseline {_fmt(base['objective'])} "
+                  f"-> candidate {_fmt(cand['objective'])} "
+                  f"(delta {_fmt(cand['objective'] - base['objective'])})", flush=True)
+
+        final = None
+        prep_secs = {}
+        if do_final:
+            print(f"\n--- final fit on ALL {K} rolls (the constants to adopt) ---",
+                  flush=True)
+            final_eval, prep_secs = adapter.evaluators[kind](rolls, tol, list(spec))
+            final_init_obj = final_eval(init)["objective"]
+            final_best, _fo, final_trials, final_trace = optimize(
+                lambda o: final_eval(o)["objective"], spec, fit, adapter.proc_workers)
+            final_result = final_eval(final_best)
+            final = {"objective_initial": final_init_obj, "objective_final": _fo,
+                     "trials": final_trials, "trace": final_trace,
+                     "init": init, "fitted": final_best,
+                     "aggregate": final_result["aggregate"],
+                     "per_roll": final_result["per_roll"]}
+    finally:
+        reg.restore(snap)
+
+    wall = round(time.perf_counter() - t_wall, 2)
+    mean_cand = statistics.fmean(f["holdout_candidate"] for f in folds)
+    mean_base = statistics.fmean(f["holdout_baseline"] for f in folds)
+    improved = mean_cand < mean_base
+    verdict = "ADOPT" if improved else "DO NOT ADOPT"
+
+    stability = []
+    for n in spec:
+        vals = [f["fitted"][n] for f in folds]
+        lo, hi = spec[n]["range"]
+        rng = (hi - lo) or 1.0
+        spread = max(vals) - min(vals)
+        stability.append({
+            "param": n, "init": init[n], "fold_min": min(vals),
+            "fold_max": max(vals), "fold_mean": statistics.fmean(vals),
+            "spread": spread, "spread_frac_of_range": spread / rng,
+            "final_all_rolls": (final["fitted"][n] if final else None),
+            "stable": spread / rng < 0.1})
+
+    results = {
+        "wall_seconds": wall, "cross_validation": "leave_one_roll_out",
+        "n_folds": K, "mean_holdout_baseline": mean_base,
+        "mean_holdout_candidate": mean_cand,
+        "mean_holdout_delta": mean_cand - mean_base, "improved": improved,
+        "verdict": verdict, "folds": folds, "stability": stability,
+        "prep_seconds_by_roll": prep_secs, "final": final,
+    }
+
+    session = _session_dir(adapter.calib_dir, kind, suffix="cv")
+    (session / "config.json").write_text(json.dumps(config, indent=2))
+    (session / "results.json").write_text(json.dumps(results, indent=2))
+    if final:
+        (session / "fitted_params.json").write_text(json.dumps(
+            {"kind": kind, "cross_validation": "leave_one_roll_out",
+             "verdict": verdict, "mean_holdout_baseline": mean_base,
+             "mean_holdout_candidate": mean_cand, "git_commit": config["git_commit"],
+             "fitted": _sorted(final["fitted"]), "init": _sorted(init)}, indent=2))
+        # Drop-in preset from the FINAL all-rolls fit — adopt ONLY if verdict == ADOPT.
+        adapter.schema.dump(reg.to_tuning(final["fitted"]),
+                            str(session / "fitted_preset.json"))
+    _write_cv_report(adapter, session / "report.md", config, results)
+    _append_index_row(
+        adapter.calib_dir, kind, session_name=session.name,
+        comment=config.get("comment"), rolls=config["rolls"],
+        method=f"loro({_method_desc(fit)})",
+        objective=(final["objective_final"] if final else mean_cand),
+        headline=f"held-out {_fmt(mean_base)}->{_fmt(mean_cand)} [{verdict}]",
+        wall=wall, commit=config.get("git_commit"))
+
+    print(f"\nCross-validation session written: {session}")
+    print(f"  held-out mean: baseline {_fmt(mean_base)} -> candidate "
+          f"{_fmt(mean_cand)} (delta {_fmt(mean_cand - mean_base)})")
+    print(f"  VERDICT: {verdict} "
+          f"({'re-tune generalises' if improved else 'overfits — keep current preset'})")
+    if final:
+        print(f"  final all-rolls fit -> fitted_preset.json "
+              f"({final['trials']} trial(s), {wall}s total)")
+    else:
+        print(f"  final all-rolls fit OFF (--cv-final-fit to also produce an "
+              f"adoptable preset); {wall}s total")
+    return session
+
+
+def _write_cv_report(adapter, path, config, results):
+    kind = config["kind"]
+    final = results["final"]
+    L = [f"# Cross-validation (leave-one-roll-out) — {kind}\n"]
+    if config.get("comment"):
+        L.append(f"- comment: {config['comment']}")
+    L.append(f"- created: {config['created']}")
+    L.append(f"- git commit: {config.get('git_commit')}")
+    L.append(f"- rolls ({results['n_folds']} folds): {', '.join(config['rolls'])}")
+    L.append(f"- metric: {config['metric']} (lower = better)")
+    L.append(f"- inner fit: {_method_desc(config['fit'])}")
+    fitp = config["fit"].get("params") or {}
+    if fitp:
+        L.append(f"- fitted params: {', '.join(fitp)}")
+    if config["fit"].get("downsample"):
+        L.append(f"- downsample (calibration-only): "
+                 f"{int(config['fit']['downsample'])}x")
+    L.append(f"- wall time: {results['wall_seconds']}s\n")
+
+    L.append("## Verdict — does the re-tune generalise?\n")
+    L.append(f"Mean held-out objective over {results['n_folds']} folds — each roll "
+             "scored by constants fitted on the OTHER rolls only (it never saw "
+             "itself):\n")
+    L.append(f"- current preset (baseline): **{_fmt(results['mean_holdout_baseline'])}**")
+    L.append(f"- re-tuned (candidate):      **{_fmt(results['mean_holdout_candidate'])}**")
+    L.append(f"- delta: **{_fmt(results['mean_holdout_delta'])}** "
+             f"({'improvement' if results['improved'] else 'REGRESSION'})\n")
+    L.append(f"### {results['verdict']}\n")
+    if results["improved"]:
+        L.append("The re-tune beats the current preset on rolls it never saw — adopt "
+                 "the FINAL all-rolls constants below (`fitted_preset.json`).\n")
+    else:
+        L.append("The re-tune does NOT beat the current preset on held-out rolls — it "
+                 "is overfitting the calibration rolls. **Keep the current preset.**\n")
+
+    L.append("## Per fold\n")
+    L.append("| held-out roll | baseline | candidate | delta | train objective "
+             "| trials |")
+    L.append("|---|---|---|---|---|---|")
+    for f in results["folds"]:
+        L.append(f"| {f['held_out']} | {_fmt(f['holdout_baseline'])} "
+                 f"| {_fmt(f['holdout_candidate'])} | {_fmt(f['holdout_delta'])} "
+                 f"| {_fmt(f['train_objective'])} | {f['trials']} |")
+    L.append("")
+
+    L.append("## Per-constant stability across folds\n")
+    L.append("How much each fitted constant moves depending on which roll is held out. "
+             "SMALL spread = a universal constant (safe to bake into the preset); LARGE "
+             "spread = roll-specific taste (belongs in a per-frame / scene layer, not "
+             "the global preset).\n")
+    fcol = "| final (all rolls) " if final else ""
+    fsep = "|---" if final else ""
+    L.append(f"| constant | init | fold min | fold max | spread (% of range) "
+             f"{fcol}| verdict |")
+    L.append(f"|---|---|---|---|---{fsep}|---|")
+    for s in results["stability"]:
+        fval = f"| {_fmt(s['final_all_rolls'])} " if final else ""
+        L.append(f"| {s['param']} | {_fmt(s['init'])} | {_fmt(s['fold_min'])} "
+                 f"| {_fmt(s['fold_max'])} | {s['spread_frac_of_range'] * 100:.0f}% "
+                 f"{fval}| {'stable' if s['stable'] else 'VARIABLE'} |")
+    L.append("")
+
+    if final:
+        L.append("## Final fit (all rolls — the constants to adopt)\n")
+        L.append(f"- objective (all rolls): {_fmt(final['objective_initial'])} (init) "
+                 f"-> {_fmt(final['objective_final'])} (fitted), "
+                 f"{final['trials']} trial(s)\n")
+        L.append("| constant | init | fitted |")
+        L.append("|---|---|---|")
+        for n, v in final["fitted"].items():
+            L.append(f"| {n} | {_fmt(final['init'][n])} | {_fmt(v)} |")
+        L.append("")
+        L.append("Adopt by hand ONLY if the verdict above is ADOPT: "
+                 "`cp fitted_preset.json <feature>/presets/<name>.json`.\n")
+    else:
+        L.append("## Final fit (all rolls)\n")
+        L.append("Skipped — the final all-rolls fit is OFF by default. This run "
+                 "measured generalisation only (verdict + stability above). Re-run "
+                 "with `--cv-final-fit` to also produce the adoptable "
+                 "`fitted_preset.json`.\n")
+    path.write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1416,8 @@ def load_config(adapter, args):
             config["fit"][key] = val
     if args.pca:
         config["fit"]["pca"] = True
+    if getattr(args, "cv_final_fit", False):
+        config["fit"]["cv_final_fit"] = True
     if getattr(args, "downsample", None) is not None:
         config["fit"]["downsample"] = args.downsample
     return config
@@ -1196,6 +1479,19 @@ def run_main(adapter):
                          "~Nx faster trials; vignette/film base stay full res and the "
                          "EMD is still measured full-res. Small param drift (validate "
                          "the fitted preset full-res). Omit/1 = off (current behavior)")
+    ap.add_argument("--cross-validate", action="store_true", dest="cross_validate",
+                    help="leave-one-roll-out cross-validation: run the configured "
+                         "--method as the inner fit on each (all rolls minus one) "
+                         "subset, score the fitted constants on the held-out roll vs "
+                         "the current preset (the adopt/skip gate), and report each "
+                         "constant's cross-fold stability. By default it does NOT fit "
+                         "on all rolls; add --cv-final-fit for that. Needs >=2 rolls "
+                         "and a search --method.")
+    ap.add_argument("--cv-final-fit", action="store_true", dest="cv_final_fit",
+                    help="cross-validation: ALSO fit once on ALL rolls after the folds "
+                         "and write the adoptable fitted_preset.json (OFF by default — "
+                         "the folds alone give the verdict + stability). Adopt only if "
+                         "the verdict is ADOPT.")
     ap.add_argument("--review", metavar="SESSION_DIR",
                     help="open the debug UI comparing fitted vs live for a session")
     ap.add_argument("--review-roll", help="roll id to review (default: first)")
@@ -1206,8 +1502,14 @@ def run_main(adapter):
         return 0
 
     config = load_config(adapter, args)
+    # CV mode is triggered by the CLI flag OR by `fit.cross_validate` in the config
+    # (so a `--config inversion_cv.json` is self-contained).
+    cv = getattr(args, "cross_validate", False) or config["fit"].get("cross_validate")
     try:
-        run_session(adapter, config)
+        if cv:
+            run_cross_validation(adapter, config)
+        else:
+            run_session(adapter, config)
     except KeyboardInterrupt:
         sys.stdout.flush()
         sys.stderr.flush()

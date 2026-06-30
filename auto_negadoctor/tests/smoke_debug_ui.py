@@ -622,19 +622,29 @@ def main():
             assert abs(img["params"]["gamma"] - gt["gamma"]) < 1e-9, \
                 "R did not swap in the GT params"
             assert app.review_btn.cget("text") == "Src: GT"
+            # Preset dropdown is DISABLED on a non-live (unmovable) source.
+            assert str(app.preset_combo.cget("state")) == "disabled", \
+                "preset combo must be disabled when viewing GT"
             app._toggle_review_source()                       # GT -> live
             assert app.review_source == "live"
             assert abs(img["params"]["gamma"] - live["gamma"]) < 1e-9, \
                 "R did not swap in the live params"
             assert app.review_btn.cget("text") == "Src: live"
+            # ...and re-enabled when 'live' (the only preset-driven source) shows.
+            assert str(app.preset_combo.cget("state")) == "readonly", \
+                "preset combo must be enabled when viewing live"
             app._toggle_review_source()                       # live -> fitted (wrap)
             assert app.review_source == "fitted"
+            assert str(app.preset_combo.cget("state")) == "disabled", \
+                "preset combo must be disabled when viewing fitted"
             assert abs(img["params"]["gamma"] - base["gamma"]) < 1e-9, \
                 "R did not wrap back to fitted"
             assert app.review_btn.cget("text") == "Src: FITTED"
             img.pop("review", None)
             img.pop("review_kind", None)
             app.review_mode = False
+            app._update_preset_combo_state()   # back to readonly (not reviewing)
+            assert str(app.preset_combo.cget("state")) == "readonly"
         step("review_toggle", review_toggle)
 
         # Live wb feedback for the corrected patch
@@ -957,6 +967,51 @@ def main():
             assert abs(app.images[cur]["params"]["gamma"] - default_gamma) < 1e-9, \
                 "cached preset params differ from the re-run"
         step("preset_reanalyze", preset_reanalyze)
+
+        # Preset PERSISTENCE: switching the active preset must re-write the
+        # on-disk {stem}_debug_nega.json so a copied folder is self-contained GT
+        # (the bug: switches updated only in-memory img_dicts, leaving the saved
+        # params/constants on the start preset). Switch to a bundled preset, then
+        # back to "(as exported)", asserting the disk tracks the screen each time.
+        def preset_persist():
+            import auto_negadoctor as _an
+            pname = next((p for p in ("default_better_crop_and_inversion",
+                                      "default_calib_on_two")
+                          if p in app.preset_combo["values"]), None)
+            if pname is None:
+                return
+            cur = app.current_idx
+            stem0 = app.images[cur]["stem"]
+            sess_file = session / f"{stem0}_debug_nega.json"
+            app._reanalysis_queue = queue.Queue()
+            app._reanalysis_worker(pname)
+            result = None
+            while result is None:
+                item = app._reanalysis_queue.get_nowait()
+                if item[0] != "progress":
+                    result = item[1]
+            assert result["error"] is None, f"reanalysis failed: {result['error']}"
+            app._reanalyzing = True
+            app._finish_reanalysis(result)   # -> _apply_reanalysis_result -> persist
+            assert app._current_preset_label == pname, "label not switched"
+            disk = json.loads(sess_file.read_text())
+            assert disk.get("preset") == pname, \
+                f"on-disk session not stamped with the preset: {disk.get('preset')}"
+            want = _an.frame_constants(_an._tuning.load(pname))
+            assert disk["constants"]["DMAX_DEFAULT"] == want["DMAX_DEFAULT"], \
+                "on-disk constants block is not the active preset's"
+            assert disk["params"]["D_max"] == app.images[cur]["params"]["D_max"], \
+                "on-disk params out of sync with the on-screen (switched) params"
+            assert app.data["constants"]["DMAX_DEFAULT"] == want["DMAX_DEFAULT"], \
+                "in-memory constants (report source) not refreshed on switch"
+            # "(as exported)" re-bakes the ORIGINAL saved base (here: preset None,
+            # the un-migrated start state).
+            app.preset_var.set(app._PRESET_AS_EXPORTED)
+            app._on_preset_selected()
+            disk2 = json.loads(sess_file.read_text())
+            assert disk2.get("preset") == app._exported_preset_name, \
+                "'(as exported)' did not restore the saved preset name on disk"
+        step("preset_persist", preset_persist)
 
         step("clear_selection", lambda: app._clear_selection())
         step("close", lambda: app._on_close())

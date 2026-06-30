@@ -746,6 +746,29 @@ gained optional `build_menus`/`build_toolbar` hooks (no-op for crop/dust) and an
   and re-apply on top of the new params; `(as exported)` restores a pristine
   deepcopy of the original session (`_orig_images`). Re-analysis is analytical
   only (AI variant reset).
+- **The active preset is BAKED into the on-disk session (`_persist_active_session`,
+  2026-06-28).** Selecting a preset (or "(as exported)") and closing the window
+  both re-write every `{stem}_debug_nega.json` from `self.images` via
+  `auto_negadoctor.write_session_dicts` with that preset's FULL constant block
+  (`frame_constants(cfg)`) + its name (`preset` field), and refresh the in-memory
+  `self.constants`/`data["constants"]` (so the report's "constants at time of run"
+  agrees) and any existing annotation file's `applied` baseline. WHY: a GT/session
+  folder is created by switching off the start preset (`default.json`, which the
+  user doesn't use) onto a chosen one, annotating, and COPYING the temp dir into
+  `fixtures/rolls/<roll>/correct-inversion/`. Previously a switch updated only the
+  in-memory img_dicts, so the saved `params`/`constants` stayed on `default.json` —
+  and calibration's `gt_params_for_frame` (`p = dict(fr["params"])`) scored every
+  NON-annotated field against the wrong base. Now the folder is **self-contained**:
+  the render reads its baked `params`, so a deleted preset still opens & renders
+  identically (the `preset` name is provenance only). On RE-OPEN, the baked `preset`
+  name sets the dropdown label / seeds the preset cache (so re-selecting it is an
+  instant hit, never re-loads a possibly-deleted JSON), and a name no longer bundled
+  is appended to the dropdown but backed by the baked params; `(as exported)` is the
+  always-available baked-state fallback (offered in `--review` too, mapped to the
+  precomputed `live_default`). To REPAIR a folder baked under the wrong preset: open
+  it, pick the right preset, confirm the look, close — persist rewrites the files.
+  Persist is **non-review only** (in review the dropdown drives `review['live']`,
+  not the base). Smoke-tested (`preset_persist`).
 - Both paths share `_call_process_roll` (cfg from preset, source negatives from
   `_source_image_paths` — loaded frames' paths, else the session-dir TIFFs/JPEGs)
   and `_make_progress_popup`/`_set_progress`. Smoke-tested (`run_mode_initial` +
@@ -934,7 +957,29 @@ own history index (never mixed):
 - **inversion** — objective = median **histogram EMD** (`nega_model.
   histogram_distance`) between the algorithm's render and the user's GT-param
   render over the content crop (picture-vs-picture; the GT render is FIXED per
-  trial), with rendered hard-clip > `clip_max_frac` a hard constraint. Fits ANY
+  trial), with rendered hard-clip > `clip_max_frac` a hard constraint. **GT
+  SETTINGS ARE FIXED + STORED (2026-06-28):** the GT picture is rendered from the
+  GT folder's *stored* auto base — `rqt._load_gt_base(fixtures)` reads each
+  `<stem>_debug_nega.json`'s `params` (the self-contained baked-preset base the
+  user approved) — with the annotations layered on top
+  (`gt_params_for_frame(fr, g, base=stored)`), NOT from a fresh default.json
+  re-run. So the GT histogram uses the user's stored ground-truth settings while
+  the candidate histogram uses the trial's params (the user: "immensely
+  important"). A stem with no stored `debug_nega` falls back to the live base.
+  Shared by the objective (fast + full), the `--review` GT source, and the
+  `check_histogram_match` gate / `calibrate_histogram_match` instrument (all via
+  `histogram_per_frame`). Changing the GT base shifts the metric, so re-arm
+  `histogram_baseline.json` (none committed yet → the regression guard is inert).
+  **The GT HISTOGRAM is hoisted out of the trial loop (2026-06-28):** GT params
+  are fixed, so its render AND its histogram/percentiles/means are trial-invariant.
+  `nega_model.histogram_distance` was split into `histogram_b_stats(b, bins)` (the
+  candidate-INDEPENDENT B side — the `[0,hi)` scale is dtype-only) +
+  `histogram_distance_to(a, bstats)` (the per-trial A side); the inversion prep
+  caches `gt_stats = histogram_b_stats(gt_f)` (instead of the GT render rows) and
+  each trial calls `histogram_distance_to(prod_f, c["gt_stats"])`, so the GT
+  histogram is built ONCE per frame, never per trial. Byte-identical to
+  `histogram_distance(a,b)` (guarded by `test_forward_model`'s hoisted-GT check).
+  Fits ANY
   constant that shapes the picture (film base/Dmin, P_LOW/P_HIGH pickers, patch
   search, **white balance** — desats/bands/priors, print tune). Dispatch: a
   print-tune-only fit (`PRINT_TUNE_PARAMS`) re-tunes on cached frames (fast,
@@ -1036,20 +1081,29 @@ SHARED with the gates: `run_quality_tests.histogram_per_frame` (extracted from
 `--review <session>` works for **all three kinds**. It runs the pipeline under the
 session's FITTED constants and (separately) the LIVE source-code constants, builds
 a third **GT** payload from the user's annotations (`_review_gt_payloads`:
-inversion = `gt_params_for_frame` + hex; crop = the hand-drawn border rect;
-vignette has no per-frame GT so GT is omitted there), and attaches per-frame
+inversion = `gt_params_for_frame` over the **FIXED stored GT-folder base**
+(`rqt._load_gt_base`, the `<stem>_debug_nega.json` params) + annotations + hex;
+crop = the hand-drawn border rect; vignette has no per-frame GT so GT is omitted
+there), and attaches per-frame
 `review={fitted, gt?, live}` (kind-specific: inversion params / crop border / roll
 vignette) via `write_debug_sessions`, then opens the debug UI. Key **R** CYCLES
 the source FITTED → GT → live → FITTED (swapping the payload into `img_dict` so
 every render path uses it; sources a frame lacks — e.g. GT on an un-annotated
 frame — are skipped), the toolbar button + View-menu item show the CURRENT source
 (`Src: FITTED`/`Src: GT`/`Src: live`), and key **N** toggles the vignette
-correction on/off in the preview (before/after). The **`live` source TRACKS the
-preset dropdown** (default = `default.json`): in review mode the dropdown lists the
-bundled presets (no `(as exported)`) and picking one re-runs the analysis under it,
-redirecting the result into each frame's `review['live']`
-(`_apply_reanalysis_result` / `_review_live_payload`) instead of replacing the
-base img_dict, so fitted/GT stay frozen. `_review_payload` / `_review_gt_payloads`
+correction on/off in the preview (before/after). **ONLY the `live` source TRACKS
+the preset dropdown** (default = `default.json`): in review mode the dropdown lists
+the bundled presets + `(as exported)` (= the precomputed `live_default`) and picking
+one re-runs the analysis under it, redirecting the result into each frame's
+`review['live']` (`_apply_reanalysis_result` / `_review_live_payload`) instead of
+replacing the base img_dict — and the UI re-renders only when `live` is the source
+on screen. **The preset combo is DISABLED unless `live` is the source**
+(`_update_preset_combo_state`, called from `_set_review_source` / toolbar build /
+reanalysis+roll-switch finishers) — it has no effect on the unmovable GT/fitted, so
+it's greyed out there. **GT IS UNMOVABLE** (2026-06-28): it renders from the FIXED stored
+GT-folder settings + annotations and the dropdown NEVER touches it (the old
+`_rebuild_review_gt` preset-tracking of GT was removed — GT is the ground truth,
+not a function of the candidate preset); fitted stays frozen too. `_review_payload` / `_review_gt_payloads`
 / `_review_run` build the payloads; the UI side is `_apply_review_source` /
 `_toggle_review_source` (3-cycle) / `_toggle_vignette` (smoke-tested).
 

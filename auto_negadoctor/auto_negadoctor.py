@@ -2148,17 +2148,36 @@ def frame_session_dict(fr, roll, wall_time_s=None):
     return data
 
 
-def write_debug_sessions(frames, roll, output_dir, wall_time_s=None):
+def frame_constants(cfg=None):
+    """The `constants` block written into each {stem}_debug_nega.json: every
+    uppercase module constant (int/float/tuple, tuples -> lists).
+
+    With `cfg` given, the fittable `Tuning` fields reflect THAT cfg (the active
+    preset) instead of the live module globals, WITHOUT mutating globals — so a
+    preset switch in the debug UI can bake its own preset's constants into the
+    session even though the analysis reads the preset via `cfg` (DI), never
+    through the globals."""
+    constants = {k: v for k, v in globals().items()
+                 if k.isupper() and isinstance(v, (int, float, tuple))}
+    if cfg is not None:
+        constants.update(cfg._asdict())
+    return {k: (list(v) if isinstance(v, tuple) else v)
+            for k, v in constants.items()}
+
+
+def write_debug_sessions(frames, roll, output_dir, wall_time_s=None,
+                         cfg=None, preset=None):
     """Write {stem}_debug_nega.json per frame.
 
     NO baked preview/mask images are emitted. The debug UI renders the
     inversion and the analysis-crop mask LIVE from the source negative
     (`negative_path`) plus these params/border, so what it shows is always
-    the honest output of the current algorithm, never a stale cached file."""
-    constants = {k: v for k, v in globals().items()
-                 if k.isupper() and isinstance(v, (int, float, tuple))}
-    constants = {k: (list(v) if isinstance(v, tuple) else v)
-                 for k, v in constants.items()}
+    the honest output of the current algorithm, never a stale cached file.
+
+    `cfg`/`preset` stamp the active preset's full constant block + its name into
+    each file (the session's render is then self-contained / preset-deletion
+    resilient; `preset` is provenance only)."""
+    constants = frame_constants(cfg)
     out_dir = Path(output_dir)
 
     for fr in frames:
@@ -2166,10 +2185,36 @@ def write_debug_sessions(frames, roll, output_dir, wall_time_s=None):
         if data is None:
             continue
         data["constants"] = constants
+        data["preset"] = preset
         with open(out_dir / f"{fr['stem']}_debug_nega.json", "w") as f:
             json.dump(data, f, indent=2)
 
     print(f"Debug sessions written to: {out_dir}")
+
+
+def write_session_dicts(session_dicts, output_dir, constants=None, preset=None):
+    """Re-write {stem}_debug_nega.json from already-built per-frame session dicts
+    (the debug UI's `self.images`, produced by `frame_session_dict` during a
+    preset switch), stamping the active preset's `constants` block + `preset`
+    name (the caller builds `constants` via `frame_constants(cfg)` for a named
+    preset, or reuses the originally-loaded block for "(as exported)").
+
+    Keeps the on-disk session in sync with the on-screen preset so a copied
+    folder is self-contained ground truth. The dicts ARE the on-disk content
+    minus `constants`/`preset`, so this round-trips cleanly; private (`_`) and
+    `constants` keys are dropped defensively."""
+    constants = constants or {}
+    out_dir = Path(output_dir)
+    for data in session_dicts:
+        if not data or not data.get("stem"):
+            continue
+        out = {k: v for k, v in data.items()
+               if k != "constants" and not k.startswith("_")}
+        out["constants"] = constants
+        out["preset"] = preset
+        with open(out_dir / f"{data['stem']}_debug_nega.json", "w") as f:
+            json.dump(out, f, indent=2)
+    print(f"Debug sessions re-written to: {out_dir}")
 
 
 def load_debug_nega_dir(directory):

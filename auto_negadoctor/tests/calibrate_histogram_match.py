@@ -70,6 +70,7 @@ def run_roll(roll_info, write_baseline=False):
     frames, roll = an.process_roll(images, exif)
     by_stem = {fr["stem"]: fr for fr in frames if not fr.get("error")}
     gt_by_stem = rqt._load_ground_truth(fixtures)
+    gt_base = rqt._load_gt_base(fixtures)   # FIXED stored GT-folder settings
     if not gt_by_stem:
         print("  (no wb/print ground-truth annotations)")
         return
@@ -106,7 +107,8 @@ def run_roll(roll_info, write_baseline=False):
             print(f"  {stem}: load failed ({e})")
             continue
 
-        gt_u8 = _render_crop_rows(lin, fr["border"], gt_params_for_frame(fr, gt))
+        gt_u8 = _render_crop_rows(lin, fr["border"],
+                                  gt_params_for_frame(fr, gt, gt_base.get(stem)))
         prod_u8 = _render_crop_rows(lin, fr["border"], fr["params"])
         if gt_u8 is None or prod_u8 is None:
             continue

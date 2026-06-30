@@ -384,6 +384,36 @@ def test_histogram_distance():
     check("highlight lift moves hi9999 most", d["hi9999"] > d["hi99"] >= 0.0,
           f"hi99 {d['hi99']:.4f} hi999 {d['hi999']:.4f} hi9999 {d['hi9999']:.4f}")
 
+    # Hoisted GT side: histogram_distance_to(a, histogram_b_stats(b)) must be
+    # BYTE-IDENTICAL to histogram_distance(a, b) — this is what lets calibration
+    # precompute the fixed GT histogram ONCE out of the per-trial loop. Check it
+    # over several A/B pairs and every returned term, in float (calibration) and
+    # uint8 representations.
+    rng = np.random.default_rng(7)
+    pairs = [(fbase, fbright), (fbase, ftop), (fbase, fbase),
+             (rng.random((400, 3)), rng.random((250, 3)))]
+    for ai, (a, b) in enumerate(pairs):
+        for bins in (64, nm.HIST_BINS_14):
+            ref = nm.histogram_distance(a, b, bins=bins)
+            got = nm.histogram_distance_to(a, nm.histogram_b_stats(b, bins))
+            for k, rv in ref.items():
+                gv = got[k]
+                if isinstance(rv, list):
+                    ok = all(abs(float(x) - float(y)) < 1e-12
+                             for x, y in zip(rv, gv))
+                else:
+                    ok = abs(float(rv) - float(gv)) < 1e-12
+                check(f"hoisted GT identical (pair {ai}, bins {bins}, {k})", ok,
+                      f"{rv} vs {gv}")
+    # uint8 representation too
+    a8 = (fbase * 255 + 0.5).astype(np.uint8)
+    b8 = (fbright * 255 + 0.5).astype(np.uint8)
+    ref = nm.histogram_distance(a8, b8)
+    got = nm.histogram_distance_to(a8, nm.histogram_b_stats(b8, 64))
+    check("hoisted GT identical (uint8 total)",
+          abs(ref["total"] - got["total"]) < 1e-12,
+          f"{ref['total']} vs {got['total']}")
+
 
 def main():
     test_encode_decode()

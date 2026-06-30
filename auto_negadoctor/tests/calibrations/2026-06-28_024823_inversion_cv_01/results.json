@@ -1,0 +1,216 @@
+{
+  "wall_seconds": 26424.39,
+  "cross_validation": "leave_one_roll_out",
+  "n_folds": 4,
+  "mean_holdout_baseline": 0.0652130426066732,
+  "mean_holdout_candidate": 0.08121200046040578,
+  "mean_holdout_delta": 0.01599895785373258,
+  "improved": false,
+  "verdict": "DO NOT ADOPT",
+  "folds": [
+    {
+      "held_out": "2506-1",
+      "train": [
+        "2510-11-1",
+        "2511-12-1",
+        "2512-2601-1"
+      ],
+      "train_objective": 0.0606555519583622,
+      "trials": 288,
+      "fitted": {
+        "PRINT_GAMMA": 4.0660211247545455,
+        "PRINT_HI_CEIL": 0.99,
+        "PRINT_HI_PCT": 99.99,
+        "PRINT_CLIP_BUDGET": 0.0
+      },
+      "holdout_candidate": 0.06629350498266241,
+      "holdout_baseline": 0.041907248917214854,
+      "holdout_delta": 0.02438625606544756,
+      "candidate_aggregate": {
+        "median_total": 0.06629350498266241,
+        "median_luma": 0.06672615783225574,
+        "median_color": 0.01760065907984928,
+        "median_hi999": 0.009598655954766111,
+        "max_clip": 0.0,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 38
+      },
+      "baseline_aggregate": {
+        "median_total": 0.041907248917214854,
+        "median_luma": 0.03191945406199301,
+        "median_color": 0.01704670439316017,
+        "median_hi999": 0.005848831600751225,
+        "max_clip": 5.3867700926524454e-05,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 38
+      }
+    },
+    {
+      "held_out": "2510-11-1",
+      "train": [
+        "2506-1",
+        "2511-12-1",
+        "2512-2601-1"
+      ],
+      "train_objective": 0.05329030238605925,
+      "trials": 360,
+      "fitted": {
+        "PRINT_GAMMA": 4.464868306102316,
+        "PRINT_HI_CEIL": 0.8812869372748948,
+        "PRINT_HI_PCT": 99.63812651580515,
+        "PRINT_CLIP_BUDGET": 0.011306359457467663
+      },
+      "holdout_candidate": 0.06474522510605027,
+      "holdout_baseline": 0.06770864901006571,
+      "holdout_delta": -0.0029634239040154386,
+      "candidate_aggregate": {
+        "median_total": 0.06474522510605027,
+        "median_luma": 0.04217688609831041,
+        "median_color": 0.03888072583534617,
+        "median_hi999": 0.015349580503471794,
+        "max_clip": 0.004885026449314477,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 38
+      },
+      "baseline_aggregate": {
+        "median_total": 0.06770864901006571,
+        "median_luma": 0.05414479835159439,
+        "median_color": 0.034906937945018215,
+        "median_hi999": 0.016305940662180274,
+        "max_clip": 0.002159127712404189,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 38
+      }
+    },
+    {
+      "held_out": "2511-12-1",
+      "train": [
+        "2506-1",
+        "2510-11-1",
+        "2512-2601-1"
+      ],
+      "train_objective": 0.05505939275895661,
+      "trials": 360,
+      "fitted": {
+        "PRINT_GAMMA": 4.558953022974371,
+        "PRINT_HI_CEIL": 0.9291549862151691,
+        "PRINT_HI_PCT": 99.99,
+        "PRINT_CLIP_BUDGET": 0.005274703624792349
+      },
+      "holdout_candidate": 0.07100826474835971,
+      "holdout_baseline": 0.06360223237753238,
+      "holdout_delta": 0.007406032370827334,
+      "candidate_aggregate": {
+        "median_total": 0.07100826474835971,
+        "median_luma": 0.06152620855270288,
+        "median_color": 0.021106368414218077,
+        "median_hi999": 0.02915965761452699,
+        "max_clip": 0.00013730982589114078,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 37
+      },
+      "baseline_aggregate": {
+        "median_total": 0.06360223237753238,
+        "median_luma": 0.050986216254654576,
+        "median_color": 0.01614305308765989,
+        "median_hi999": 0.008226751208490923,
+        "max_clip": 0.000381107935211651,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 37
+      }
+    },
+    {
+      "held_out": "2512-2601-1",
+      "train": [
+        "2506-1",
+        "2510-11-1",
+        "2511-12-1"
+      ],
+      "train_objective": 0.045828193161422635,
+      "trials": 360,
+      "fitted": {
+        "PRINT_GAMMA": 4.679522352426404,
+        "PRINT_HI_CEIL": 0.884104410497585,
+        "PRINT_HI_PCT": 99.53471371052461,
+        "PRINT_CLIP_BUDGET": 0.01080309809546517
+      },
+      "holdout_candidate": 0.1228010070045507,
+      "holdout_baseline": 0.08763404012187986,
+      "holdout_delta": 0.03516696688267083,
+      "candidate_aggregate": {
+        "median_total": 0.1228010070045507,
+        "median_luma": 0.13195570271264517,
+        "median_color": 0.016255783446578593,
+        "median_hi999": 0.026948502831044885,
+        "max_clip": 0.0015587626649466526,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 37
+      },
+      "baseline_aggregate": {
+        "median_total": 0.08763404012187986,
+        "median_luma": 0.0858771725425235,
+        "median_color": 0.015577192955336596,
+        "median_hi999": 0.010426027095488788,
+        "max_clip": 0.0026068961810314707,
+        "frames_over_clip_budget": 0,
+        "clip_budget": 0.01,
+        "n_frames": 37
+      }
+    }
+  ],
+  "stability": [
+    {
+      "param": "PRINT_GAMMA",
+      "init": 4.53125,
+      "fold_min": 4.0660211247545455,
+      "fold_max": 4.679522352426404,
+      "fold_mean": 4.442341201564409,
+      "spread": 0.6135012276718586,
+      "spread_frac_of_range": 0.24540049106874343,
+      "final_all_rolls": null,
+      "stable": false
+    },
+    {
+      "param": "PRINT_HI_CEIL",
+      "init": 0.9692578125,
+      "fold_min": 0.8812869372748948,
+      "fold_max": 0.99,
+      "fold_mean": 0.9211365834969123,
+      "spread": 0.10871306272510517,
+      "spread_frac_of_range": 0.5721740143426589,
+      "final_all_rolls": null,
+      "stable": false
+    },
+    {
+      "param": "PRINT_HI_PCT",
+      "init": 99.91546875,
+      "fold_min": 99.53471371052461,
+      "fold_max": 99.99,
+      "fold_mean": 99.78821005658244,
+      "spread": 0.4552862894753815,
+      "spread_frac_of_range": 0.45988514088422616,
+      "final_all_rolls": null,
+      "stable": false
+    },
+    {
+      "param": "PRINT_CLIP_BUDGET",
+      "init": 0.003,
+      "fold_min": 0.0,
+      "fold_max": 0.011306359457467663,
+      "fold_mean": 0.006846040294431296,
+      "spread": 0.011306359457467663,
+      "spread_frac_of_range": 0.5653179728733831,
+      "final_all_rolls": null,
+      "stable": false
+    }
+  ],
+  "prep_seconds_by_roll": {},
+  "final": null
+}

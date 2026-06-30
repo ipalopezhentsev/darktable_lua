@@ -206,7 +206,8 @@ config JSON. Every method-level knob has a CLI flag that overrides the config:
 `--step-min` (coordinate_descent), `--n-trials` (random_search), `--sigma`,
 `--popsize` (cmaes), `--spsa-a`/`--spsa-c`/`--spsa-alpha`/`--spsa-gamma`/`--spsa-A`
 (spsa), `--seed`/`--workers` (random_search + cmaes + spsa), plus
-`--rolls` and `--pca`. The effective values (CLI > config > optimizer default)
+`--rolls`, `--pca`, and `--cross-validate`/`--cv-final-fit` (see
+*Cross-validation* below). The effective values (CLI > config > optimizer default)
 are echoed in the report's "method params" line and the index row. Only the
 **per-param** ranges/grid_steps stay in the config, since they're per-constant.
 
@@ -277,6 +278,49 @@ past the knee more workers can stall on RAM rather than speed up.
   than the profile-only path (it re-bins all pixels), and the cache is
   memory-hungry (a float64 luma per frame), so cap frames if RAM is tight.
 
+## Cross-validation (leave-one-roll-out) — `--cross-validate`
+
+With only a handful of annotated rolls it is dangerously easy to fit constants
+that score well **on the very rolls they were fitted on** but regress on the next
+roll — overfitting. `--cross-validate` (LORO) measures whether a re-tune actually
+generalizes, using only the rolls you have. It is a **mode** that wraps the
+configured `--method` (the inner search), not a method itself — so it lives in the
+shared runner and every feature/kind inherits it.
+
+For each of the K rolls it:
+1. fits the inner `--method` on the **other K−1 rolls** (the held-out roll never
+   influences the fit), then
+2. scores those fitted constants on the **held-out roll**, and the **current
+   preset** (the live source values) on the same roll.
+
+The mean held-out delta (candidate − baseline) over the K folds is the honest
+"will this generalize?" number, reported as a **VERDICT**:
+
+- **ADOPT** — the re-tune beats the current preset on rolls it never saw.
+- **DO NOT ADOPT** — it loses on held-out rolls → it is overfitting the
+  calibration rolls; keep the current preset.
+
+It also reports **per-constant stability**: how far each fitted constant moves
+depending on which roll is held out. A *small* spread = a universal constant (safe
+to bake into the preset); a *large* spread = roll-specific taste that belongs in a
+per-frame / scene layer, not the global preset.
+
+**The final all-rolls fit is OPT-IN (`--cv-final-fit`), off by default.** The K
+folds alone give the verdict + stability; you don't pay for the extra fit until
+you want the adoptable constants. The folds are a *measurement* — each was
+deliberately fitted on only K−1 rolls — so they are **not** what you ship. With
+`--cv-final-fit`, after the folds the runner fits **once on all K rolls** (more
+data → better values) and writes `fitted_preset.json` + `fitted_params.json`; the
+stability table gains a `final (all rolls)` column. Adopt that preset **only if
+the verdict is ADOPT**.
+
+Needs **≥2 rolls** and a **search** `--method` (`none` has nothing to validate).
+Cost: a LORO run is **K inner fits** (+1 more with `--cv-final-fit`), each re-preps
+its rolls, so it is roughly K× a normal fit — narrow `fit.params` and/or use
+`--downsample` (inversion) to keep it tractable. Sessions are written to a
+`*_<kind>_cv_<NN>/` folder (see below) and appended to `INDEX_<kind>.md` with a
+`loro(<inner method>)` method cell and a `held-out base->cand [VERDICT]` headline.
+
 ## Session folder layout
 
 ```
@@ -294,6 +338,15 @@ calibrations/
                            #   tables, worst-frames list
         fitted_params.json # RECORD-ONLY best constants — adopt by hand into
                            #   auto_negadoctor.py (git stays the source of truth)
+        fitted_preset.json # complete DROP-IN preset = DEFAULT_TUNING + fitted{};
+                           #   adopt = cp it into ../../presets/<name>.json
+    <YYYY-MM-DD_HHMMSS>_<kind>_cv_<NN>/                    # a --cross-validate run
+        config.json        # as above, with fit.cross_validate / fit.cv_final_fit
+        results.json       # folds[], stability[], verdict, mean held-out base/cand,
+                           #   and final{} (null unless --cv-final-fit)
+        report.md          # VERDICT + per-fold + per-constant-stability tables
+        fitted_params.json # } ONLY with --cv-final-fit (the all-rolls fit);
+        fitted_preset.json # }   absent for a folds-only verdict run
 ```
 
 `--review` does NOT write into the session folder — it builds a transient
@@ -365,6 +418,12 @@ conda run -n autocrop python auto_negadoctor/tests/run_calibration.py \
 # stays full res). For the SEARCH only — re-validate the result with --downsample 1.
 ... --config .../inversion_cmaes_downsample2.json     # (or set --downsample 2 on any inversion config)
 ... --config .../inversion_descent_downsample2.json
+
+# cross-validate a re-tune (leave-one-roll-out): does it GENERALIZE across rolls?
+# folds only -> VERDICT (ADOPT / DO NOT ADOPT) + per-constant stability, no preset
+... --config .../inversion_default.json --method cmaes --cross-validate
+# ...and ALSO fit on all rolls to produce the adoptable fitted_preset.json:
+... --config .../inversion_default.json --method cmaes --cross-validate --cv-final-fit
 
 # review ANY session (crop / vignette / inversion) in the debug UI:
 #   key R flips FITTED (this session) <-> live (current source-code) result;
