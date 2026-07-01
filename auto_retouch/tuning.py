@@ -30,156 +30,298 @@ from common.calibration.schema import TuningSchema, _F  # noqa: E402
 FIELDS = collections.OrderedDict([
     # ===================== DUST =====================
     # --- threshold ---
-    ("LOCAL_BG_KERNEL", _F("Gaussian blur kernel for local background", kind="int")),
-    ("NOISE_THRESHOLD_MULTIPLIER", _F("spots must be this many std devs above background")),
-    ("MIN_ABSOLUTE_THRESHOLD", _F("minimum brightness difference regardless of noise")),
-    ("REJECT_LOG_CONTRAST_MIN", _F("minimum contrast to include in debug reject candidate list", kind="int")),
+    ("LOCAL_BG_KERNEL_FRAC", _F("Size of the Gaussian blur used to estimate the local background that is "
+        "subtracted from the image before spot detection. Larger values smooth over bigger structures and "
+        "isolate finer dust. Unit: fraction of min_dim (rounded to an odd pixel count at use).")),
+    ("NOISE_THRESHOLD_MULTIPLIER", _F("A pixel must rise this many robust standard deviations (MAD-based, "
+        "so it ignores the dust outliers themselves) above the local background to become a spot candidate. "
+        "Higher = fewer, stronger candidates. Unit: multiplier of the noise estimate.")),
+    ("MIN_ABSOLUTE_THRESHOLD", _F("Absolute floor on the above-background brightness a candidate needs, "
+        "regardless of the per-frame noise estimate; stops very clean frames from flagging faint grain. "
+        "Unit: gray levels (0-255).")),
+    ("REJECT_LOG_CONTRAST_MIN", _F("Minimum contrast a REJECTED candidate needs before it is written to the "
+        "debug reject list. Purely cosmetic (limits log volume); does not affect detection. Unit: gray levels.", kind="int")),
     # --- size_shape ---
-    ("MIN_SPOT_AREA", _F("minimum pixels (reject subpixel/imperceptible dust)", kind="int")),
-    ("MAX_SPOT_AREA", _F("maximum pixels (~16px radius at full res)", kind="int")),
-    ("MIN_ASPECT_RATIO", _F("bounding box aspect ratio (reject elongated fibers)")),
-    ("MIN_COMPACTNESS", _F("area / bbox_area (reject irregular shapes)")),
-    ("MIN_SOLIDITY", _F("area / convex_hull_area (reject non-convex shapes like letters)")),
-    ("MIN_CIRCULARITY", _F("4*pi*area/perimeter^2 (reject complex shapes like symbols)")),
-    ("DOT_MIN_CIRCLE_FILL", _F("area / (pi*enc_r^2) below this counts as non-compact")),
-    ("DOT_IRREGULAR_RADIUS_FRAC", _F("...and only when enc_r exceeds this * min_dim (~18px @ 3745)")),
-    ("SHAPE_CHECK_MIN_AREA", _F("only check solidity/circularity for spots larger than this", kind="int")),
+    ("MIN_SPOT_AREA_FRAC", _F("Smallest connected-component area accepted as dust. Rejects subpixel / "
+        "imperceptible specks. Unit: fraction of min_dim**2 (an area fraction).")),
+    ("MAX_SPOT_AREA_FRAC", _F("Largest area accepted as a dust dot; anything bigger is treated as image "
+        "content, not dust (elongated marks go to the stroke path instead). Unit: fraction of min_dim**2.")),
+    ("MIN_ASPECT_RATIO", _F("Minimum bounding-box short/long side ratio. Rejects strongly elongated blobs "
+        "(fibers/threads are handled separately as strokes). Unit: ratio 0-1.")),
+    ("MIN_COMPACTNESS", _F("Minimum area / bounding-box-area. Rejects sparse, ragged shapes a compact dust "
+        "dot would never form. Unit: ratio 0-1.")),
+    ("MIN_SOLIDITY", _F("Minimum area / convex-hull-area. Rejects non-convex shapes such as letters or twigs. "
+        "Unit: ratio 0-1.")),
+    ("MIN_CIRCULARITY", _F("Minimum 4*pi*area / perimeter**2 (1.0 is a perfect circle). Rejects spiky / "
+        "complex outlines like symbols and text. Unit: ratio 0-1.")),
+    ("DOT_MIN_CIRCLE_FILL", _F("Minimum area / (pi*enc_r**2) — how completely the spot fills its minimum "
+        "enclosing circle. Below this the spot is treated as non-compact. Unit: ratio 0-1.")),
+    ("DOT_IRREGULAR_RADIUS_FRAC", _F("The DOT_MIN_CIRCLE_FILL non-compact rejection is applied ONLY to spots "
+        "whose enclosing-circle radius exceeds this size; smaller spots are exempt. Unit: fraction of min_dim.")),
+    ("SHAPE_CHECK_MIN_AREA_FRAC", _F("Solidity/circularity checks run only for spots larger than this area; "
+        "tiny spots have too few pixels for reliable shape metrics. Unit: fraction of min_dim**2.")),
     # --- texture_contrast ---
-    ("TEXTURE_KERNEL", _F("neighborhood size for local texture measurement", kind="int")),
-    ("MAX_LOCAL_TEXTURE_SMALL", _F("max texture for tiny spots (area near MIN_SPOT_AREA)")),
-    ("MAX_LOCAL_TEXTURE_LARGE", _F("max texture for large spots (area >= 200px)")),
-    ("MAX_DARK_BG_TEXTURE", _F("max texture in ring around spot on dark backgrounds (separate from above)")),
-    ("MIN_CONTRAST_TEXTURE_RATIO", _F("contrast/texture — reject spots hidden in grain")),
-    ("MAX_BG_GRADIENT_RATIO", _F("max bg_gradient/contrast — reject edge halo artifacts")),
-    ("MAX_CONTEXT_TEXTURE", _F("max median local_std across a 200px radius from spot center.")),
-    ("LARGE_SPOT_AREA_THRESHOLD", _F("spots larger than this require higher contrast", kind="int")),
-    ("LARGE_SPOT_MIN_CONTRAST", _F("min contrast for large spots — avoids pale foggy blobs", kind="int")),
+    ("TEXTURE_KERNEL_FRAC", _F("Neighborhood size of the local-texture (rolling standard-deviation) map used "
+        "to tell smooth, dust-friendly areas from busy image content. Unit: fraction of min_dim (odd pixel "
+        "count at use).")),
+    ("MAX_LOCAL_TEXTURE_SMALL", _F("Maximum local texture allowed in the ring around a TINY spot; small specks "
+        "may sit in slightly busier surroundings. The limit tightens toward MAX_LOCAL_TEXTURE_LARGE as area "
+        "grows. Unit: gray-level standard deviation.")),
+    ("MAX_LOCAL_TEXTURE_LARGE", _F("Maximum local texture allowed around a LARGE spot (area >= "
+        "TEXTURE_TIER_AREA_FRAC); big blobs must sit on genuinely smooth backgrounds to be believed as dust. "
+        "Unit: gray-level standard deviation.")),
+    ("MAX_DARK_BG_TEXTURE", _F("Separate, tighter texture limit for the ring around a spot on DARK backgrounds, "
+        "where grain reads as texture differently. Unit: gray-level standard deviation.")),
+    ("MIN_CONTRAST_TEXTURE_RATIO", _F("Minimum contrast / local-texture. A real dust dot stands out far above "
+        "its surrounding grain, so a low ratio means it is hidden in texture. Unit: ratio.")),
+    ("MAX_BG_GRADIENT_RATIO", _F("Maximum background-gradient / contrast. A high value means the 'spot' is "
+        "really the halo/edge of a brightness ramp (from the background blur), not dust. Unit: ratio.")),
+    ("MAX_CONTEXT_TEXTURE", _F("Maximum median texture measured over a WIDE region (radius = "
+        "CONTEXT_TEXTURE_RADIUS_FRAC) around the spot. Catches false positives that sit on a locally-smooth "
+        "patch inside otherwise busy content. Unit: gray-level standard deviation.")),
+    ("CONTEXT_TEXTURE_RADIUS_FRAC", _F("Radius over which MAX_CONTEXT_TEXTURE samples the surrounding "
+        "busy-ness. Unit: fraction of min_dim.")),
+    ("TEXTURE_TIER_AREA_FRAC", _F("Spot area at which the texture limit finishes interpolating from "
+        "MAX_LOCAL_TEXTURE_SMALL down to MAX_LOCAL_TEXTURE_LARGE. Unit: fraction of min_dim**2.")),
+    ("LARGE_SPOT_AREA_THRESHOLD_FRAC", _F("Spots larger than this must clear the higher LARGE_SPOT_MIN_CONTRAST "
+        "bar; big, pale blobs need strong contrast to be accepted. Unit: fraction of min_dim**2.")),
+    ("LARGE_SPOT_MIN_CONTRAST", _F("Minimum contrast a large spot (see LARGE_SPOT_AREA_THRESHOLD_FRAC) must "
+        "have; rejects big, pale, foggy blobs. Unit: gray levels.", kind="int")),
     # --- color ---
-    ("MAX_EXCESS_SATURATION", _F("max (spot_sat - surround_sat) — dust matches local color cast", kind="int")),
-    ("MAX_SPOT_SATURATION", _F("compound check lower bound: spot_sat above this + positive excess_sat", kind="int")),
-    ("EMULSION_EXCESS_SAT_THRESHOLD", _F("excess_sat above this (when spot_sat > 230) = emulsion artifact:", kind="int")),
+    ("MAX_EXCESS_SATURATION", _F("Maximum (spot saturation - surrounding saturation). Dust is achromatic and "
+        "picks up the local color cast, so it should not be MORE saturated than its surroundings. "
+        "Unit: saturation 0-255.", kind="int")),
+    ("MAX_SPOT_SATURATION", _F("Lower bound of the compound color check: a spot both above this saturation AND "
+        "with positive excess saturation is rejected as a colored feature. Unit: saturation 0-255.", kind="int")),
+    ("EMULSION_EXCESS_SAT_THRESHOLD", _F("When a spot is very saturated (above MAX_SPOT_SATURATION), an excess "
+        "saturation above this marks it as a colored emulsion artifact rather than dust. "
+        "Unit: saturation 0-255.", kind="int")),
     # --- voting ---
-    ("SOFT_CONTEXT_VOTE_THRESHOLD", _F("context_texture < this votes \"dust\" (clear sky/walls: 2-6)")),
-    ("SOFT_TEXTURE_VOTE_THRESHOLD", _F("local_texture < this votes \"dust\"")),
-    ("SOFT_RATIO_VOTE_THRESHOLD", _F("contrast/texture > this votes \"dust\" (1.5× hard minimum)")),
-    ("MIN_DUST_VOTES", _F("require at least this many out of 3 soft votes to accept", kind="int")),
+    ("SOFT_CONTEXT_VOTE_THRESHOLD", _F("Context texture below this casts one 'is dust' soft vote (clear skies "
+        "and plain walls score low). Unit: gray-level standard deviation.")),
+    ("SOFT_TEXTURE_VOTE_THRESHOLD", _F("Local (ring) texture below this casts one 'is dust' soft vote. "
+        "Unit: gray-level standard deviation.")),
+    ("SOFT_RATIO_VOTE_THRESHOLD", _F("Contrast/texture ratio above this casts one 'is dust' soft vote (roughly "
+        "1.5x the hard MIN_CONTRAST_TEXTURE_RATIO). Unit: ratio.")),
+    ("MIN_DUST_VOTES", _F("How many of the 3 soft votes (context, texture, ratio) a borderline spot must earn "
+        "to be accepted. Unit: count (0-3).", kind="int")),
     # --- brightness ---
-    ("MIN_BRIGHTNESS_FRAC_SMALL", _F("brightness floor for tiny spots (area ~10)")),
-    ("MIN_BRIGHTNESS_FRAC_LARGE", _F("brightness floor for large spots (area >= 100)")),
-    ("MIN_LOCAL_BG_FRACTION", _F("local background must be >= this fraction of 95th pct")),
-    ("MIN_SURROUND_BG_RATIO", _F("immediate surround must be >= this fraction of local bg")),
+    ("MIN_BRIGHTNESS_FRAC_SMALL", _F("Brightness floor for the SMALLEST spots, relative to the frame's bright "
+        "reference (its 95th-percentile brightness). Interpolated up to MIN_BRIGHTNESS_FRAC_LARGE as area "
+        "grows. Unit: fraction of the bright reference.")),
+    ("MIN_BRIGHTNESS_FRAC_LARGE", _F("Brightness floor for LARGE spots, relative to the frame's bright "
+        "reference; larger dust must be brighter to be accepted. Unit: fraction of the bright reference.")),
+    ("MIN_LOCAL_BG_FRACTION", _F("The local background under a spot must be at least this fraction of the "
+        "frame's 95th-percentile brightness; rejects 'dust' in dark regions where it is implausible. "
+        "Unit: fraction.")),
+    ("MIN_SURROUND_BG_RATIO", _F("The immediate surround must be at least this fraction of the local "
+        "background; rejects spots embedded in a locally darker patch (an image feature, not dust). "
+        "Unit: ratio 0-1.")),
     # --- isolation ---
-    ("ISOLATION_RADIUS", _F("pixel radius for neighbor density check", kind="int")),
-    ("MAX_NEARBY_ACCEPTED", _F("reject if more than this many accepted spots within ISOLATION_RADIUS", kind="int")),
-    ("MAX_SPOTS", _F("cap: sort by contrast, take the most obvious ones", kind="int")),
+    ("ISOLATION_RADIUS_FRAC", _F("Radius within which already-accepted spots are counted, to reject dust-like "
+        "CLUSTERS that are really texture. Unit: fraction of min_dim.")),
+    ("MAX_NEARBY_ACCEPTED", _F("Reject a spot if more than this many already-accepted spots lie within "
+        "ISOLATION_RADIUS_FRAC; lone dust survives, dense clusters are dropped. Unit: count.", kind="int")),
+    ("MAX_SPOTS", _F("Hard cap on spots kept per frame (highest-contrast first). darktable allows at most 300 "
+        "mask forms, so this must stay below that. Unit: count.", kind="int")),
     # --- brush_source ---
-    ("ENC_RADIUS_SCALE", _F("multiplicative scale factor for enclosing circle radius (helps darktable", kind="int")),
-    ("SOURCE_SEARCH_INNER_FACTOR", _F("inner exclusion ring = radius * this (avoid the spot itself)")),
-    ("SOURCE_SEARCH_MAX_RADIUS", _F("cap search radius in pixels", kind="int")),
-    ("SOURCE_SEARCH_MIN_RADIUS", _F("minimum search radius for tiny spots", kind="int")),
-    ("SOURCE_GRID_STEP", _F("grid step for candidate sampling (pixels)", kind="int")),
+    ("ENC_RADIUS_SCALE", _F("Healing brush radius = the spot's minimum-enclosing-circle radius x this. Kept "
+        ">1 so darktable's brush fully covers the dust. Unit: multiplier.", kind="int")),
+    ("SOURCE_SEARCH_INNER_FACTOR", _F("Inner radius of the healing-source search ring = spot radius x this; "
+        "keeps the clone source from overlapping the dust itself. Unit: multiplier.")),
+    ("SOURCE_SEARCH_MAX_RADIUS_FRAC", _F("Outer cap on how far the healing-source search looks for clean "
+        "background. Unit: fraction of min_dim.")),
+    ("SOURCE_SEARCH_MIN_RADIUS_FRAC", _F("Minimum outer search radius, so even tiny spots search a usable "
+        "area for a healing source. Unit: fraction of min_dim.")),
+    ("SOURCE_GRID_STEP_FRAC", _F("Spacing of the grid of candidate healing-source positions. Unit: fraction "
+        "of min_dim (floored to at least one sample). NOTE: reserved — not currently read by the detector.")),
     # --- ml ---
-    ("ML_RECOVERY_THRESHOLD_MULT", _F("lower threshold for recovery pass (find missed dust)")),
-    ("ML_POSTFILTER_THRESHOLD", _F("min ML probability to keep a spot (post-filter)")),
-    ("ML_RECOVERY_THRESHOLD", _F("higher bar for accepting recovery candidates")),
+    ("ML_RECOVERY_THRESHOLD_MULT", _F("For the optional ML recovery pass, multiply the base detection "
+        "threshold by this (< 1) to surface extra missed-dust candidates for the classifier to judge. "
+        "Unit: multiplier.")),
+    ("ML_POSTFILTER_THRESHOLD", _F("Minimum classifier probability for a normally-detected spot to be kept "
+        "when the ML model is active. Unit: probability 0-1.")),
+    ("ML_RECOVERY_THRESHOLD", _F("Higher classifier probability required to accept a spot that ONLY the "
+        "recovery pass found. Unit: probability 0-1.")),
     # ===================== STROKE =====================
     # --- detect ---
-    ("DETECT_STROKES", _F("master switch for thread/scratch stroke detection (on by default)", kind="bool")),
+    ("DETECT_STROKES", _F("Master on/off for thread / scratch (elongated) dust detection. On by default. "
+        "Unit: boolean.", kind="bool")),
     # --- geometry ---
-    ("STROKE_MIN_LENGTH_FRAC", _F("min centerline length as fraction of min_dim (~19px @ 3786).")),
-    ("STROKE_MIN_ELONGATION", _F("min length/width — separates strokes from blobs")),
-    ("STROKE_MAX_WIDTH_FRAC", _F("max stroke width as fraction of min_dim (~9.5px @ 3786).")),
-    ("STROKE_MIN_WIDTH_PX", _F("floor for measured width (avoid div-by-zero on 1px ridges)")),
-    ("STROKE_DP_EPS_FRAC", _F("Douglas-Peucker epsilon as fraction of min_dim (path simplify)")),
-    ("STROKE_MAX_FILL_RATIO", _F("area/bbox_area pre-filter: a thin thread fills little of its")),
-    ("STROKE_PREFER_RATIO", _F("convert if circle_healed_area / stroke_healed_area > this")),
-    ("STROKE_MAX_KEYPOINTS", _F("cap nodes per stroke (darktable form is fine with many)", kind="int")),
+    ("STROKE_MIN_LENGTH_FRAC", _F("Minimum centerline length of a stroke; shorter marks are ignored or treated "
+        "as dots. Unit: fraction of min_dim.")),
+    ("STROKE_MIN_ELONGATION", _F("Minimum length/width; separates true strokes (long and thin) from compact "
+        "blobs. Unit: ratio.")),
+    ("STROKE_MAX_WIDTH_FRAC", _F("Maximum stroke width; wider marks are not thread/scratch dust. Unit: fraction "
+        "of min_dim.")),
+    ("STROKE_MIN_WIDTH_FRAC", _F("Floor on the measured stroke width, to avoid divide-by-zero on hairline "
+        "single-pixel ridges. Unit: fraction of min_dim.")),
+    ("STROKE_DP_EPS_FRAC", _F("Douglas-Peucker tolerance for simplifying the stroke centerline into a few "
+        "nodes; larger = coarser path. Unit: fraction of min_dim.")),
+    ("STROKE_MAX_FILL_RATIO", _F("Pre-filter on area / bounding-box-area: a genuine thin thread fills only a "
+        "small part of its bounding box, so a high fill ratio means a blob, not a stroke. Unit: ratio 0-1.")),
+    ("STROKE_PREFER_RATIO", _F("Convert a stroke back into a circular dot when a healing circle would cover "
+        "more area than the stroke brush by more than this factor (a near-round mark heals better as a dot). "
+        "Unit: ratio.")),
+    ("STROKE_MAX_KEYPOINTS", _F("Cap on the number of centerline nodes stored per stroke (darktable brushes "
+        "tolerate many). Unit: count.", kind="int")),
     # --- brush ---
-    ("STROKE_COVERAGE_FRAC", _F("edge = where diff falls below this fraction of the local peak")),
-    ("STROKE_COVERAGE_MIN_DIFF", _F("...but never below this absolute diff (avoid chasing noise)")),
-    ("STROKE_COVERAGE_PCTL", _F("use this percentile of per-sample half-widths — a thread can be", kind="int")),
-    ("STROKE_COVERAGE_MARGIN_PX", _F("add this margin so the feathered edge is fully covered")),
-    ("STROKE_BORDER_SCALE", _F("fallback multiplier on the core half-width if the profile")),
-    ("STROKE_MIN_BORDER_PX", _F("minimum per-node brush border in pixels (darktable floor)")),
-    ("STROKE_MAX_BORDER_FRAC", _F("cap brush border at this * min_dim (~22px) — no runaway brushes")),
+    ("STROKE_COVERAGE_FRAC", _F("The brush edge is placed where the brightness difference falls to this "
+        "fraction of the stroke's local peak; smaller = wider brush. Unit: fraction of the peak.")),
+    ("STROKE_COVERAGE_MIN_DIFF", _F("...but the edge is never taken below this absolute brightness difference, "
+        "so the brush does not chase noise out into the background. Unit: gray levels.")),
+    ("STROKE_COVERAGE_PCTL", _F("Which percentile of the per-sample half-widths becomes the brush half-width; a "
+        "thread can be locally fatter, so a high percentile covers the wide parts. Unit: percentile 0-100.", kind="int")),
+    ("STROKE_COVERAGE_MARGIN_FRAC", _F("Extra margin added outside the measured edge so the feathered brush "
+        "boundary fully covers the stroke. Unit: fraction of min_dim.")),
+    ("STROKE_BORDER_SCALE", _F("If the brightness profile yields no usable edge, fall back to this multiple of "
+        "the core half-width for the brush border. Unit: multiplier.")),
+    ("STROKE_MIN_BORDER_FRAC", _F("Minimum per-node brush border (darktable effectiveness floor). Unit: "
+        "fraction of min_dim.")),
+    ("STROKE_MAX_BORDER_FRAC", _F("Upper cap on the brush border to prevent runaway-wide brushes. Unit: "
+        "fraction of min_dim.")),
     # --- ridge_pass ---
-    ("STROKE_RIDGE_ENABLE", _F("master switch for the faint-scratch Hessian ridge pass (disabled by default — noise-floor false positives)", kind="bool")),
-    ("STROKE_RIDGE_SIGMAS", _F("ridge scales in px (thin scratches/threads)", kind="tuple")),
-    ("STROKE_RIDGE_Z", _F("keep ridge response above median + this*MAD (robust z-score).")),
-    ("STROKE_RIDGE_MIN_CONTRAST", _F("min mean diff (gray-local_bg) along the ridge to accept")),
-    ("STROKE_RIDGE_DOWNSCALE", _F("analyze ridge filter at this scale for speed (full-res too slow);")),
-    ("STROKE_RIDGE_MAX_CANDIDATES", _F("cap ridge components processed (largest first) to bound cost", kind="int")),
+    ("STROKE_RIDGE_ENABLE", _F("Master on/off for the faint-scratch Hessian (sato) ridge pass. Off by default "
+        "because it produces noise-floor false positives; add faint scratches by hand in the debug UI instead. "
+        "Unit: boolean.", kind="bool")),
+    ("STROKE_RIDGE_SIGMA_FRACS", _F("The ridge-filter scales, from thin to thicker scratches/threads, each as "
+        "a fraction of min_dim. Unit: tuple of fractions of min_dim.", kind="tuple")),
+    ("STROKE_RIDGE_Z", _F("Keep ridge responses above median + this x MAD (a robust z-score); higher = only "
+        "stronger ridges survive. Unit: robust z-score multiplier.")),
+    ("STROKE_RIDGE_MIN_CONTRAST", _F("Minimum mean brightness difference (gray minus local background) along a "
+        "ridge for it to be accepted. Unit: gray levels.")),
+    ("STROKE_RIDGE_DOWNSCALE", _F("Run the ridge filter at this fraction of full resolution for speed (full-res "
+        "is too slow); the resulting mask is scaled back up. Unit: fraction (0-1).")),
+    ("STROKE_RIDGE_MAX_CANDIDATES", _F("Cap on the number of ridge components processed (largest first) to "
+        "bound cost. Unit: count.", kind="int")),
     # --- gating ---
-    ("STROKE_MAX_BAND_TEXTURE", _F("max median local_std in the band around the centerline.")),
-    ("STROKE_MAX_CONTEXT_TEXTURE", _F("max median local_std in a WIDE band. NOT contrast-tiered")),
-    ("STROKE_CONTEXT_RADIUS_FRAC", _F("wide-context band outer radius as fraction of min_dim (~190px)")),
-    ("STROKE_MAX_EXCESS_SAT", _F("max (stroke_sat - surround_sat) — dust/scratch is achromatic", kind="int")),
-    ("STROKE_MIN_BRIGHTNESS_FRAC", _F("mean stroke brightness >= this * bright_ref (bright bg only)")),
-    ("STROKE_MIN_RIDGE_DROP", _F("core crest must beat the BRIGHTER side by this (gray levels)")),
-    ("STROKE_MAX_SIDE_ASYMMETRY", _F("|left_bg - right_bg| / core — reject one-sided (edge) profiles")),
-    ("STROKE_SIDE_OFFSET_FACTOR", _F("perpendicular sample offset = width * this + a few px")),
-    ("STROKE_MIN_CRISPNESS", _F("reject strokes softer than this (out-of-focus scene wires)")),
-    ("STROKE_CLIP_LEVEL", _F("core crest >= this (8-bit) counts as clipped-white dust", kind="int")),
+    ("STROKE_MAX_BAND_TEXTURE", _F("Maximum median texture in the narrow band along the stroke centerline; a "
+        "stroke lying on grainy content is rejected. Unit: gray-level standard deviation.")),
+    ("STROKE_MAX_CONTEXT_TEXTURE", _F("Maximum median texture in a WIDE band around the stroke (not "
+        "contrast-tiered); rejects strokes crossing busy scene structure. Unit: gray-level standard "
+        "deviation.")),
+    ("STROKE_CONTEXT_RADIUS_FRAC", _F("Outer radius of that wide context band. Unit: fraction of min_dim.")),
+    ("STROKE_MAX_EXCESS_SAT", _F("Maximum (stroke saturation - surround saturation); dust and scratches are "
+        "achromatic. Unit: saturation 0-255.", kind="int")),
+    ("STROKE_MIN_BRIGHTNESS_FRAC", _F("On bright backgrounds only, the stroke's mean brightness must be at "
+        "least this fraction of the frame's bright reference. Unit: fraction of the bright reference.")),
+    ("STROKE_MIN_RIDGE_DROP", _F("The stroke crest must exceed the BRIGHTER of its two sides by at least this, "
+        "proving it is a ridge and not one flank of an edge. Unit: gray levels.")),
+    ("STROKE_MAX_SIDE_ASYMMETRY", _F("|left background - right background| / core brightness; a high value "
+        "means a one-sided (edge) profile, not a symmetric stroke. Unit: ratio.")),
+    ("STROKE_SIDE_OFFSET_FACTOR", _F("How far to sample perpendicular to the stroke to read its two sides = "
+        "stroke width x this (plus a small fixed margin). Unit: multiplier of width.")),
+    ("STROKE_MIN_CRISPNESS", _F("Reject strokes softer (more out-of-focus) than this; a sharp edge = real "
+        "surface dust, a blurry one = an in-scene wire/branch. Unit: ratio 0-1.")),
+    ("STROKE_CLIP_LEVEL", _F("A stroke crest at or above this brightness counts as clipped-white dust and "
+        "skips some gating. Unit: gray level (0-255).", kind="int")),
     # --- source ---
-    ("STROKE_SOURCE_OFFSET_FACTOR", _F("min source offset = this * brush_radius (gap ~= brush_radius)")),
-    ("STROKE_SOURCE_MIN_GAP_PX", _F("...and at least this absolute gap beyond the two brush edges")),
+    ("STROKE_SOURCE_OFFSET_FACTOR", _F("Minimum healing-source offset = brush radius x this, so the clone "
+        "source sits about one brush-width from the defect. Unit: multiplier of brush radius.")),
+    ("STROKE_SOURCE_MIN_GAP_FRAC", _F("...and at least this gap beyond BOTH brush edges, guaranteeing the "
+        "source never overlaps the stroke. Unit: fraction of min_dim.")),
     # --- heal_split ---
-    ("HEAL_SPLIT_BUSY", _F("split strokes so the brush skips busy (high-texture) runs", kind="bool")),
-    ("HEAL_MAX_TEXTURE", _F("local_std above this along the path counts as \"busy\" (skip)")),
-    ("HEAL_BUSY_MARGIN_PX", _F("also skip this far around each busy run (sources stay clean)")),
-    ("HEAL_SAMPLE_STEP_PX", _F("resample the path at this spacing to test texture")),
-    ("HEAL_MIN_SEGMENT_FRAC", _F("keep a smooth run only if at least this * min_dim long (~38px)")),
+    ("HEAL_SPLIT_BUSY", _F("Split a stroke into sub-strokes so the healing brush skips the busy (high-texture) "
+        "runs it crosses. Unit: boolean.", kind="bool")),
+    ("HEAL_MAX_TEXTURE", _F("Texture along the path above this marks a point as 'busy' and it is skipped. "
+        "Unit: gray-level standard deviation.")),
+    ("HEAL_BUSY_MARGIN_FRAC", _F("Also skip this far on either side of each busy run so the clone sources stay "
+        "on clean background. Unit: fraction of min_dim.")),
+    ("HEAL_SAMPLE_STEP_FRAC", _F("Spacing at which the path is resampled to test texture for splitting. Unit: "
+        "fraction of min_dim.")),
+    ("HEAL_MIN_SEGMENT_FRAC", _F("Keep a smooth sub-run only if it is at least this long; shorter smooth gaps "
+        "are not worth a separate brush. Unit: fraction of min_dim.")),
     # --- field_isolation ---
-    ("STROKE_FIELD_RADIUS_FRAC", _F("line-candidate outer annulus radius, fraction of min_dim (~560px)")),
-    ("STROKE_FIELD_INNER_PX", _F("inner annulus radius (excludes the stroke's own fragments)", kind="int")),
-    ("STROKE_FIELD_MAX_LINE_CANDS", _F("reject a stroke with >= this many line-candidates near it", kind="int")),
-    ("STROKE_FIELD_CAND_MIN_AREA", _F("a line-candidate component must be at least this large", kind="int")),
-    ("STROKE_FIELD_CAND_MIN_DIM", _F("...and at least this long on its major axis", kind="int")),
-    ("STROKE_FIELD_CAND_MAX_FILL", _F("...and thin (area/bbox below this)")),
-    ("STROKE_FIELD_CAND_MIN_ELONG", _F("...and elongated (bbox long/short ratio at least this)")),
-    ("STROKE_FIELD_NBR_RADIUS_FRAC", _F("accepted-stroke neighbour radius, fraction of min_dim (~450px)")),
-    ("STROKE_FIELD_MAX_NEIGHBORS", _F("reject if more than this many accepted strokes are that near.", kind="int")),
+    ("STROKE_FIELD_RADIUS_FRAC", _F("Outer radius of the annulus searched for parallel line-candidates around "
+        "a stroke; many nearby lines mean scene structure (rigging, fences), not a scratch. Unit: fraction of "
+        "min_dim.")),
+    ("STROKE_FIELD_INNER_FRAC", _F("Inner radius of that annulus, excluding the stroke's own fragments. Unit: "
+        "fraction of min_dim.")),
+    ("STROKE_FIELD_MAX_LINE_CANDS", _F("Reject a stroke if this many or more line-candidates are found in its "
+        "annulus. Unit: count.", kind="int")),
+    ("STROKE_FIELD_CAND_MIN_AREA_FRAC", _F("A line-candidate component must be at least this large to count. "
+        "Unit: fraction of min_dim**2.")),
+    ("STROKE_FIELD_CAND_MIN_DIM_FRAC", _F("...and at least this long on its major axis. Unit: fraction of "
+        "min_dim.")),
+    ("STROKE_FIELD_CAND_MAX_FILL", _F("...and thin: area / bounding-box-area below this. Unit: ratio 0-1.")),
+    ("STROKE_FIELD_CAND_MIN_ELONG", _F("...and elongated: bounding-box long/short ratio at least this. Unit: "
+        "ratio.")),
+    ("STROKE_FIELD_NBR_RADIUS_FRAC", _F("Radius within which OTHER accepted strokes are counted, as a second "
+        "clustering guard. Unit: fraction of min_dim.")),
+    ("STROKE_FIELD_MAX_NEIGHBORS", _F("Reject a stroke if more than this many accepted strokes lie within "
+        "STROKE_FIELD_NBR_RADIUS_FRAC. Unit: count.", kind="int")),
     # --- streak ---
-    ("STREAK_DETECT", _F("master switch for the faint axis-aligned scratch producer", kind="bool")),
-    ("STREAK_RIDGE_VGAP", _F("px above/below to compare against (ridge, not edge)", kind="int")),
-    ("STREAK_INTEG_LEN", _F("horizontal integration length (px) — boosts faint line SNR", kind="int")),
-    ("STREAK_LEVEL_MULT", _F("response threshold = max(6, noise * this)")),
-    ("STREAK_MIN_LEN_FRAC", _F("min streak length as fraction of min_dim (~150px)")),
-    ("STREAK_MAX_THICKNESS", _F("max component thickness (px) — keeps it thin & near-axis", kind="int")),
-    ("STREAK_MIN_ELONG", _F("min length/thickness ratio (strongly elongated)", kind="int")),
+    ("STREAK_DETECT", _F("Master on/off for the faint axis-aligned (horizontal/vertical) scratch producer. "
+        "Unit: boolean.", kind="bool")),
+    ("STREAK_RIDGE_VGAP_FRAC", _F("How far above and below each row is compared to build a ridge (not edge) "
+        "response — a true streak is brighter than both neighbors. Unit: fraction of min_dim.")),
+    ("STREAK_INTEG_LEN_FRAC", _F("Length over which the response is integrated along the streak axis, boosting "
+        "a faint collinear line above the noise. Unit: fraction of min_dim.")),
+    ("STREAK_LEVEL_MULT", _F("Response threshold = max(6, frame noise x this); higher = only stronger streaks. "
+        "Unit: multiplier of the noise estimate.")),
+    ("STREAK_MIN_LEN_FRAC", _F("Minimum streak length. Unit: fraction of min_dim.")),
+    ("STREAK_MAX_THICKNESS_FRAC", _F("Maximum streak component thickness; keeps it thin and near-axis. Unit: "
+        "fraction of min_dim.")),
+    ("STREAK_MIN_ELONG", _F("Minimum length/thickness ratio; a streak must be strongly elongated. Unit: "
+        "ratio.", kind="int")),
     # --- radon ---
-    ("STREAK_RADON_DETECT", _F("master switch for the full-width Radon scratch detector", kind="bool")),
-    ("STREAK_RADON_MIN_RESP", _F("min mean ridge response along the best line (gray levels)")),
-    ("STREAK_RADON_MIN_COV", _F("min fraction of the width with response present on that line")),
-    ("STREAK_RADON_MAX_SLOPE", _F("search slopes in [-this, this] (~1.1 deg) — \"almost\" axis")),
-    ("STREAK_RADON_SLOPES", _F("number of slope steps to test", kind="int")),
-    ("STREAK_RADON_PRESENT", _F("response above this counts as \"scratch present\" at a column")),
-    ("STREAK_RADON_EXT_FACTOR", _F("endpoint-extension threshold = PRESENT * this (follow fading)")),
-    ("STREAK_RADON_EXT_GAP", _F("stop extending after this many px with no faint signal", kind="int")),
-    ("STREAK_RADON_MAX_HALFWIDTH", _F("cap the measured brush half-width for a faint scratch (px)")),
-    ("STREAK_RADON_MIN_BRUSH_R", _F("minimum brush radius (half-width) for a Radon scratch (px)")),
-    ("STREAK_RADON_BRUSH_MARGIN", _F("added to the measured half-width")),
+    ("STREAK_RADON_DETECT", _F("Master on/off for the full-width Radon scratch detector (ultra-faint, "
+        "fragmented, near-horizontal lines). Unit: boolean.", kind="bool")),
+    ("STREAK_RADON_MIN_RESP", _F("Minimum mean ridge response along the best-fitting line for it to be a "
+        "scratch. Unit: gray levels.")),
+    ("STREAK_RADON_MIN_COV", _F("Minimum fraction of the frame width along that line that actually carries "
+        "response (present, not gap). Unit: fraction 0-1.")),
+    ("STREAK_RADON_MAX_SLOPE", _F("Search line slopes in [-this, +this] (about +/-1.1 degrees) — 'almost' "
+        "axis-aligned. Unit: slope (rise/run).")),
+    ("STREAK_RADON_SLOPES", _F("Number of discrete slope steps tested across that range. Unit: count.", kind="int")),
+    ("STREAK_RADON_PRESENT", _F("Response above this counts a given column as 'scratch present' on the line. "
+        "Unit: gray levels.")),
+    ("STREAK_RADON_EXT_FACTOR", _F("Endpoint-extension threshold = STREAK_RADON_PRESENT x this; a lower bar "
+        "lets the line follow a fading scratch outward. Unit: multiplier.")),
+    ("STREAK_RADON_EXT_GAP_FRAC", _F("Stop extending the line after this distance with no faint signal. Unit: "
+        "fraction of min_dim.")),
+    ("STREAK_RADON_MAX_HALFWIDTH_FRAC", _F("Cap on the measured brush half-width for a faint Radon scratch, so "
+        "noise cannot inflate it. Unit: fraction of min_dim.")),
+    ("STREAK_RADON_MIN_BRUSH_R_FRAC", _F("Minimum brush radius (half-width) for a Radon scratch, so the bold "
+        "brush still clears it. Unit: fraction of min_dim.")),
+    ("STREAK_RADON_BRUSH_MARGIN_FRAC", _F("Extra margin added to the measured half-width. Unit: fraction of "
+        "min_dim.")),
     # --- hysteresis ---
-    ("STROKE_HYST_LOW_FACTOR", _F("tail/extension threshold = main threshold * this")),
-    ("STROKE_HYST_PAD_FRAC", _F("search window pad around the seed bbox, fraction of min_dim")),
-    ("STROKE_HYST_PAD_LEN_FRAC", _F("...or this fraction of the seed length, whichever is larger")),
-    ("STROKE_HYST_BRIDGE_PX", _F("bridge noise gaps up to this long ALONG the stroke axis", kind="int")),
+    ("STROKE_HYST_LOW_FACTOR", _F("Tail/extension threshold = the main detection threshold x this; a lower "
+        "value lets a stroke grow along its faint ends. Unit: multiplier.")),
+    ("STROKE_HYST_PAD_FRAC", _F("Padding added around the seed bounding box when searching for a stroke's "
+        "faint extension. Unit: fraction of min_dim.")),
+    ("STROKE_HYST_PAD_LEN_FRAC", _F("...or this fraction of the seed's own length, whichever is larger (long "
+        "scratches reach further). Unit: fraction of the seed length.")),
+    ("STROKE_HYST_BRIDGE_FRAC", _F("For axis-aligned scratches only, bridge noise gaps up to this long ALONG "
+        "the stroke axis. Unit: fraction of min_dim.")),
     # ===================== SENSOR =====================
     # --- dog ---
-    ("SENSOR_SIGMA_INNER_FRAC", _F("DoG inner Gaussian sigma as fraction of min(w,h)")),
-    ("SENSOR_SIGMA_OUTER_FRAC", _F("DoG outer Gaussian sigma (large enough to see around blobs,")),
-    ("SENSOR_DOG_MIN_CONTRAST", _F("minimum DoG peak value; low enough to catch faint dust")),
-    ("SENSOR_MIN_RADIUS_FRAC", _F("min blob radius as fraction of min(w,h)")),
-    ("SENSOR_MAX_BLOB_RADIUS_FRAC", _F("maximum accepted blob radius (% of min_dim); sensor dust is small")),
+    ("SENSOR_SIGMA_INNER_FRAC", _F("Inner Gaussian sigma of the Difference-of-Gaussians blob detector. Unit: "
+        "fraction of min(w,h).")),
+    ("SENSOR_SIGMA_OUTER_FRAC", _F("Outer Gaussian sigma of the DoG — large enough to see the background "
+        "around a blob. Unit: fraction of min(w,h).")),
+    ("SENSOR_DOG_MIN_CONTRAST", _F("Minimum DoG peak value for a blob; low enough to catch faint sensor dust. "
+        "Unit: DoG response level.")),
+    ("SENSOR_MIN_RADIUS_FRAC", _F("Minimum accepted blob radius. Unit: fraction of min(w,h).")),
+    ("SENSOR_MAX_BLOB_RADIUS_FRAC", _F("Maximum accepted blob radius; sensor dust is small. Unit: fraction of "
+        "min(w,h).")),
     # --- consensus ---
-    ("SENSOR_CLUSTER_RADIUS_NORM", _F("cluster radius in normalized full-frame coords")),
-    ("SENSOR_DUST_MIN_FRAMES", _F("min frames a cluster must appear in to confirm sensor dust", kind="int")),
-    ("SENSOR_MAX_CANDIDATE_TEXTURE", _F("pre-filter: reject candidates in busy areas before consensus")),
-    ("SENSOR_MAX_CANDIDATES_FOR_CONSENSUS", _F("per-frame cap before union-find; frames with more candidates", kind="int")),
+    ("SENSOR_CLUSTER_RADIUS_NORM", _F("Radius within which per-frame candidates are clustered into one "
+        "cross-frame dust location. Unit: normalized full-frame coordinate (0-1).")),
+    ("SENSOR_DUST_MIN_FRAMES", _F("A cluster must appear in at least this many frames to be confirmed as sensor "
+        "dust (real sensor dust sits in the same place across the session). Unit: count.", kind="int")),
+    ("SENSOR_MAX_CANDIDATE_TEXTURE", _F("Pre-filter: drop candidates in busy areas (texture above this) before "
+        "cross-frame consensus. Unit: gray-level standard deviation.")),
+    ("SENSOR_MAX_CANDIDATES_FOR_CONSENSUS", _F("Per-frame cap on candidates entering the union-find; frames "
+        "with more are skipped for consensus, to bound cost. Unit: count.", kind="int")),
     # --- correction ---
-    ("SENSOR_BRUSH_SCALE", _F("brush_radius_px = max(MIN_BRUSH_PX, radius_px * this)")),
-    ("SENSOR_MAX_CORRECTION_TEXTURE", _F("skip correction if dust spot lands on a busy area in this frame")),
-    ("SENSOR_MAX_SOURCE_TEXTURE", _F("skip correction if no clean healing source found in any direction")),
+    ("SENSOR_BRUSH_SCALE", _F("Sensor-dust brush radius = blob radius x this (floored to the minimum brush "
+        "size). Unit: multiplier of blob radius.")),
+    ("SENSOR_MAX_CORRECTION_TEXTURE", _F("Skip correcting a confirmed dust spot on any frame where it lands on "
+        "a busy area (texture above this). Unit: gray-level standard deviation.")),
+    ("SENSOR_MAX_SOURCE_TEXTURE", _F("Skip correction when no clean healing source (texture below this) is "
+        "found in any direction. Unit: gray-level standard deviation.")),
 ])
 
 PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
@@ -187,28 +329,28 @@ PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets"
 # Nested layout a preset JSON is written in (kind -> sub-stage). load() flattens it.
 GROUPS = collections.OrderedDict([
     ("dust", collections.OrderedDict([
-        ("threshold", ["LOCAL_BG_KERNEL", "NOISE_THRESHOLD_MULTIPLIER", "MIN_ABSOLUTE_THRESHOLD", "REJECT_LOG_CONTRAST_MIN"]),
-        ("size_shape", ["MIN_SPOT_AREA", "MAX_SPOT_AREA", "MIN_ASPECT_RATIO", "MIN_COMPACTNESS", "MIN_SOLIDITY", "MIN_CIRCULARITY", "DOT_MIN_CIRCLE_FILL", "DOT_IRREGULAR_RADIUS_FRAC", "SHAPE_CHECK_MIN_AREA"]),
-        ("texture_contrast", ["TEXTURE_KERNEL", "MAX_LOCAL_TEXTURE_SMALL", "MAX_LOCAL_TEXTURE_LARGE", "MAX_DARK_BG_TEXTURE", "MIN_CONTRAST_TEXTURE_RATIO", "MAX_BG_GRADIENT_RATIO", "MAX_CONTEXT_TEXTURE", "LARGE_SPOT_AREA_THRESHOLD", "LARGE_SPOT_MIN_CONTRAST"]),
+        ("threshold", ["LOCAL_BG_KERNEL_FRAC", "NOISE_THRESHOLD_MULTIPLIER", "MIN_ABSOLUTE_THRESHOLD", "REJECT_LOG_CONTRAST_MIN"]),
+        ("size_shape", ["MIN_SPOT_AREA_FRAC", "MAX_SPOT_AREA_FRAC", "MIN_ASPECT_RATIO", "MIN_COMPACTNESS", "MIN_SOLIDITY", "MIN_CIRCULARITY", "DOT_MIN_CIRCLE_FILL", "DOT_IRREGULAR_RADIUS_FRAC", "SHAPE_CHECK_MIN_AREA_FRAC"]),
+        ("texture_contrast", ["TEXTURE_KERNEL_FRAC", "MAX_LOCAL_TEXTURE_SMALL", "MAX_LOCAL_TEXTURE_LARGE", "MAX_DARK_BG_TEXTURE", "MIN_CONTRAST_TEXTURE_RATIO", "MAX_BG_GRADIENT_RATIO", "MAX_CONTEXT_TEXTURE", "CONTEXT_TEXTURE_RADIUS_FRAC", "TEXTURE_TIER_AREA_FRAC", "LARGE_SPOT_AREA_THRESHOLD_FRAC", "LARGE_SPOT_MIN_CONTRAST"]),
         ("color", ["MAX_EXCESS_SATURATION", "MAX_SPOT_SATURATION", "EMULSION_EXCESS_SAT_THRESHOLD"]),
         ("voting", ["SOFT_CONTEXT_VOTE_THRESHOLD", "SOFT_TEXTURE_VOTE_THRESHOLD", "SOFT_RATIO_VOTE_THRESHOLD", "MIN_DUST_VOTES"]),
         ("brightness", ["MIN_BRIGHTNESS_FRAC_SMALL", "MIN_BRIGHTNESS_FRAC_LARGE", "MIN_LOCAL_BG_FRACTION", "MIN_SURROUND_BG_RATIO"]),
-        ("isolation", ["ISOLATION_RADIUS", "MAX_NEARBY_ACCEPTED", "MAX_SPOTS"]),
-        ("brush_source", ["ENC_RADIUS_SCALE", "SOURCE_SEARCH_INNER_FACTOR", "SOURCE_SEARCH_MAX_RADIUS", "SOURCE_SEARCH_MIN_RADIUS", "SOURCE_GRID_STEP"]),
+        ("isolation", ["ISOLATION_RADIUS_FRAC", "MAX_NEARBY_ACCEPTED", "MAX_SPOTS"]),
+        ("brush_source", ["ENC_RADIUS_SCALE", "SOURCE_SEARCH_INNER_FACTOR", "SOURCE_SEARCH_MAX_RADIUS_FRAC", "SOURCE_SEARCH_MIN_RADIUS_FRAC", "SOURCE_GRID_STEP_FRAC"]),
         ("ml", ["ML_RECOVERY_THRESHOLD_MULT", "ML_POSTFILTER_THRESHOLD", "ML_RECOVERY_THRESHOLD"]),
     ])),
     ("stroke", collections.OrderedDict([
         ("detect", ["DETECT_STROKES"]),
-        ("geometry", ["STROKE_MIN_LENGTH_FRAC", "STROKE_MIN_ELONGATION", "STROKE_MAX_WIDTH_FRAC", "STROKE_MIN_WIDTH_PX", "STROKE_DP_EPS_FRAC", "STROKE_MAX_FILL_RATIO", "STROKE_PREFER_RATIO", "STROKE_MAX_KEYPOINTS"]),
-        ("brush", ["STROKE_COVERAGE_FRAC", "STROKE_COVERAGE_MIN_DIFF", "STROKE_COVERAGE_PCTL", "STROKE_COVERAGE_MARGIN_PX", "STROKE_BORDER_SCALE", "STROKE_MIN_BORDER_PX", "STROKE_MAX_BORDER_FRAC"]),
-        ("ridge_pass", ["STROKE_RIDGE_ENABLE", "STROKE_RIDGE_SIGMAS", "STROKE_RIDGE_Z", "STROKE_RIDGE_MIN_CONTRAST", "STROKE_RIDGE_DOWNSCALE", "STROKE_RIDGE_MAX_CANDIDATES"]),
+        ("geometry", ["STROKE_MIN_LENGTH_FRAC", "STROKE_MIN_ELONGATION", "STROKE_MAX_WIDTH_FRAC", "STROKE_MIN_WIDTH_FRAC", "STROKE_DP_EPS_FRAC", "STROKE_MAX_FILL_RATIO", "STROKE_PREFER_RATIO", "STROKE_MAX_KEYPOINTS"]),
+        ("brush", ["STROKE_COVERAGE_FRAC", "STROKE_COVERAGE_MIN_DIFF", "STROKE_COVERAGE_PCTL", "STROKE_COVERAGE_MARGIN_FRAC", "STROKE_BORDER_SCALE", "STROKE_MIN_BORDER_FRAC", "STROKE_MAX_BORDER_FRAC"]),
+        ("ridge_pass", ["STROKE_RIDGE_ENABLE", "STROKE_RIDGE_SIGMA_FRACS", "STROKE_RIDGE_Z", "STROKE_RIDGE_MIN_CONTRAST", "STROKE_RIDGE_DOWNSCALE", "STROKE_RIDGE_MAX_CANDIDATES"]),
         ("gating", ["STROKE_MAX_BAND_TEXTURE", "STROKE_MAX_CONTEXT_TEXTURE", "STROKE_CONTEXT_RADIUS_FRAC", "STROKE_MAX_EXCESS_SAT", "STROKE_MIN_BRIGHTNESS_FRAC", "STROKE_MIN_RIDGE_DROP", "STROKE_MAX_SIDE_ASYMMETRY", "STROKE_SIDE_OFFSET_FACTOR", "STROKE_MIN_CRISPNESS", "STROKE_CLIP_LEVEL"]),
-        ("source", ["STROKE_SOURCE_OFFSET_FACTOR", "STROKE_SOURCE_MIN_GAP_PX"]),
-        ("heal_split", ["HEAL_SPLIT_BUSY", "HEAL_MAX_TEXTURE", "HEAL_BUSY_MARGIN_PX", "HEAL_SAMPLE_STEP_PX", "HEAL_MIN_SEGMENT_FRAC"]),
-        ("field_isolation", ["STROKE_FIELD_RADIUS_FRAC", "STROKE_FIELD_INNER_PX", "STROKE_FIELD_MAX_LINE_CANDS", "STROKE_FIELD_CAND_MIN_AREA", "STROKE_FIELD_CAND_MIN_DIM", "STROKE_FIELD_CAND_MAX_FILL", "STROKE_FIELD_CAND_MIN_ELONG", "STROKE_FIELD_NBR_RADIUS_FRAC", "STROKE_FIELD_MAX_NEIGHBORS"]),
-        ("streak", ["STREAK_DETECT", "STREAK_RIDGE_VGAP", "STREAK_INTEG_LEN", "STREAK_LEVEL_MULT", "STREAK_MIN_LEN_FRAC", "STREAK_MAX_THICKNESS", "STREAK_MIN_ELONG"]),
-        ("radon", ["STREAK_RADON_DETECT", "STREAK_RADON_MIN_RESP", "STREAK_RADON_MIN_COV", "STREAK_RADON_MAX_SLOPE", "STREAK_RADON_SLOPES", "STREAK_RADON_PRESENT", "STREAK_RADON_EXT_FACTOR", "STREAK_RADON_EXT_GAP", "STREAK_RADON_MAX_HALFWIDTH", "STREAK_RADON_MIN_BRUSH_R", "STREAK_RADON_BRUSH_MARGIN"]),
-        ("hysteresis", ["STROKE_HYST_LOW_FACTOR", "STROKE_HYST_PAD_FRAC", "STROKE_HYST_PAD_LEN_FRAC", "STROKE_HYST_BRIDGE_PX"]),
+        ("source", ["STROKE_SOURCE_OFFSET_FACTOR", "STROKE_SOURCE_MIN_GAP_FRAC"]),
+        ("heal_split", ["HEAL_SPLIT_BUSY", "HEAL_MAX_TEXTURE", "HEAL_BUSY_MARGIN_FRAC", "HEAL_SAMPLE_STEP_FRAC", "HEAL_MIN_SEGMENT_FRAC"]),
+        ("field_isolation", ["STROKE_FIELD_RADIUS_FRAC", "STROKE_FIELD_INNER_FRAC", "STROKE_FIELD_MAX_LINE_CANDS", "STROKE_FIELD_CAND_MIN_AREA_FRAC", "STROKE_FIELD_CAND_MIN_DIM_FRAC", "STROKE_FIELD_CAND_MAX_FILL", "STROKE_FIELD_CAND_MIN_ELONG", "STROKE_FIELD_NBR_RADIUS_FRAC", "STROKE_FIELD_MAX_NEIGHBORS"]),
+        ("streak", ["STREAK_DETECT", "STREAK_RIDGE_VGAP_FRAC", "STREAK_INTEG_LEN_FRAC", "STREAK_LEVEL_MULT", "STREAK_MIN_LEN_FRAC", "STREAK_MAX_THICKNESS_FRAC", "STREAK_MIN_ELONG"]),
+        ("radon", ["STREAK_RADON_DETECT", "STREAK_RADON_MIN_RESP", "STREAK_RADON_MIN_COV", "STREAK_RADON_MAX_SLOPE", "STREAK_RADON_SLOPES", "STREAK_RADON_PRESENT", "STREAK_RADON_EXT_FACTOR", "STREAK_RADON_EXT_GAP_FRAC", "STREAK_RADON_MAX_HALFWIDTH_FRAC", "STREAK_RADON_MIN_BRUSH_R_FRAC", "STREAK_RADON_BRUSH_MARGIN_FRAC"]),
+        ("hysteresis", ["STROKE_HYST_LOW_FACTOR", "STROKE_HYST_PAD_FRAC", "STROKE_HYST_PAD_LEN_FRAC", "STROKE_HYST_BRIDGE_FRAC"]),
     ])),
     ("sensor", collections.OrderedDict([
         ("dog", ["SENSOR_SIGMA_INNER_FRAC", "SENSOR_SIGMA_OUTER_FRAC", "SENSOR_DOG_MIN_CONTRAST", "SENSOR_MIN_RADIUS_FRAC", "SENSOR_MAX_BLOB_RADIUS_FRAC"]),

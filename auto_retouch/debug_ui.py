@@ -936,10 +936,27 @@ class DustDebugUI(DebugUIBase):
             text = f"{name}\n{doc}" if doc else name
             w = tk.Toplevel(tree)
             w.wm_overrideredirect(True)
-            w.wm_geometry(f"+{e.x_root + 14}+{e.y_root + 12}")
+            w.withdraw()   # hide until measured + positioned (no top-left flash)
             tk.Label(w, text=text, bg="#ffffe0", fg="#000000", font=("", 8),
-                     relief=tk.SOLID, borderwidth=1, padx=4, pady=2,
-                     justify=tk.LEFT, wraplength=self.scaled(300)).pack()
+                     relief=tk.SOLID, borderwidth=1, padx=6, pady=4,
+                     justify=tk.LEFT, wraplength=self.scaled(420)).pack()
+            # Position it, then keep it fully on-screen: place to the left of the
+            # cursor if it would overflow the right edge, and above if it would
+            # overflow the bottom (never off the top/left either).
+            w.update_idletasks()
+            tw, th = w.winfo_reqwidth(), w.winfo_reqheight()
+            sw, sh = w.winfo_screenwidth(), w.winfo_screenheight()
+            margin = self.scaled(8)
+            x = e.x_root + self.scaled(14)
+            if x + tw + margin > sw:
+                x = e.x_root - tw - self.scaled(14)
+            x = max(margin, min(x, sw - tw - margin))
+            y = e.y_root + self.scaled(12)
+            if y + th + margin > sh:
+                y = e.y_root - th - self.scaled(12)
+            y = max(margin, min(y, sh - th - margin))
+            w.wm_geometry(f"+{int(x)}+{int(y)}")
+            w.deiconify()
             state["tip"] = w
             state["row"] = iid
 
@@ -2241,7 +2258,9 @@ class DustDebugUI(DebugUIBase):
         self._seed_missed_dust(img_dict, md)   # ensure it has a radius to scale from
         factor = 1.1 if delta > 0 else (1 / 1.1)
         import detect_dust
-        md["brush_radius_px"] = max(detect_dust.MIN_BRUSH_PX, md["brush_radius_px"] * factor)
+        min_dim = min(img_dict.get("width") or 0, img_dict.get("height") or 0)
+        min_brush = detect_dust.MIN_BRUSH_FRAC * min_dim if min_dim else 2.0
+        md["brush_radius_px"] = max(min_brush, md["brush_radius_px"] * factor)
         md["radius_px"] = max(1.0, md["brush_radius_px"] /
                               max(detect_dust.DEFAULT_TUNING.ENC_RADIUS_SCALE, 1e-6))
         self._auto_save(stem)
@@ -3149,23 +3168,23 @@ class DustDebugUI(DebugUIBase):
                         "SENSOR_MAX_CANDIDATE_TEXTURE",
                         "SENSOR_MAX_CANDIDATES_FOR_CONSENSUS",
                         "SENSOR_MAX_CORRECTION_TEXTURE", "SENSOR_MAX_SOURCE_TEXTURE",
-                        "MAX_FORMS", "MIN_BRUSH_PX"]:
+                        "MAX_FORMS", "MIN_BRUSH_FRAC"]:
                 if key in constants:
                     lines.append(f"  {key} = {constants[key]}")
             return lines
         # Key constants
         for key in ["NOISE_THRESHOLD_MULTIPLIER", "MIN_ABSOLUTE_THRESHOLD",
-                    "MIN_SPOT_AREA", "MAX_SPOT_AREA", "MIN_ASPECT_RATIO",
+                    "MIN_SPOT_AREA_FRAC", "MAX_SPOT_AREA_FRAC", "MIN_ASPECT_RATIO",
                     "MIN_COMPACTNESS", "MIN_SOLIDITY", "MIN_CIRCULARITY",
                     "MAX_LOCAL_TEXTURE_SMALL", "MAX_LOCAL_TEXTURE_LARGE",
                     "MIN_CONTRAST_TEXTURE_RATIO", "MAX_BG_GRADIENT_RATIO",
                     "MAX_EXCESS_SATURATION", "MAX_CONTEXT_TEXTURE",
-                    "LARGE_SPOT_AREA_THRESHOLD", "LARGE_SPOT_MIN_CONTRAST",
-                    "ISOLATION_RADIUS", "MAX_NEARBY_ACCEPTED",
+                    "LARGE_SPOT_AREA_THRESHOLD_FRAC", "LARGE_SPOT_MIN_CONTRAST",
+                    "ISOLATION_RADIUS_FRAC", "MAX_NEARBY_ACCEPTED",
                     "SOFT_CONTEXT_VOTE_THRESHOLD", "SOFT_TEXTURE_VOTE_THRESHOLD",
                     "SOFT_RATIO_VOTE_THRESHOLD", "MIN_DUST_VOTES",
                     "REJECT_LOG_CONTRAST_MIN",
-                    "MIN_BRUSH_PX", "BRUSH_HARDNESS"]:
+                    "MIN_BRUSH_FRAC", "BRUSH_HARDNESS"]:
             if key in constants:
                 lines.append(f"  {key} = {constants[key]}")
         return lines

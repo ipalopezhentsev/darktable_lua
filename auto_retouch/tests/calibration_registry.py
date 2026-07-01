@@ -48,8 +48,8 @@ _OVERRIDES = {
     "SENSOR_DUST_MIN_FRAMES": (2, 5, 1, True),
     # percentiles (bounded)
     "STROKE_COVERAGE_PCTL": (80, 99, 1, True), "STROKE_CLIP_LEVEL": (240, 254, 1, True),
-    # odd kernel sizes — leave to explicit config tuning; modest band
-    "LOCAL_BG_KERNEL": (101, 301, 50, True), "TEXTURE_KERNEL": (15, 51, 2, True),
+    # kernel sizes are now fractions of min_dim (odd-ified to px at use); modest band
+    "LOCAL_BG_KERNEL_FRAC": (0.026, 0.08, 0.0053), "TEXTURE_KERNEL_FRAC": (0.004, 0.0135, 0.0005),
 }
 
 
@@ -67,8 +67,11 @@ def _spec_for(name):
     if 0.0 < v <= 1.0:                       # looks like a fraction — keep sane band
         hi = min(hi, 1.0)
     span = hi - lo or max(abs(v), 1.0)
-    step = max(1, round(span / 10)) if is_int else round(span / 10, 6)
-    return P(round(lo, 6), round(hi, 6), step, integer=is_int, module="detect_dust")
+    # 6 significant figures (not fixed 6 decimals) so tiny area fractions like 4.2e-07
+    # keep a non-zero band + step instead of collapsing to 0.
+    _sig = lambda x: float(f"{x:.6g}") if x else 0.0
+    step = max(1, round(span / 10)) if is_int else _sig(span / 10)
+    return P(_sig(lo), _sig(hi), step, integer=is_int, module="detect_dust")
 
 
 def _build_registry():

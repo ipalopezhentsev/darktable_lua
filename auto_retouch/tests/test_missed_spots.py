@@ -35,13 +35,14 @@ def test_missed_dust_to_spot():
     _ok(abs(s2["brush_radius_px"] - 42.0) < 1e-6, "stored radius honored")
     _ok(s2["src_cx"] == 1.0 and s2["src_cy"] == 2.0, "stored source honored")
 
-    # no detections + no buffers -> small constant fallback (>= MIN_BRUSH_PX)
-    s3 = d.missed_dust_to_spot({"cx": 0, "cy": 0}, [], None)
-    _ok(s3["brush_radius_px"] >= d.MIN_BRUSH_PX, "fallback radius >= MIN_BRUSH_PX")
+    # no detections + no buffers -> frame-relative floor (>= MIN_BRUSH_FRAC*min_dim)
+    min_brush = d.MIN_BRUSH_FRAC * 4000
+    s3 = d.missed_dust_to_spot({"cx": 0, "cy": 0}, [], None, min_dim=4000)
+    _ok(s3["brush_radius_px"] >= min_brush, "fallback radius >= MIN_BRUSH_FRAC*min_dim")
 
-    # radius is clamped to MIN_BRUSH_PX even if a tiny value is stored
-    s4 = d.missed_dust_to_spot({"cx": 0, "cy": 0, "brush_radius_px": 0.1}, dets, None)
-    _ok(s4["brush_radius_px"] == d.MIN_BRUSH_PX, "tiny stored radius clamped to MIN_BRUSH_PX")
+    # radius is clamped to MIN_BRUSH_FRAC*min_dim even if a tiny value is stored
+    s4 = d.missed_dust_to_spot({"cx": 0, "cy": 0, "brush_radius_px": 0.1}, dets, None, min_dim=4000)
+    _ok(abs(s4["brush_radius_px"] - min_brush) < 1e-6, "tiny stored radius clamped to MIN_BRUSH_FRAC*min_dim")
 
 
 def test_missed_stroke_to_spot():
@@ -49,8 +50,8 @@ def test_missed_stroke_to_spot():
     sp = d.missed_stroke_to_spot(ms, min_dim=4000)
     _ok(sp is not None and sp["kind"] == "stroke", "stroke spot built")
     _ok(len(sp["path"]) == 3, "path carried through")
-    _ok(sp["brush_radius_px"] >= d.DEFAULT_TUNING.STROKE_MIN_BORDER_PX,
-        "stroke brush >= STROKE_MIN_BORDER_PX")
+    _ok(sp["brush_radius_px"] >= d.DEFAULT_TUNING.STROKE_MIN_BORDER_FRAC * 4000,
+        "stroke brush >= STROKE_MIN_BORDER_FRAC*min_dim")
 
     # too-short path -> None (nothing to heal)
     _ok(d.missed_stroke_to_spot({"path": [[1, 1]]}, 4000) is None, "1-point path -> None")

@@ -279,7 +279,17 @@ For auto_retouch feature:
       bright threads detected from the threshold binary, healed with multi-node brush strokes
       (`kind="stroke"` spots). Faint film-scratch ridge pass implemented but disabled by
       default (noise-floor FPs); human adds faint scratches via the debug UI.
-- [ ] Check all logic for consistency given different input sizes, i.e. does its constants contain relative metrics instead of absolute - absolute ones won't detect the same stuff on differently sized input, say if the same film frame were shot with a camera with higher megapixels.
+- [x] Check all logic for consistency given different input sizes (2026-07-01): EVERY
+      size-dependent detection constant is now a fraction of the frame — lengths/radii/
+      kernels as `*_FRAC` (resolved `min_dim * FRAC`, kernels odd-ified), areas as
+      `*_AREA_FRAC`/`*_FRAC` (resolved `min_dim**2 * FRAC`). No absolute-pixel constant or
+      pixel↔fraction reference remains in `detect_dust.py` (`MIN_BRUSH_PX`→`MIN_BRUSH_FRAC`;
+      the `200`/`20` context/dedup/sensor literals → named `*_FRAC` module constants; two new
+      preset fields `CONTEXT_TEXTURE_RADIUS_FRAC` + `TEXTURE_TIER_AREA_FRAC`). Values in
+      `presets/default.json` were converted ONCE offline (anchored at the fixtures' ~3780px
+      min_dim) so detection at today's resolution is unchanged. Guarded by
+      `tests/test_resolution_invariance.py` (detect at W vs an exact 2x copy → outputs scale
+      ~2x; asserts no `*_PX` module constant leaks back in).
 - [ ] add params now hardcoded in py to DT UI, pass along with crops?
 - [ ] on some heavily dusted images, e.g. DSC_0012, running second debug pass after applying first correction helps detect even more dust not picked up by the first pass.
 - [ ] add full negadoctor automation

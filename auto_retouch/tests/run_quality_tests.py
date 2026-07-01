@@ -110,11 +110,12 @@ def check_spot_invariants(spots, width, height):
     error (fails the suite): source brush overlaps the defect brush, source out of bounds,
       non-finite/missing coords, brush_radius<=0, or a stroke path with < 2 points.
     warn: brush radius looks like a runaway, or a stroke source is closer than the intended
-      gap (STROKE_SOURCE_MIN_GAP_PX) though not yet overlapping.
+      gap (STROKE_SOURCE_MIN_GAP_FRAC * min_dim) though not yet overlapping.
     """
     min_dim = min(width, height)
-    step = getattr(detect_dust, "HEAL_SAMPLE_STEP_PX", 8.0)
-    gap_intent = getattr(detect_dust, "STROKE_SOURCE_MIN_GAP_PX", 10.0)
+    _t = detect_dust.DEFAULT_TUNING
+    step = max(1.0, _t.HEAL_SAMPLE_STEP_FRAC * min_dim)
+    gap_intent = _t.STROKE_SOURCE_MIN_GAP_FRAC * min_dim
     br_cap = BRUSH_RADIUS_CAP_FRAC * min_dim
     issues = []
     for idx, s in enumerate(spots):
