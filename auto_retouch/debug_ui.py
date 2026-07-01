@@ -40,6 +40,33 @@ from common.debug_ui_base import (
 DEFAULT_MISSED_STROKE_WIDTH = 8.0
 
 
+def _coerce_param(name, value):
+    """Coerce a param-override value to its tuning type (mirrors schema._coerce):
+    bool / int / tuple-of-floats / float, keyed by the tuning field-type sets."""
+    import tuning
+    if name in tuning.BOOL_FIELDS:
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if name in tuning.INT_FIELDS:
+        return int(round(float(value)))
+    if name in tuning.TUPLE_FIELDS:
+        if isinstance(value, str):
+            parts = [p for p in value.replace(",", " ").split() if p]
+        else:
+            parts = list(value)
+        return tuple(float(p) for p in parts)
+    return float(value)
+
+
+def _params_json_safe(overrides):
+    """Make a param_overrides dict JSON-serializable (tuples -> lists)."""
+    out = {}
+    for k, v in overrides.items():
+        out[k] = list(v) if isinstance(v, tuple) else v
+    return out
+
+
 class _MenuEntryState:
     """Adapter so the existing `self.remove_missed_btn.config(state=…)` call
     sites drive a MENU ENTRY's enabled state now that the action moved off the
@@ -72,11 +99,21 @@ class DustDebugUI(DebugUIBase):
     ITEM_ANCHORS = {"fp": "center", "nt": "center"}
     NOTE_COLUMN  = "nt"
     SHOW_BOTTOM_BUTTONS = False     # actions live on the menu bar + toolbar
+    # Wider right panel by default so the detection-params table (Param/Value/Base
+    # + scrollbar) fits without dragging the splitter (base default 230 is too
+    # narrow and _reflow_panes uses it as the floor).
+    ITEM_PANEL_WIDTH = 360
 
     # Apply-from-folder (--apply): on close, write dust_results.txt from the FINAL
     # spot set per frame (detected − false_positives + missed_dust + missed_strokes)
     # so the Lua side can heal the user's annotated set into the XMPs.
     apply_mode = False
+
+    # Edit-existing-retouch / import-GT (--import-gt): seed each frame's existing
+    # film-dust retouch (decoded from its source XMP) as missed_dust/missed_strokes
+    # annotations over the fresh detection, and on close report which frames the
+    # user actually changed (import_changed.txt) so Lua only re-writes those.
+    import_gt = False
 
     # ------------------------------------------------------------------
     # Session / annotation lifecycle
@@ -85,6 +122,22 @@ class DustDebugUI(DebugUIBase):
     def load_session(self, session_dir):
         import detect_dust
         self._session_dir = session_dir
+        # Import-GT: write seed {stem}_annotations.json (+ import_baseline.json)
+        # BEFORE the run-mode detection streams in — _poll_bg_detect then loads
+        # them via _load_existing_annotations_for as each frame finalizes.
+        # Baseline for the "did the user actually edit?" check is NOT the decoded
+        # import — it's the INITIAL committed set (fresh detection + seeded imports),
+        # captured per frame in _poll_bg_detect after detection lands. Otherwise a
+        # frame where detection merely ADDS spots (which the user didn't touch)
+        # would be flagged changed and get re-applied on a no-op close.
+        self._import_baseline = {}
+        if self.import_gt:
+            try:
+                import import_retouch
+                seeded = import_retouch.seed_import_annotations(session_dir)
+                print(f"Import-GT: seeded {len(seeded)} frame(s) from existing retouch")
+            except Exception as e:   # pragma: no cover - defensive
+                print(f"Import-GT seeding failed: {e}")
         images, constants = detect_dust.load_debug_spots_dir(session_dir)
         self._run_mode = False
         # A `--review` session dir starts with ONLY review_meta.json (no frames):
@@ -181,6 +234,8 @@ class DustDebugUI(DebugUIBase):
         transforms = detect_dust.parse_transform_params(
             os.path.join(session_dir, "transform_params.txt"))
         results = []
+        changed = []          # import-GT: stems whose committed set differs from import
+        baseline = getattr(self, "_import_baseline", None) or {}
         for img_dict in self.images:
             stem = img_dict["stem"]
             w, h = img_dict.get("width"), img_dict.get("height")
@@ -194,10 +249,21 @@ class DustDebugUI(DebugUIBase):
                     ashift_params=t.get("ashift"))
             results.append((stem, spots, img_dict.get("rejected") or [],
                             (w, h), None, xmp_data))
+            if self.import_gt:
+                import import_retouch
+                min_dim = min(w or 0, h or 0)
+                if import_retouch.spots_differ(baseline.get(stem), spots, min_dim):
+                    changed.append(stem)
         results.sort(key=lambda r: r[0])
         path = detect_dust.write_dust_results(results, session_dir)
         print(f"Apply results written to: {path} "
               f"({sum(1 for r in results if r[1])} frame(s) with spots)")
+        if self.import_gt:
+            # Lua re-writes (disable prior dust instances + add new) ONLY these.
+            with open(os.path.join(session_dir, "import_changed.txt"), "w") as f:
+                for stem in sorted(changed):
+                    f.write(stem + "\n")
+            print(f"Import-GT: {len(changed)} frame(s) changed vs imported retouch")
 
     def _on_close(self):
         if self.apply_mode:
@@ -235,6 +301,7 @@ class DustDebugUI(DebugUIBase):
             "spot_notes": {},         # {spot_idx: str} user text notes on detected spots
             "source_mismatches": [],  # list from quality test diff sessions
             "radius_mismatches": [],  # list from quality test diff sessions
+            "param_overrides": {},    # {TUNING_NAME: value} per-frame detection-param edits
         }
 
     def serialize_annotations(self, stem):
@@ -286,6 +353,7 @@ class DustDebugUI(DebugUIBase):
             "spot_notes": spot_notes_list,
             "source_mismatches": ann.get("source_mismatches", []),
             "radius_mismatches": ann.get("radius_mismatches", []),
+            "param_overrides": _params_json_safe(ann.get("param_overrides", {})),
         }
 
     def deserialize_annotations(self, img_dict, data):
@@ -338,6 +406,14 @@ class DustDebugUI(DebugUIBase):
         # Load source/radius mismatches from quality test diff sessions
         self.annotations[stem]["source_mismatches"] = data.get("source_mismatches", [])
         self.annotations[stem]["radius_mismatches"] = data.get("radius_mismatches", [])
+        # Per-frame detection-param overrides (coerced to their tuning types).
+        overrides = {}
+        for name, val in (data.get("param_overrides") or {}).items():
+            try:
+                overrides[name] = _coerce_param(name, val)
+            except (ValueError, TypeError):
+                pass
+        self.annotations[stem]["param_overrides"] = overrides
 
     # ------------------------------------------------------------------
     # Selection state
@@ -356,6 +432,8 @@ class DustDebugUI(DebugUIBase):
         self.selected_missed_stroke = None  # int or None: index into missed_strokes
         self.selected_missed_source = None  # int or None: missed-dust index whose source is selected
         self._missed_src_drag = None        # int or None: missed-dust whose source is being dragged
+        self.selected_missed_stroke_source = None  # int or None: missed-thread whose source is selected
+        self._missed_stroke_src_drag = None        # int or None: missed-thread source being dragged
         # Lazily-computed {stem: (img_lab, L_f32, local_std, w, h)} for recommending
         # a healing source for a hand-added missed dust (prepare_source_buffers).
         self._missed_buffers = {}
@@ -365,6 +443,12 @@ class DustDebugUI(DebugUIBase):
         # to them; the BooleanVars need a root, which exists by now.
         self.show_rejected_var = tk.BooleanVar(master=self.root, value=False)
         self.show_source_brush_var = tk.BooleanVar(master=self.root, value=False)
+        # Show/hide the two object GROUPS: algo-detected spots vs the ones loaded
+        # from an existing edit (imported/hand-added missed dust + threads). Both
+        # on by default; toggled from the View menu + toolbar (no keyboard shortcut
+        # so nothing already bound is clobbered).
+        self.show_detected_var = tk.BooleanVar(master=self.root, value=True)
+        self.show_missed_var = tk.BooleanVar(master=self.root, value=True)
 
         # Thread-draw mode: click to place centerline points for a missed thread
         self.thread_draw_mode = False
@@ -426,10 +510,20 @@ class DustDebugUI(DebugUIBase):
         self.selected_keypoint = None
         self.selected_missed_stroke = None
         self.selected_missed_source = None
+        self.selected_missed_stroke_source = None
         self.remove_missed_btn.config(state=tk.DISABLED)
 
     def __init__(self, root, session_dir):
         super().__init__(root, session_dir)
+        # Give the (expandable) params table the majority of the right panel: keep
+        # the spots tree at a compact baseline and stop its frame from claiming the
+        # extra vertical space, so the params table grows into it instead.
+        if hasattr(self, "item_tree"):
+            try:
+                self.item_tree.configure(height=8)
+                self.item_tree.master.pack_configure(expand=False, fill=tk.X)
+            except tk.TclError:
+                pass
         # Run mode (the Lua Debug action / --review launch the UI on a JPG-only dir):
         # the window is already up; detect the whole roll on a background pool and
         # stream each frame's spots in as it finishes, with the shared progress
@@ -468,6 +562,9 @@ class DustDebugUI(DebugUIBase):
         # preset (lazy — detection is full-res + slow) when 'live' is on screen.
         if getattr(self, "review_mode", False):
             self.root.after_idle(self._ensure_live_for_current)
+        # Show THIS frame's param overrides in the params table.
+        if hasattr(self, "params_tree"):
+            self._populate_params_table()
 
     # ------------------------------------------------------------------
     # Run-mode background detection (detect the whole roll, streaming)
@@ -552,6 +649,16 @@ class DustDebugUI(DebugUIBase):
                     # session RESTORES the user's annotations instead of wiping them.
                     self.annotations[img["stem"]] = self.new_annotation_state(img)
                     self._load_existing_annotations_for(img)
+                    if getattr(self, "import_gt", False):
+                        # Snapshot the INITIAL committed set (detection + seeded
+                        # imports, no user edits yet) so on close we re-apply ONLY
+                        # frames the user actually changed — a no-op close leaves
+                        # the frame's existing retouch untouched.
+                        try:
+                            self._import_baseline[img["stem"]] = \
+                                self._final_spots_for_apply(img)
+                        except Exception:   # pragma: no cover - defensive
+                            pass
                 self._bg_done += 1
                 self._update_detect_progress()
                 if i == self.current_idx:
@@ -624,6 +731,17 @@ class DustDebugUI(DebugUIBase):
         when launched by `run_calibration.py --review` (the fitted preset arrives
         via RETOUCH_REVIEW_PRESET)."""
         self.toolbar_separator(row)
+        # Group show/hide toggles (buttons show the CURRENT state, not the target).
+        self.detected_toggle_btn = self.toolbar_button(
+            row, "", self._toggle_show_detected)
+        self.attach_tooltip(self.detected_toggle_btn,
+                            "Show/hide algorithm-detected spots")
+        self.missed_toggle_btn = self.toolbar_button(
+            row, "", self._toggle_show_missed)
+        self.attach_tooltip(self.missed_toggle_btn,
+                            "Show/hide spots loaded from an existing edit (imported / missed)")
+        self._update_group_toggle_btns()
+        self.toolbar_separator(row)
         # Annotation counts (was the label atop the old bottom button column).
         self.count_label = ttk.Label(row, text="FP: 0 | Missed: 0")
         self.count_label.pack(side="left", padx=8)
@@ -662,6 +780,280 @@ class DustDebugUI(DebugUIBase):
         # give the dropdown its OWN row below it (otherwise it would squeeze the
         # 'Detect with:' combo off the right edge at the default width).
         self._build_roll_switcher(parent, row)
+
+    # ------------------------------------------------------------------
+    # Group show/hide (algo-detected vs loaded-from-existing)
+    # ------------------------------------------------------------------
+
+    def _update_group_toggle_btns(self):
+        """Reflect the current visibility state on the toolbar buttons (the label
+        shows what IS shown, not the toggle target — a ✓/✗ + name)."""
+        if hasattr(self, "detected_toggle_btn"):
+            on = self.show_detected_var.get()
+            self.detected_toggle_btn.config(
+                text=("✓ Detected" if on else "✗ Detected"),
+                fg=("white" if on else "#9a9a9a"))
+        if hasattr(self, "missed_toggle_btn"):
+            on = self.show_missed_var.get()
+            self.missed_toggle_btn.config(
+                text=("✓ Loaded" if on else "✗ Loaded"),
+                fg=("white" if on else "#9a9a9a"))
+
+    def _on_group_toggle(self):
+        """A group visibility var changed (menu checkbutton): sync buttons + redraw."""
+        self._update_group_toggle_btns()
+        self._redraw_markers()
+
+    def _toggle_show_detected(self):
+        self.show_detected_var.set(not self.show_detected_var.get())
+        self._on_group_toggle()
+
+    def _toggle_show_missed(self):
+        self.show_missed_var.set(not self.show_missed_var.get())
+        self._on_group_toggle()
+
+    # ------------------------------------------------------------------
+    # Detection-params table (per-frame overrides + on-demand re-detect)
+    # ------------------------------------------------------------------
+
+    def _current_stem(self):
+        return self.images[self.current_idx]["stem"] if self.images else None
+
+    def _param_overrides(self):
+        """The current frame's {NAME: value} override dict (created on demand)."""
+        stem = self._current_stem()
+        if stem is None:
+            return {}
+        ann = self.annotations.setdefault(stem, self.new_annotation_state(
+            self.images[self.current_idx]))
+        return ann.setdefault("param_overrides", {})
+
+    def _effective_cfg(self):
+        """Base preset (the 'Detect with:' selection) with the current frame's
+        per-frame param overrides layered on top."""
+        base = self._cfg_for_selection()
+        ov = self._param_overrides()
+        if not ov:
+            return base
+        coerced = {}
+        for name, val in ov.items():
+            try:
+                coerced[name] = _coerce_param(name, val)
+            except (ValueError, TypeError):
+                pass
+        try:
+            return base._replace(**coerced)
+        except (ValueError, TypeError):
+            return base
+
+    @staticmethod
+    def _param_value_str(name, val):
+        import tuning
+        if name in tuning.BOOL_FIELDS:
+            return "True" if val else "False"
+        if name in tuning.TUPLE_FIELDS:
+            return ", ".join(f"{float(x):g}" for x in val)
+        if name in tuning.INT_FIELDS:
+            return str(int(val))
+        return f"{float(val):g}"
+
+    def build_item_panel_top(self, parent):
+        """Detection-params table above the spots table: every tuning constant
+        (grouped kind -> sub-stage), the current value + base value, a name filter,
+        and Re-detect / Reset buttons. Editing a value stores a per-frame override
+        (saved in the annotations); Re-detect re-runs detection under the effective
+        cfg (base preset + overrides)."""
+        import tuning
+        sec = tk.Frame(parent, bg="#484848")
+        sec.pack(fill=tk.BOTH, expand=True, padx=4, pady=(6, 2))
+
+        header = tk.Frame(sec, bg="#484848")
+        header.pack(fill=tk.X)
+        tk.Label(header, text="Detection params", bg="#484848", fg="white",
+                 font=("", 10, "bold")).pack(side="left", padx=2)
+        tk.Button(header, text="Re-detect", command=self._redetect_current,
+                  **self.TOOLBAR_BTN_STYLE).pack(side="right", padx=2)
+        tk.Button(header, text="Reset", command=self._reset_params,
+                  **self.TOOLBAR_BTN_STYLE).pack(side="right", padx=2)
+
+        filt = tk.Frame(sec, bg="#484848")
+        filt.pack(fill=tk.X, pady=(2, 2))
+        tk.Label(filt, text="filter:", bg="#484848", fg="#c0c0c0",
+                 font=("", 8)).pack(side="left", padx=(2, 2))
+        self._param_filter = tk.StringVar(value="")
+        fe = tk.Entry(filt, textvariable=self._param_filter, bg="#363636",
+                      fg="#dddddd", insertbackground="#dddddd", relief="flat")
+        fe.pack(side="left", fill=tk.X, expand=True, padx=(0, 2))
+        self._param_filter.trace_add("write", lambda *a: self._populate_params_table())
+
+        tree_frame = tk.Frame(sec, bg="#484848")
+        tree_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2))
+        self.params_tree = ttk.Treeview(
+            tree_frame, columns=("val", "base"), show="tree headings",
+            style="Item.Treeview", selectmode="browse", height=16)
+        self.params_tree.heading("#0", text="Param")
+        self.params_tree.heading("val", text="Value")
+        self.params_tree.heading("base", text="Base")
+        self.params_tree.column("#0", width=self.scaled(150), stretch=True, minwidth=self.scaled(90))
+        self.params_tree.column("val", width=self.scaled(70), anchor="e", stretch=False)
+        self.params_tree.column("base", width=self.scaled(60), anchor="e", stretch=False)
+        self.params_tree.tag_configure("changed", foreground="#ffd24a")
+        self.params_tree.tag_configure("group", foreground="#9fd0ff")
+        sb = tk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.params_tree.yview)
+        self.params_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.params_tree.pack(fill=tk.BOTH, expand=True)
+        self.params_tree.bind("<Double-1>", self._on_param_double_click)
+        self._install_param_tooltip()
+
+        self._populate_params_table()
+
+    def _install_param_tooltip(self):
+        """Hover tooltip on the params tree: show the param's description (from
+        tuning.FIELDS[name].doc) for whatever leaf row is under the cursor,
+        updating as the pointer moves between rows."""
+        tree = self.params_tree
+        state = {"tip": None, "row": None}
+
+        def hide(_e=None):
+            if state["tip"] is not None:
+                state["tip"].destroy()
+                state["tip"] = None
+            state["row"] = None
+
+        def on_motion(e):
+            import tuning
+            iid = tree.identify_row(e.y)
+            if not iid or not iid.startswith("p::"):
+                hide()
+                return
+            if iid == state["row"]:
+                return
+            hide()
+            name = iid[3:]
+            f = tuning.FIELDS.get(name)
+            doc = (getattr(f, "doc", "") or "").strip() if f else ""
+            text = f"{name}\n{doc}" if doc else name
+            w = tk.Toplevel(tree)
+            w.wm_overrideredirect(True)
+            w.wm_geometry(f"+{e.x_root + 14}+{e.y_root + 12}")
+            tk.Label(w, text=text, bg="#ffffe0", fg="#000000", font=("", 8),
+                     relief=tk.SOLID, borderwidth=1, padx=4, pady=2,
+                     justify=tk.LEFT, wraplength=self.scaled(300)).pack()
+            state["tip"] = w
+            state["row"] = iid
+
+        tree.bind("<Motion>", on_motion, add="+")
+        tree.bind("<Leave>", hide, add="+")
+        tree.bind("<ButtonPress>", hide, add="+")
+
+    def _populate_params_table(self):
+        import tuning
+        tree = getattr(self, "params_tree", None)
+        if tree is None:
+            return
+        needle = (self._param_filter.get() or "").strip().lower()
+        # Preserve each group's expand/collapse state across the rebuild — an edit
+        # (or nav / re-detect) must NOT re-expand groups the user collapsed. While
+        # a filter is active, force groups open so matches stay visible.
+        prev_open = {}
+        for kiid in tree.get_children(""):
+            prev_open[kiid] = bool(tree.item(kiid, "open"))
+            for siid in tree.get_children(kiid):
+                prev_open[siid] = bool(tree.item(siid, "open"))
+
+        def _open(iid):
+            return True if needle else prev_open.get(iid, True)
+
+        for iid in tree.get_children(""):
+            tree.delete(iid)
+        base = self._cfg_for_selection()
+        ov = self._param_overrides()
+        for kind, substages in tuning.GROUPS.items():
+            kind_iid = f"g::{kind}"
+            kind_added = False
+            for sub, names in substages.items():
+                sub_iid = f"g::{kind}::{sub}"
+                sub_added = False
+                for name in names:
+                    if needle and needle not in name.lower():
+                        continue
+                    if not kind_added:
+                        tree.insert("", tk.END, iid=kind_iid, text=kind,
+                                    open=_open(kind_iid), tags=("group",))
+                        kind_added = True
+                    if not sub_added:
+                        tree.insert(kind_iid, tk.END, iid=sub_iid, text=sub,
+                                    open=_open(sub_iid), tags=("group",))
+                        sub_added = True
+                    base_val = getattr(base, name)
+                    eff_val = ov[name] if name in ov else base_val
+                    changed = name in ov
+                    tree.insert(sub_iid, tk.END, iid=f"p::{name}", text=name,
+                                values=(self._param_value_str(name, eff_val),
+                                        self._param_value_str(name, base_val)),
+                                tags=(("changed",) if changed else ()))
+
+    def _on_param_double_click(self, event):
+        import tuning
+        tree = self.params_tree
+        iid = tree.identify_row(event.y)
+        if not iid or not iid.startswith("p::"):
+            return
+        name = iid[3:]
+        base_val = getattr(self._cfg_for_selection(), name)
+        ov = self._param_overrides()
+        cur = ov.get(name, base_val)
+        # Bool params toggle in place; others open an inline entry on the value cell.
+        if name in tuning.BOOL_FIELDS:
+            self._commit_param(name, not bool(cur))
+            return
+        col = tree.identify_column(event.x)
+        if col not in ("#1",):   # only the Value column is editable
+            return
+        bbox = tree.bbox(iid, "val")
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        entry = tk.Entry(tree, bg="#2b2b2b", fg="#ffffff", insertbackground="#ffffff",
+                         relief="solid", borderwidth=1)
+        entry.insert(0, self._param_value_str(name, cur))
+        entry.select_range(0, tk.END)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.focus_set()
+
+        def commit(_e=None):
+            text = entry.get()
+            entry.destroy()
+            try:
+                self._commit_param(name, _coerce_param(name, text))
+            except (ValueError, TypeError):
+                pass   # keep the old value on a bad parse
+        entry.bind("<Return>", commit)
+        entry.bind("<FocusOut>", commit)
+        entry.bind("<Escape>", lambda e: entry.destroy())
+
+    def _commit_param(self, name, value):
+        """Store (or clear, if back to base) a per-frame param override + persist."""
+        stem = self._current_stem()
+        if stem is None:
+            return
+        base_val = getattr(self._cfg_for_selection(), name)
+        ov = self._param_overrides()
+        if self._param_value_str(name, value) == self._param_value_str(name, base_val):
+            ov.pop(name, None)          # equals base -> not an override
+        else:
+            ov[name] = value
+        self._auto_save(stem)
+        self._populate_params_table()
+
+    def _reset_params(self):
+        stem = self._current_stem()
+        if stem is None:
+            return
+        self.annotations[stem]["param_overrides"] = {}
+        self._auto_save(stem)
+        self._populate_params_table()
 
     # ------------------------------------------------------------------
     # Calibration-review roll switcher: show a DIFFERENT roll's fitted/live/GT
@@ -905,6 +1297,14 @@ class DustDebugUI(DebugUIBase):
     def extend_view_menu(self, view):
         # Toggle settings are CHECKBUTTONS named for the thing itself (not
         # "Show X") — the checkmark IS the current state.
+        # The two object GROUPS (algo-detected vs loaded-from-existing).
+        view.add_checkbutton(label="Detected spots (algo)",
+                             variable=self.show_detected_var,
+                             command=self._on_group_toggle)
+        view.add_checkbutton(label="Loaded spots (imported / missed)",
+                             variable=self.show_missed_var,
+                             command=self._on_group_toggle)
+        view.add_separator()
         view.add_checkbutton(label="Rejected candidates",
                              variable=self.show_rejected_var,
                              command=self._redraw_markers)
@@ -1079,6 +1479,10 @@ class DustDebugUI(DebugUIBase):
     def _cfg_for_selection(self):
         import detect_dust
         import tuning
+        # The item panel (params table) is built before the toolbar's preset combo,
+        # so fall back to the default preset until the combo exists.
+        if not hasattr(self, "_preset_var"):
+            return detect_dust.DEFAULT_TUNING
         sel = self._preset_var.get()
         if sel == "(live default)":
             return detect_dust.DEFAULT_TUNING
@@ -1158,7 +1562,7 @@ class DustDebugUI(DebugUIBase):
         path = img.get("image_path")
         if not path or not os.path.isfile(path):
             return
-        cfg = self._cfg_for_selection()
+        cfg = self._effective_cfg()   # base preset + this frame's param overrides
         ml = self._ml_model_path()
         idx = self.current_idx
         if not hasattr(self, "_detect_q"):
@@ -1220,12 +1624,19 @@ class DustDebugUI(DebugUIBase):
                 img["detected"] = spots
                 img["_detect_pending"] = False
                 if idx == self.current_idx:
-                    self.annotations[img["stem"]] = \
-                        self.new_annotation_state(img)       # indices changed
+                    # Reset annotation state (detected indices changed) then RELOAD
+                    # the saved {stem}_annotations.json — same as _poll_bg_detect —
+                    # so a preset re-detect keeps the user's missed_dust / missed_
+                    # threads / FPs (coord-matched) instead of silently dropping the
+                    # imported/hand-added ground truth.
+                    self.annotations[img["stem"]] = self.new_annotation_state(img)
+                    self._load_existing_annotations_for(img)
                     self.reset_selection()
                     self._populate_items_list()
                     self._redraw()
                     self.update_counts()
+                    if hasattr(self, "params_tree"):
+                        self._populate_params_table()
         if hasattr(self, "_detect_status"):
             self._detect_status.config(text=("" if not err else f"error: {err}"))
 
@@ -1425,6 +1836,77 @@ class DustDebugUI(DebugUIBase):
             md.setdefault("src_cy", spot["src_cy"])
         return md
 
+    def _seed_missed_stroke(self, img_dict, ms):
+        """Fill a hand-drawn / imported missed-thread's heal radius + recommended
+        healing source IN PLACE (idempotent). Mirrors _seed_missed_dust so a
+        thread is a first-class healable spot with a visible, draggable source
+        (darktable heals a brush stroke by cloning it from a single source anchor)."""
+        import detect_dust
+        path = ms.get("path") or []
+        if len(path) < 2:
+            return ms
+        min_dim = min(img_dict.get("width") or 0, img_dict.get("height") or 0)
+        spot = detect_dust.missed_stroke_to_spot(ms, min_dim)
+        if spot is None:
+            return ms
+        ms.setdefault("brush_radius_px", spot["brush_radius_px"])
+        if ms.get("src_cx") is not None and ms.get("src_cy") is not None:
+            return ms
+        # darktable heals a brush by translating the whole stroke so path[0] maps
+        # to the stored source anchor (mask_src). So the anchor we store is P0's
+        # source; pick it so the BAND (whole stroke) lands on the clean area
+        # find_healing_source picks for the stroke centre:
+        #   anchor S = P0 + (clean_source_at_mid − mid)  →  band midpoint lands on clean.
+        p0x, p0y = float(path[0][0]), float(path[0][1])
+        mx, my = float(path[len(path) // 2][0]), float(path[len(path) // 2][1])
+        brush_radius_px = float(ms.get("brush_radius_px") or spot["brush_radius_px"])
+        radius_px = max(1.0, float(ms.get("stroke_width_px") or brush_radius_px) / 2.0)
+        buffers = self._source_buffers_for(img_dict)
+        src = (None, None)
+        if buffers is not None:
+            img_lab, L_f32, local_std, w, h = buffers
+            src = detect_dust.find_healing_source(
+                mx, my, radius_px, brush_radius_px,
+                img_lab, L_f32, local_std, img_dict.get("detected") or [], w, h)
+        if src and src[0] is not None:
+            ms["src_cx"] = p0x + (float(src[0]) - mx)
+            ms["src_cy"] = p0y + (float(src[1]) - my)
+        else:
+            dim = min_dim or 1000
+            ms["src_cx"] = p0x + detect_dust.HEAL_SOURCE_OFFSET_X * dim
+            ms["src_cy"] = p0y + detect_dust.HEAL_SOURCE_OFFSET_Y * dim
+        return ms
+
+    def _swept_disc_centers(self, path, step):
+        """Sample points at ~`step` px spacing along a polyline (image coords).
+
+        A darktable brush stroke heals a BAND — the union of discs of radius
+        brush_radius_px swept along the spline — so drawing outline discs at these
+        samples shows the real healed shape (not just the endpoints), which is what
+        lets the user check the source band doesn't overlap the healed thread."""
+        pts = [(float(p[0]), float(p[1])) for p in path]
+        if len(pts) < 2:
+            return pts
+        cum = [0.0]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            cum.append(cum[-1] + math.hypot(x1 - x0, y1 - y0))
+        total = cum[-1]
+        if total <= 0:
+            return [pts[0]]
+        step = max(float(step), total / 150.0, 1.0)   # cap the disc count
+        n = int(total // step)
+        samples, j = [], 0
+        for k in range(n + 1):
+            s = min(k * step, total)
+            while j < len(cum) - 2 and cum[j + 1] < s:
+                j += 1
+            seg = cum[j + 1] - cum[j]
+            t = 0.0 if seg <= 1e-9 else (s - cum[j]) / seg
+            samples.append((pts[j][0] + t * (pts[j + 1][0] - pts[j][0]),
+                            pts[j][1] + t * (pts[j + 1][1] - pts[j][1])))
+        samples.append(pts[-1])
+        return samples
+
     def _get_path(self, stem, spot_idx, spot):
         """Return the stroke centerline key points (list of [x,y]) for a stroke spot —
         user path override first, then the detected path. None for non-stroke spots."""
@@ -1510,8 +1992,10 @@ class DustDebugUI(DebugUIBase):
                 self.canvas.create_oval(cx - rad, cy - rad, cx + rad, cy + rad,
                                         outline=color, width=width, tags="rejected")
 
-        # Detected spots
-        for i, spot in enumerate(img_dict.get("detected") or []):
+        # Detected spots (algo group — hidden when "Detected" is toggled off)
+        detected_iter = (enumerate(img_dict.get("detected") or [])
+                         if self.show_detected_var.get() else ())
+        for i, spot in detected_iter:
             # --- Stroke (thread/scratch): polyline through key points ---
             if spot.get("kind") == "stroke":
                 self._draw_stroke_marker(stem, ann, i, spot)
@@ -1604,7 +2088,10 @@ class DustDebugUI(DebugUIBase):
 
         # Missed dust markers (cyan +), now first-class healable spots: a heal-radius
         # circle + a dashed line to the (recommended / dragged) healing source.
-        for i, md in enumerate(ann["missed_dust"]):
+        # Part of the "loaded from existing" group — hidden when toggled off.
+        missed_dust_iter = (enumerate(ann["missed_dust"])
+                            if self.show_missed_var.get() else ())
+        for i, md in missed_dust_iter:
             cx, cy = image_to_canvas(md["cx"], md["cy"],
                                      self.offset_x, self.offset_y, self.zoom)
             r = 10
@@ -1645,15 +2132,32 @@ class DustDebugUI(DebugUIBase):
                                             width=lw if is_msrc_sel else 1,
                                             dash=(4, 3), tags="source")
 
-        # Missed threads (hand-drawn, cyan polyline with handles)
-        for i, ms in enumerate(ann.get("missed_strokes", [])):
+        # Missed threads (hand-drawn): centerline + node handles, PLUS the real
+        # healed band (discs of brush_radius_px swept along the path) and the
+        # healing-source band (that same band translated onto the source anchor),
+        # so the user can see the true shapes and check they don't overlap.
+        # Part of the "loaded from existing" group — hidden when toggled off.
+        missed_stroke_iter = (enumerate(ann.get("missed_strokes", []))
+                              if self.show_missed_var.get() else ())
+        for i, ms in missed_stroke_iter:
             path = ms.get("path") or []
             if not path:
                 continue
-            canv = [image_to_canvas(px, py, self.offset_x, self.offset_y, self.zoom)
-                    for px, py in path]
+            self._seed_missed_stroke(img_dict, ms)
+            brad = float(ms.get("brush_radius_px") or 0.0)
+            crad = max(3.0, brad * self.zoom)
             sel = (self.selected_missed_stroke == i)
             color = "#ffffff" if sel else "#00ffff"
+
+            # Real healed shape: swept-disc outlines along the centerline.
+            centers = self._swept_disc_centers(path, max(brad, 1.0)) if brad > 0 else []
+            for (px, py) in centers:
+                dcx, dcy = image_to_canvas(px, py, self.offset_x, self.offset_y, self.zoom)
+                self.canvas.create_oval(dcx - crad, dcy - crad, dcx + crad, dcy + crad,
+                                        outline=color, width=1, tags="missed")
+
+            canv = [image_to_canvas(px, py, self.offset_x, self.offset_y, self.zoom)
+                    for px, py in path]
             if len(canv) >= 2:
                 flat = [c for pt in canv for c in pt]
                 self.canvas.create_line(*flat, fill=color, width=3 if sel else 2,
@@ -1661,6 +2165,41 @@ class DustDebugUI(DebugUIBase):
             for (hx, hy) in canv:
                 self.canvas.create_rectangle(hx - 4, hy - 4, hx + 4, hy + 4,
                                              outline=color, width=2, tags="missed")
+
+            # Healing source: darktable clones the whole stroke from a single
+            # source anchor. Draw the source band = the healed band translated onto
+            # the anchor (real shape, so overlap is checkable), a dashed connector,
+            # and a small square drag handle at the anchor.
+            scx, scy = ms.get("src_cx"), ms.get("src_cy")
+            if scx is not None and scy is not None:
+                # The source anchor is path[0]'s source (darktable's brush reference),
+                # so the source band = the thread translated by (anchor − path[0]).
+                p0x, p0y = float(path[0][0]), float(path[0][1])
+                dx, dy = float(scx) - p0x, float(scy) - p0y
+                mcx, mcy = image_to_canvas(p0x, p0y, self.offset_x, self.offset_y, self.zoom)
+                sx, sy = image_to_canvas(scx, scy, self.offset_x, self.offset_y, self.zoom)
+                is_ssrc_sel = (self.selected_missed_stroke_source == i)
+                src_color = "#ffff00" if (sel or is_ssrc_sel) else "#00cc44"
+                for (px, py) in centers:
+                    dcx, dcy = image_to_canvas(px + dx, py + dy,
+                                               self.offset_x, self.offset_y, self.zoom)
+                    self.canvas.create_oval(dcx - crad, dcy - crad, dcx + crad, dcy + crad,
+                                            outline=src_color, width=1, dash=(3, 2),
+                                            tags="source")
+                scanv = [image_to_canvas(px + dx, py + dy,
+                                         self.offset_x, self.offset_y, self.zoom)
+                         for px, py in path]
+                if len(scanv) >= 2:
+                    flat = [c for pt in scanv for c in pt]
+                    self.canvas.create_line(*flat, fill=src_color, width=1,
+                                            capstyle="round", joinstyle="round",
+                                            tags="source")
+                self.canvas.create_line(mcx, mcy, sx, sy, fill=src_color, width=1,
+                                        dash=(4, 3), tags="source")
+                sq = max(3, int(2 * self.zoom))
+                self.canvas.create_rectangle(sx - sq, sy - sq, sx + sq, sy + sq,
+                                             outline=src_color,
+                                             width=2 if is_ssrc_sel else 1, tags="source")
 
         # In-progress thread being drawn (yellow, dashed)
         if self.thread_draw_mode and self.thread_draw_points:
@@ -1765,6 +2304,21 @@ class DustDebugUI(DebugUIBase):
                 best, best_d = i, d
         return best
 
+    def _missed_stroke_source_at(self, canvas_x, canvas_y):
+        """Missed-thread index whose healing-source square is under the cursor, else None."""
+        ix, iy = canvas_to_image(canvas_x, canvas_y,
+                                 self.offset_x, self.offset_y, self.zoom)
+        hit_r = max(8.0, 12.0 / self.zoom)
+        stem = self.images[self.current_idx]["stem"]
+        best, best_d = None, hit_r
+        for i, ms in enumerate(self.annotations[stem].get("missed_strokes", [])):
+            if ms.get("src_cx") is None or ms.get("src_cy") is None:
+                continue
+            d = math.hypot(ms["src_cx"] - ix, ms["src_cy"] - iy)
+            if d < best_d:
+                best, best_d = i, d
+        return best
+
     def handle_press_override(self, event):
         # Thread-draw mode: every mouse-down drops a centerline point (immune to
         # accidental drag). Hold and drag to draw freehand (see handle_drag_override).
@@ -1782,9 +2336,28 @@ class DustDebugUI(DebugUIBase):
             self.selected_missed_source = idx
             self.selected_missed = set()
             self.selected_detected = set()
+            self.selected_source = None
+            self.selected_missed_stroke = None
+            self.selected_missed_stroke_source = None
             self.drag_start = (event.x, event.y)
             self.is_dragging = False
             self._redraw_markers()
+            self._sync_item_list_selection()   # highlight the parent missed-dust row
+            return True
+        # Same, for a missed-THREAD healing source square.
+        sidx = self._missed_stroke_source_at(event.x, event.y)
+        if sidx is not None:
+            self._missed_stroke_src_drag = sidx
+            self.selected_missed_stroke_source = sidx
+            self.selected_missed_source = None
+            self.selected_missed = set()
+            self.selected_detected = set()
+            self.selected_source = None
+            self.selected_missed_stroke = None
+            self.drag_start = (event.x, event.y)
+            self.is_dragging = False
+            self._redraw_markers()
+            self._sync_item_list_selection()   # highlight the parent missed-thread row
             return True
         return False
 
@@ -1815,6 +2388,22 @@ class DustDebugUI(DebugUIBase):
                 self.is_dragging = True
                 self._redraw_markers()
             return True
+        # Dragging a missed-THREAD healing source: move it live.
+        if self._missed_stroke_src_drag is not None:
+            img_dict = self.images[self.current_idx]
+            stem = img_dict["stem"]
+            ix, iy = canvas_to_image(event.x, event.y,
+                                     self.offset_x, self.offset_y, self.zoom)
+            iw, ih = img_dict["width"], img_dict["height"]
+            ix = max(0.0, min(float(iw), ix))
+            iy = max(0.0, min(float(ih), iy))
+            ms_list = self.annotations[stem].get("missed_strokes", [])
+            if self._missed_stroke_src_drag < len(ms_list):
+                ms = ms_list[self._missed_stroke_src_drag]
+                ms["src_cx"], ms["src_cy"] = float(ix), float(iy)
+                self.is_dragging = True
+                self._redraw_markers()
+            return True
         return False
 
     def handle_release_override(self, event):
@@ -1835,6 +2424,19 @@ class DustDebugUI(DebugUIBase):
             self._set_info_text(
                 f"Healing source for missed dust #{idx} moved.\n"
                 f"  Drag it again to adjust, or scroll the dust to resize.")
+            return True
+        # Finish a missed-thread source drag: persist it.
+        if self._missed_stroke_src_drag is not None:
+            stem = self.images[self.current_idx]["stem"]
+            idx = self._missed_stroke_src_drag
+            self._missed_stroke_src_drag = None
+            self.drag_start = None
+            self.is_dragging = False
+            self._auto_save(stem)
+            self._redraw_markers()
+            self._set_info_text(
+                f"Healing source for missed thread #{idx} moved.\n"
+                f"  Drag it again to adjust.")
             return True
         return False
 
@@ -2006,6 +2608,7 @@ class DustDebugUI(DebugUIBase):
         self.selected_missed = set()
         self.selected_source = None
         self.selected_missed_source = None
+        self.selected_missed_stroke_source = None
         self.selected_keypoint = None
         self.selected_missed_stroke = None
 
@@ -2035,6 +2638,10 @@ class DustDebugUI(DebugUIBase):
             self._set_info_text(
                 f"Missed thread #{idx} selected.\n  Del = remove it.")
             self._refresh_note_entry()
+            # This branch sets its own info text (not _update_info_from_selection),
+            # so sync the table row highlight explicitly — otherwise a canvas-click
+            # on a thread selects it on the canvas but not in the item table.
+            self._sync_item_list_selection()
             self._redraw_markers()
             return
 
@@ -2446,11 +3053,17 @@ class DustDebugUI(DebugUIBase):
         return rows
 
     def is_row_currently_selected(self, row):
-        if row["kind"] == "detected" and row["idx"] in self.selected_detected:
+        # A row counts as selected either when its marker OR its healing source
+        # is the current selection (clicking a source highlights the parent item).
+        if row["kind"] == "detected" and (row["idx"] in self.selected_detected
+                                          or self.selected_source == row["idx"]):
             return True
-        if row["kind"] == "missed" and row["idx"] in self.selected_missed:
+        if row["kind"] == "missed" and (row["idx"] in self.selected_missed
+                                        or self.selected_missed_source == row["idx"]):
             return True
-        if row["kind"] == "missed_stroke" and row["idx"] == self.selected_missed_stroke:
+        if row["kind"] == "missed_stroke" and (
+                row["idx"] == self.selected_missed_stroke
+                or self.selected_missed_stroke_source == row["idx"]):
             return True
         return False
 
@@ -2460,6 +3073,8 @@ class DustDebugUI(DebugUIBase):
         self.selected_missed = set()
         self.selected_missed_stroke = None
         self.selected_source = None
+        self.selected_missed_source = None
+        self.selected_missed_stroke_source = None
 
         if row["kind"] == "detected":
             self.selected_detected = {row["idx"]}
@@ -2475,12 +3090,20 @@ class DustDebugUI(DebugUIBase):
         self._redraw_markers()
 
     def selected_row_iid(self):
+        # A selected healing source maps to its PARENT item's row, so clicking a
+        # source scrolls/highlights the corresponding entry in the table.
         if self.selected_detected:
             return f"det_{next(iter(self.selected_detected))}"
+        if self.selected_source is not None:
+            return f"det_{self.selected_source}"
         if self.selected_missed:
             return f"missed_{next(iter(self.selected_missed))}"
+        if self.selected_missed_source is not None:
+            return f"missed_{self.selected_missed_source}"
         if self.selected_missed_stroke is not None:
             return f"mstroke_{self.selected_missed_stroke}"
+        if self.selected_missed_stroke_source is not None:
+            return f"mstroke_{self.selected_missed_stroke_source}"
         return None
 
     def selection_center(self):
@@ -2693,9 +3316,12 @@ def main():
         DustDebugUI.apply_mode = True
     if "--choose-dir" in sys.argv:
         DustDebugUI.choose_dir = True
-    sys.argv = [a for a in sys.argv if a not in ("--apply", "--choose-dir")]
+    if "--import-gt" in sys.argv:
+        DustDebugUI.import_gt = True
+        DustDebugUI.apply_mode = True   # import-GT always writes on close
+    sys.argv = [a for a in sys.argv if a not in ("--apply", "--choose-dir", "--import-gt")]
     DustDebugUI.run_main(
-        usage="Usage: debug_ui.py <export_dir> [--apply] [--choose-dir]")
+        usage="Usage: debug_ui.py <export_dir> [--apply] [--choose-dir] [--import-gt]")
 
 
 if __name__ == "__main__":

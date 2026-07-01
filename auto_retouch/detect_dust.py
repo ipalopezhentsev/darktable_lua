@@ -1076,10 +1076,11 @@ def missed_dust_to_spot(md, detected_spots, buffers, cfg=None):
 
 
 def missed_stroke_to_spot(ms, min_dim, cfg=None):
-    """Turn a hand-drawn `missed_stroke` annotation ({path, stroke_width_px}) into
-    a healable stroke spot dict for `generate_xmp_data_for_spots`. No acceptance
-    gating (the user drew it deliberately). The heal source is left to the XMP
-    writer's fixed-offset fallback. Returns None for an empty path."""
+    """Turn a hand-drawn `missed_stroke` annotation ({path, stroke_width_px},
+    optionally with a user-set / recommended `src_cx`/`src_cy`) into a healable
+    stroke spot dict for `generate_xmp_data_for_spots`. No acceptance gating (the
+    user drew it deliberately). When no source is stored the heal source falls
+    back to the XMP writer's fixed diagonal offset. Returns None for an empty path."""
     cfg = DEFAULT_TUNING if cfg is None else cfg
     path = ms.get("path") or []
     if len(path) < 2:
@@ -1087,10 +1088,14 @@ def missed_stroke_to_spot(ms, min_dim, cfg=None):
     width_px = float(ms.get("stroke_width_px") or cfg.STROKE_MIN_BORDER_PX)
     brush_radius_px = max(cfg.STROKE_MIN_BORDER_PX, width_px * cfg.STROKE_BORDER_SCALE)
     brush_radius_px = min(brush_radius_px, cfg.STROKE_MAX_BORDER_FRAC * min_dim)
-    return {"kind": "stroke",
+    spot = {"kind": "stroke",
             "path": [[float(p[0]), float(p[1])] for p in path],
             "stroke_width_px": width_px,
             "brush_radius_px": float(brush_radius_px)}
+    if ms.get("src_cx") is not None and ms.get("src_cy") is not None:
+        spot["src_cx"] = float(ms["src_cx"])
+        spot["src_cy"] = float(ms["src_cy"])
+    return spot
 
 
 # ===================================================================
@@ -2820,6 +2825,47 @@ def _undo_ashift(cx, cy, ashift_params, export_w, export_h, crop, flip):
     return px_in / W_in, py_in / H_in
 
 
+def _do_ashift(cx, cy, ashift_params, export_w, export_h, crop, flip):
+    """Forward darktable ashift transform — the exact inverse of `_undo_ashift`.
+
+    cx, cy: normalized [0,1] coords in pre-ashift / raw-sensor space.
+    Returns (cx, cy) in ashift-output (post-ashift, pre-flip) normalized [0,1] space.
+
+    Used by `_original_to_export` to map a mask stored in raw-buffer coords forward
+    into the exported (display) image — the import-GT direction. Reuses the same
+    homography, output-dim and internal-crop bookkeeping as `_undo_ashift`.
+    """
+    crop_l, crop_t, crop_r, crop_b = crop
+
+    w_post_flip = export_w / max(crop_r - crop_l, 1e-6)
+    h_post_flip = export_h / max(crop_b - crop_t, 1e-6)
+    if flip & 4:   # SWAP_XY
+        W_out, H_out = h_post_flip, w_post_flip
+    else:
+        W_out, H_out = w_post_flip, h_post_flip
+
+    cl, cr = ashift_params["cl"], ashift_params["cr"]
+    ct, cb = ashift_params["ct"], ashift_params["cb"]
+    fullwidth  = W_out / max(cr - cl, 1e-6)
+    fullheight = H_out / max(cb - ct, 1e-6)
+    cx_clip = fullwidth  * cl
+    cy_clip = fullheight * ct
+
+    W_in, H_in = _solve_ashift_input_dims(ashift_params, fullwidth, fullheight)
+    H_mat = _compute_ashift_homography(
+        ashift_params["rotation"], ashift_params["lensshift_v"],
+        ashift_params["lensshift_h"], ashift_params["shear"],
+        ashift_params["f_length_kb"], ashift_params["orthocorr"],
+        ashift_params["aspect"], W_in, H_in)
+
+    # raw-norm → input pixels → homography → full-output pixels
+    p_full = H_mat @ np.array([cx * W_in, cy * H_in, 1.0])
+    px_full = p_full[0] / p_full[2]
+    py_full = p_full[1] / p_full[2]
+    # full-output → buf_out (apply internal crop offset) → normalize
+    return (px_full - cx_clip) / W_out, (py_full - cy_clip) / H_out
+
+
 def _export_to_original(cx, cy, flip, crop, ashift_params=None, export_w=None, export_h=None):
     """Transform coordinates from export space to original image space.
 
@@ -2861,15 +2907,24 @@ def _export_to_original(cx, cy, flip, crop, ashift_params=None, export_w=None, e
     return cx, cy
 
 
-def _original_to_export(cx_norm, cy_norm, flip, crop, export_w, export_h):
-    """Transform normalized full-frame coords to export pixel space.
+def _original_to_export(cx_norm, cy_norm, flip, crop, export_w, export_h,
+                        ashift_params=None):
+    """Transform normalized full-frame (raw-buffer) coords to export pixel space.
 
-    Inverse of _export_to_original. Ashift is not supported (sensor dust mode skips it).
-    Returns (cx_px, cy_px) or None if the point falls outside the crop region.
+    Inverse of _export_to_original. Returns (cx_px, cy_px) or None if the point
+    falls outside the crop region.
 
     Forward pipeline order: raw -> [ashift] -> flip -> crop -> export.
+    ashift_params: dict from _decode_ashift_params(), or None for identity. When
+    given, the forward ashift homography is applied first (the import-GT path;
+    sensor dust passes None).
     """
     crop_l, crop_t, crop_r, crop_b = crop
+
+    # 0. Apply ashift (raw-sensor -> ashift-output space)
+    if ashift_params is not None:
+        cx_norm, cy_norm = _do_ashift(cx_norm, cy_norm, ashift_params,
+                                      export_w, export_h, crop, flip)
 
     # 1. Apply flip (forward order: SWAP_XY → FLIP_X → FLIP_Y)
     if flip & 4:  # SWAP_XY

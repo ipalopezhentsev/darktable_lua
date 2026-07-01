@@ -176,6 +176,52 @@ Each feature has three modes: 1) debug UI (detect + annotate, no apply, detached
 
 Film dust:
 - **AutoRetouch_Debug** (`export_and_detect_dust_debug`) - mode 1: detect + open debug UI, no apply.
+- **AutoRetouch_Edit_Existing** (`export_import_and_edit`) — **continuous edit /
+  import existing retouch as ground truth** (2026-07-01; the auto_retouch analog
+  of negadoctor's continuous edit). Run it on frames that already carry retouch
+  (drawn by hand, or applied by us with the temp folder since deleted) to keep
+  editing AND to rebuild the temp GT folder for calibration. Flow
+  (foreground/blocking, like Apply_From_Folder):
+  1. `disable_all_retouch_for_export` temporarily forces `enabled="0"` on EVERY
+     retouch history entry of each frame and reloads, so the export is the CLEAN,
+     un-healed scan (mirrors negadoctor's `disable_modules_for_clean_export`;
+     crop/flip/ashift stay ON so the export geometry matches `transform_params`).
+  2. `export_frames` (the export + `transform_params.txt` + `source_paths.txt`
+     block factored out of `export_and_detect`) exports the clean JPEGs; the flow
+     also writes `source_xmp.txt` (`SENSOR_LABEL|…` / `DUST_LABEL|…` header lines +
+     `stem|<original sidecar path>`).
+  3. `restore_xmps` puts the user's retouch back immediately (the clean export is
+     already on disk; Python then reads the REAL masks from the restored XMP).
+  4. Launches `debug_ui.py <dir> --import-gt --apply` (run mode). On launch
+     `DustDebugUI.load_session` calls `import_retouch.seed_import_annotations(dir)`,
+     which decodes each frame's ACTIVE film-dust retouch out of its source XMP and
+     writes seed `{stem}_annotations.json` (the imported dots → `missed_dust`,
+     strokes → `missed_strokes`) + `import_baseline.json`. Run-mode detection then
+     streams in and `_poll_bg_detect` → `_load_existing_annotations_for` picks up
+     the seeds, so the user sees a **fresh detection with their existing shapes
+     pre-marked as missed** (one combined editable set).
+  5. On close `_write_apply_results` writes `dust_results.txt` (final set =
+     detected − FP + missed) AND `import_changed.txt` (stems whose committed set
+     differs from `import_baseline.json`, via `import_retouch.spots_differ`).
+  6. Lua applies ONLY the changed frames: `apply_retouch_in_place(…, dust_label,
+     sensor_label)` disables every existing **non-sensor** retouch instance
+     (`disable_retouch_entries`, keeping their history entries) and adds the edited
+     set as a new instance; an emptied frame goes through `disable_prior_dust_in_place`
+     (disable, add nothing). **Sensor-dust instances are never touched** (excluded
+     from both the import decode and the apply-back — identified by their
+     `multi_name` label, passed to Python via `source_xmp.txt`). The temp folder is
+     **KEPT** (it becomes calibration ground truth).
+  - **The decoder** (`import_retouch.decode_xmp_masks`) is the inverse of
+    `generate_xmp_data_for_spots`: it unions the active form ids of every enabled
+    non-sensor retouch instance (clone/heal algos 1/2; consecutive applications
+    stack as several instances), reads their brush/circle masks from the latest
+    cumulative `mask_num` snapshot, and maps raw-buffer coords → export pixels with
+    `detect_dust._original_to_export` (extended 2026-07-01 with a forward-ashift
+    branch `_do_ashift`, the exact inverse of `_undo_ashift`). Brush dots/strokes
+    + circles are decoded; ellipse/path/gradient masks are skipped with a notice
+    (add by hand in the UI). Guarded by `tests/test_import_retouch.py` (encode →
+    synthesize XMP → decode round-trip across flip/crop/ashift + sensor exclusion;
+    end-to-end `seed_import_annotations`; `spots_differ` self-test).
 - **AutoRetouch_Apply_From_Folder** (`apply_retouch_from_folder`) - apply SAVED
   annotations from a user-picked ground-truth folder (NO export/detect). Launches
   `debug_ui.py --choose-dir --apply` foreground: the base pops a native

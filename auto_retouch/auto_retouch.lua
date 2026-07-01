@@ -256,6 +256,133 @@ local function parse_crop_params(xmp_content, history_end)
 end
 
 -- ===================================================================
+-- XMP scan helpers (continuous-edit / import-GT) — mirror auto_negadoctor
+-- ===================================================================
+
+-- Read an image's XMP sidecar content, or nil when the file doesn't exist.
+local function read_xmp(image)
+  local xmp_path = image.sidecar
+  if not xmp_path then return nil, nil end
+  local f = io.open(xmp_path, "r")
+  if not f then return nil, xmp_path end
+  local content = f:read("*all")
+  f:close()
+  return content, xmp_path
+end
+
+-- Scan every history <rdf:li> entry, returning {s, e, text, num, operation,
+-- enabled, multi_name}. masks_history entries (no operation attr) are skipped.
+-- s/e are byte offsets so callers can splice in place.
+local function scan_history_entries(xmp_content)
+  local entries = {}
+  local init = 1
+  while true do
+    local s, e = xmp_content:find("<rdf:li.-/>", init)
+    if not s then break end
+    local text = xmp_content:sub(s, e)
+    local op = text:match('darktable:operation="([^"]+)"')
+    if op then
+      entries[#entries + 1] = {
+        s = s, e = e, text = text,
+        num = tonumber(text:match('darktable:num="(%d+)"')) or -1,
+        operation = op,
+        enabled = text:match('darktable:enabled="(%d)"') == "1",
+        multi_name = text:match('darktable:multi_name="([^"]*)"') or "",
+      }
+    end
+    init = e + 1
+  end
+  return entries
+end
+
+-- Whether an operation is ACTIVE (its highest-num entry below history_end is
+-- enabled). Latest-entry-wins so a stale earlier-enabled entry doesn't make a
+-- currently-off module look active.
+local function has_enabled_module(xmp_content, opname)
+  local history_end = tonumber(xmp_content:match('darktable:history_end="(%d+)"')) or 999
+  local latest = nil
+  for i, entry in ipairs(scan_history_entries(xmp_content)) do
+    if entry.operation == opname and entry.num < history_end then
+      if not latest or entry.num > latest.num then latest = entry end
+    end
+  end
+  return latest ~= nil and latest.enabled
+end
+
+-- Return a copy of xmp_content with retouch history entries forced to
+-- enabled="0", spliced from the end so earlier offsets stay valid. `keep_label`
+-- (a multi_name) is left untouched; pass nil to disable EVERY retouch instance.
+-- Returns new_content, count_disabled.
+local function disable_retouch_entries(xmp_content, keep_label)
+  local entries = scan_history_entries(xmp_content)
+  table.sort(entries, function(a, b) return a.s > b.s end)
+  local n = 0
+  for i, entry in ipairs(entries) do
+    if entry.operation == "retouch" and entry.enabled
+       and (keep_label == nil or entry.multi_name ~= keep_label) then
+      local disabled = entry.text:gsub('darktable:enabled="1"', 'darktable:enabled="0"')
+      xmp_content = xmp_content:sub(1, entry.s - 1) .. disabled ..
+                    xmp_content:sub(entry.e + 1)
+      n = n + 1
+    end
+  end
+  return xmp_content, n
+end
+
+-- Continuous edit: temporarily disable ALL retouch on each selected frame so the
+-- analysis export is the clean, un-healed scan. Writes the modified XMP, reloads
+-- it, and records { image, xmp_path, original } for restore_xmps(). Only frames
+-- that actually changed are recorded.
+local function disable_all_retouch_for_export(images)
+  local restore_records = {}
+  for i, image in ipairs(images) do
+    local xmp_content, xmp_path = read_xmp(image)
+    if xmp_content and xmp_path then
+      -- Disable EVERY enabled retouch entry (all instances), not just the
+      -- single latest one — has_enabled_module's latest-wins view misses an
+      -- enabled lower-priority instance behind a disabled top entry.
+      local disabled, n = disable_retouch_entries(xmp_content, nil)
+      if n > 0 and disabled ~= xmp_content then
+        local file = io.open(xmp_path, "w")
+        if file then
+          file:write(disabled)
+          file:close()
+          image:apply_sidecar(xmp_path)
+          restore_records[#restore_records + 1] =
+            { image = image, xmp_path = xmp_path, original = xmp_content }
+          dlog.msg(dlog.info, "disable_all_retouch_for_export",
+            "Temporarily disabled retouch for " .. image.filename)
+        else
+          dlog.msg(dlog.warn, "disable_all_retouch_for_export",
+            "Could not open XMP to disable retouch: " .. xmp_path)
+        end
+      end
+    end
+  end
+  return restore_records
+end
+
+-- Undo disable_all_retouch_for_export: rewrite each saved XMP with its original
+-- content and reload, restoring the user's retouch (all instances).
+local function restore_xmps(restore_records)
+  for i, rec in ipairs(restore_records) do
+    local file = io.open(rec.xmp_path, "w")
+    if file then
+      file:write(rec.original)
+      file:close()
+      rec.image:apply_sidecar(rec.xmp_path)
+      dlog.msg(dlog.info, "restore_xmps", "Restored original XMP for " .. rec.image.filename)
+    else
+      dlog.msg(dlog.error, "restore_xmps",
+        "FAILED to restore XMP (frame left with retouch disabled): " .. rec.xmp_path)
+      dt.print(string.format(
+        _("WARNING: could not restore %s - its retouch is temporarily disabled"),
+        rec.image.filename))
+    end
+  end
+end
+
+-- ===================================================================
 -- Parse dust detection results
 -- ===================================================================
 
@@ -434,7 +561,13 @@ end
 -- multi_name is the label shown in darktable for this retouch instance (e.g.
 -- "film dust" / "sensor dust"); each call adds a NEW instance, leaving any
 -- existing retouch instances intact.
-local function apply_retouch_in_place(image, dust_data, multi_name)
+-- keep_label (optional, import-GT apply-back): when set, every EXISTING enabled
+-- retouch instance whose multi_name differs from keep_label is first disabled
+-- (its history entry kept, just enabled="0"), so the new instance REPLACES the
+-- prior dust instances while the sensor-dust instance (keep_label) is preserved.
+-- The cumulative masks snapshot still carries all prior forms (so the kept
+-- instance keeps rendering); the disabled instances simply don't render.
+local function apply_retouch_in_place(image, dust_data, multi_name, keep_label)
   dlog.msg(dlog.info, "apply_retouch_in_place",
     string.format("Called for %s with %d spots", image.filename, dust_data.count))
 
@@ -452,6 +585,16 @@ local function apply_retouch_in_place(image, dust_data, multi_name)
     end
     local xmp_content = file:read("*all")
     file:close()
+
+    -- Import-GT apply-back: disable every existing dust retouch instance (keeping
+    -- the sensor-dust instance, keep_label) so the new instance replaces them.
+    if keep_label ~= nil then
+      local disabled, n = disable_retouch_entries(xmp_content, keep_label)
+      xmp_content = disabled
+      dlog.msg(dlog.info, "apply_retouch_in_place",
+        string.format("Disabled %d prior dust retouch instance(s) (kept '%s')",
+          n, keep_label))
+    end
 
     -- Determine the new history entry number.
     -- Use the max of: (a) the highest darktable:num found by scan, and
@@ -592,19 +735,12 @@ end
 -- Export and detection pipeline
 -- ===================================================================
 
--- Export images at full resolution and run Python dust detection
-local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
-  -- Create temp folder
-  local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
-  local export_dir = temp_dir .. "/darktable_autoretouch_" .. os.time()
-
-  if not df.mkdir(export_dir) then
-    dt.print(_("Failed to create temp directory: " .. export_dir))
-    return nil, nil, nil
-  end
-
-  dt.print(string.format(_("Exporting %d images to %s (full resolution)"), #images, export_dir))
-
+-- Export the selected frames as full-resolution JPEGs into export_dir and write
+-- the per-frame transform_params.txt (flip/crop/ashift) + source_paths.txt
+-- manifests Python needs. Shared by export_and_detect and the import-GT flow.
+-- Returns exported_files, filename_to_image (safe_name -> dt image), or nil on
+-- a zero-export failure.
+local function export_frames(images, export_dir)
   -- Create JPEG format
   local format = dt.new_format("jpeg")
 
@@ -644,7 +780,7 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
 
   if #exported_files == 0 then
     dt.print(_("No files exported, aborting"))
-    return nil, nil, nil
+    return nil, nil
   end
 
   -- Write per-image transform params (flip/crop) for Python
@@ -666,7 +802,7 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
           flip_val = parse_flip_param(xmp, history_end)
           cl, ct, cr, cb = parse_crop_params(xmp, history_end)
           ashift_b64 = parse_ashift_params(xmp, history_end)
-          dlog.msg(dlog.info, "export_and_detect",
+          dlog.msg(dlog.info, "export_frames",
             string.format("Transform for %s: flip=%d crop=%.4f,%.4f,%.4f,%.4f ashift=%s",
               safe_name, flip_val, cl, ct, cr, cb, ashift_b64 and "yes" or "no"))
         end
@@ -690,7 +826,28 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
   -- file (same as auto_negadoctor; lets calibration GT be keyed by source path
   -- rather than the collision-prone stem).
   if not dtu.write_source_paths(export_dir, source_paths) then
-    dlog.msg(dlog.warn, "export_and_detect", "Could not write source_paths.txt")
+    dlog.msg(dlog.warn, "export_frames", "Could not write source_paths.txt")
+  end
+
+  return exported_files, filename_to_image
+end
+
+-- Export images at full resolution and run Python dust detection
+local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
+  -- Create temp folder
+  local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+  local export_dir = temp_dir .. "/darktable_autoretouch_" .. os.time()
+
+  if not df.mkdir(export_dir) then
+    dt.print(_("Failed to create temp directory: " .. export_dir))
+    return nil, nil, nil
+  end
+
+  dt.print(string.format(_("Exporting %d images to %s (full resolution)"), #images, export_dir))
+
+  local exported_files, filename_to_image = export_frames(images, export_dir)
+  if not exported_files then
+    return nil, nil, nil
   end
 
   -- Call Python script
@@ -975,6 +1132,185 @@ local function apply_retouch_from_folder()
     stats.applied, stats.skipped, stats.failed, stats.not_selected))
 end
 
+-- Disable every existing DUST retouch instance (keeping the sensor-dust one,
+-- keep_label) on a frame whose import-GT edit left ZERO spots — i.e. the user
+-- removed all dust. No new instance is added. Refreshes timestamp + hash so
+-- darktable reloads the change.
+local function disable_prior_dust_in_place(image, keep_label)
+  return pcall(function()
+    local xmp_content, xmp_path = read_xmp(image)
+    if not xmp_path then error("No sidecar path for image: " .. image.filename) end
+    if not xmp_content then error("Could not read XMP: " .. xmp_path) end
+    local disabled, n = disable_retouch_entries(xmp_content, keep_label)
+    if n == 0 then return end
+    local timestamp = generate_darktable_timestamp()
+    disabled = (disabled:gsub('darktable:change_timestamp="%-?%d+"',
+      string.format('darktable:change_timestamp="%d"', timestamp)))
+    disabled = (disabled:gsub('darktable:history_current_hash="[%x]+"',
+      string.format('darktable:history_current_hash="%s"', generate_random_hex(32))))
+    local f = io.open(xmp_path, "w")
+    if not f then error("Failed to open XMP for writing: " .. xmp_path) end
+    f:write(disabled)
+    f:close()
+    image:apply_sidecar(xmp_path)
+    dlog.msg(dlog.info, "disable_prior_dust_in_place",
+      string.format("Disabled %d dust retouch instance(s) on %s (kept '%s')",
+        n, image.filename, keep_label))
+  end)
+end
+
+-- Edit existing retouch (import GT): re-open frames that already carry retouch in
+-- the debug UI. Temporarily disables ALL retouch and exports the clean, un-healed
+-- scan; writes source_xmp.txt (the sensor/dust labels + each stem -> original
+-- sidecar); restores the XMPs; then launches the dust debug UI foreground in
+-- --import-gt --apply mode. The UI seeds the user's existing film-dust shapes as
+-- GT annotations over a fresh detection; on close it writes dust_results.txt
+-- (final set) + import_changed.txt (frames the user actually changed vs the
+-- imported retouch). For each CHANGED frame we disable the prior DUST instances
+-- (keeping the sensor-dust one) and add the final set as a new instance. The temp
+-- folder is KEPT (it becomes calibration ground truth).
+local function export_import_and_edit()
+  dlog.log_level(dlog.info)
+  math.randomseed(os.time() + os.clock() * 1000)
+
+  local images = dt.gui.selection()
+  if #images == 0 then
+    dt.print(_("No images selected"))
+    return
+  end
+
+  -- Map selected images by sanitized stem (the dust_results.txt key).
+  local filename_to_image_sel = {}
+  local any_retouch = false
+  for i, image in ipairs(images) do
+    local base_name = image.filename:match("(.+)%..+$") or image.filename
+    filename_to_image_sel[df.sanitize_filename(base_name)] = image
+    local xmp = read_xmp(image)
+    if xmp and has_enabled_module(xmp, "retouch") then any_retouch = true end
+  end
+  if not any_retouch then
+    dt.print(_("None of the selected frames has active retouch — opening a fresh detection to edit/seed."))
+  end
+
+  -- Temp folder is KEPT (becomes calibration GT).
+  local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+  local export_dir = temp_dir .. "/darktable_autoretouch_" .. os.time()
+  if not df.mkdir(export_dir) then
+    dt.print(_("Failed to create temp directory: " .. export_dir))
+    return
+  end
+
+  -- 1. Disable ALL retouch so the export is the clean, un-healed scan.
+  local restore_records = disable_all_retouch_for_export(images)
+
+  -- 2. Export clean frames + transform/source manifests.
+  dt.print(string.format(_("Exporting %d images to %s (clean, un-healed)"), #images, export_dir))
+  local exported_files, filename_to_image = export_frames(images, export_dir)
+
+  -- 3. Restore the user's retouch immediately (Python reads the real masks from
+  --    the restored XMP; the clean export is already on disk).
+  restore_xmps(restore_records)
+
+  if not exported_files then
+    dt.print(_("Export failed; nothing to edit"))
+    return
+  end
+
+  -- 4. source_xmp.txt: dust/sensor labels + stem -> original sidecar path.
+  local sensor_label = _("sensor dust")
+  local dust_label = _("film dust")
+  local sx = io.open(export_dir .. "/source_xmp.txt", "w")
+  if sx then
+    sx:write("SENSOR_LABEL|" .. sensor_label .. "\n")
+    sx:write("DUST_LABEL|" .. dust_label .. "\n")
+    for safe_name, image in pairs(filename_to_image) do
+      if image.sidecar then
+        sx:write(safe_name .. "|" .. image.sidecar .. "\n")
+      end
+    end
+    sx:close()
+  else
+    dlog.msg(dlog.warn, "export_import_and_edit", "Could not write source_xmp.txt")
+  end
+
+  -- 5. Launch the dust debug UI foreground/blocking in import-GT + apply mode.
+  local debug_ui_script = script_dir .. "debug_ui.py"
+  if not df.check_if_file_exists(debug_ui_script) then
+    dt.print(string.format(_("Debug UI script not found: %s"), debug_ui_script))
+    return
+  end
+  local command = string.format(
+    'conda run --no-capture-output -n autocrop python -u "%s" "%s" --import-gt --apply',
+    debug_ui_script, export_dir)
+  dt.print(_("Review/edit the imported retouch in the debug UI, then CLOSE it to apply..."))
+
+  local pipe = io.popen(command .. " 2>&1")
+  if not pipe then
+    dt.print(_("Failed to launch debug UI"))
+    return
+  end
+  local _drain = pipe:read("*all")   -- block until the UI window closes (drain to EOF)
+  pipe:close()
+
+  -- 6. Read the final set + the changed-frame list.
+  local dust_results = parse_dust_results(export_dir .. "/dust_results.txt")
+  if not dust_results then
+    dt.print(string.format(_("No results in %s (UI closed without producing them) - nothing applied"), export_dir))
+    return
+  end
+
+  local changed = {}
+  local cf = io.open(export_dir .. "/import_changed.txt", "r")
+  if cf then
+    for line in cf:lines() do
+      local stem = line:gsub("%s+$", "")
+      if stem ~= "" then changed[stem] = true end
+    end
+    cf:close()
+  end
+
+  -- 7. Apply ONLY the changed frames: disable prior dust instances (keep sensor)
+  --    and add the final set as a new instance; remove all dust if the final set
+  --    is empty. Unchanged frames are left exactly as they were.
+  local stats = { applied = 0, removed = 0, unchanged = 0, failed = 0, not_selected = 0 }
+  for filename, dust_data in pairs(dust_results) do
+    local original_image = filename_to_image_sel[filename]
+    if not original_image then
+      stats.not_selected = stats.not_selected + 1
+    elseif not changed[filename] then
+      stats.unchanged = stats.unchanged + 1
+    elseif dust_data.error then
+      stats.failed = stats.failed + 1
+      dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
+    elseif dust_data.count == 0 then
+      -- User removed all dust: disable prior dust instances, add nothing.
+      local ok, err = disable_prior_dust_in_place(original_image, sensor_label)
+      if ok then
+        stats.removed = stats.removed + 1
+        dt.print(string.format(_("Removed dust retouch from %s (now empty)"), original_image.filename))
+      else
+        stats.failed = stats.failed + 1
+        dt.print(string.format(_("  *** FAILED to remove retouch: %s ***"), tostring(err)))
+      end
+    else
+      dt.print(string.format(_("Applying edited retouch to %s (%d spots)..."),
+        original_image.filename, dust_data.count))
+      local ok, err = apply_retouch_in_place(original_image, dust_data, dust_label, sensor_label)
+      if ok then
+        stats.applied = stats.applied + 1
+      else
+        stats.failed = stats.failed + 1
+        dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), err or "Unknown error"))
+      end
+    end
+  end
+
+  dt.print(string.format(
+    _("Edit-existing complete: %d applied, %d emptied, %d unchanged, %d failed, %d not selected. GT folder kept: %s"),
+    stats.applied, stats.removed, stats.unchanged, stats.failed, stats.not_selected, export_dir))
+  dlog.msg(dlog.info, "export_import_and_edit", "GT folder kept: " .. export_dir)
+end
+
 -- Sensor dust pipeline: detect dust common across all selected frames, apply to each image
 local function export_detect_and_apply_sensor_dust(keep_temp)
   dlog.log_level(dlog.info)
@@ -1054,6 +1390,7 @@ local function destroy()
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_KeepTemp")
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_Debug")
     dt.gui.libs.image.destroy_action("AutoRetouch_Apply_From_Folder")
+    dt.gui.libs.image.destroy_action("AutoRetouch_Edit_Existing")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
     pcall(dt.destroy_event, "AutoRetouch_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_InPlace", "shortcut")
@@ -1062,6 +1399,7 @@ local function destroy()
     pcall(dt.destroy_event, "AutoRetouch_SensorDust_KeepTemp", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_SensorDust_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_Apply_From_Folder", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch_Edit_Existing", "shortcut")
 end
 
 -- ============ Film dust ============
@@ -1096,6 +1434,25 @@ dt.register_event(
     "shortcut",
     function(event, shortcut) apply_retouch_from_folder() end,
     "AutoRetouch_Apply_From_Folder"
+)
+
+-- Edit existing retouch (continuous edit / import GT): on frames that already
+-- carry retouch, export the clean un-healed scan, seed the manual film-dust
+-- shapes as GT over a fresh detection in the debug UI; on close, changed frames
+-- get their prior dust instances disabled and the edited set re-applied (sensor
+-- dust untouched). The temp folder is kept as calibration ground truth.
+dt.gui.libs.image.register_action(
+    "AutoRetouch_Edit_Existing",
+    _("Auto retouch edit existing (import manual shapes as GT)"),
+    function() export_import_and_edit() end,
+    _("Export the un-healed scan, import your existing film-dust retouch as ground truth over a fresh detection in the debug UI; on close re-apply the edited set (prior dust instances disabled, sensor dust kept). Temp folder kept as calibration GT")
+)
+
+dt.register_event(
+    "AutoRetouch_Edit_Existing",
+    "shortcut",
+    function(event, shortcut) export_import_and_edit() end,
+    "AutoRetouch_Edit_Existing"
 )
 
 -- Mode 2: fully automatic, temp folder removed on success

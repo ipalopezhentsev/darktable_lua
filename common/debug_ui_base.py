@@ -576,6 +576,10 @@ class DebugUIBase:
     def bind_feature_keys(self):
         """Feature keyboard shortcuts (root.bind)."""
 
+    def build_item_panel_top(self, parent):
+        """Optional feature section packed ABOVE the item-table title (e.g. a
+        detection-params table). No-op by default."""
+
     def configure_item_tags(self, tree):
         """Configure semantic foreground tags on the item table."""
 
@@ -2035,6 +2039,9 @@ class DebugUIBase:
         else:
             table_parent = parent
             footer_host = None
+
+        # Optional feature section ABOVE the item table (no-op by default).
+        self.build_item_panel_top(table_parent)
 
         tk.Label(table_parent, text=self.ITEM_PANEL_TITLE, bg="#484848",
                  fg="white", font=("", 10, "bold")).pack(anchor="w", padx=6,
