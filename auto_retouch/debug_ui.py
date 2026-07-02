@@ -1824,6 +1824,48 @@ class DustDebugUI(DebugUIBase):
             return None
         return float(cx), float(cy)
 
+    # Rejected-candidate reason code -> the tuning.py constant(s) that gate it, so a
+    # rejected spot's reason maps onto the right-panel "Detection params" table.
+    # "shape" / "dark_bg" are refined further by the detail string (see below).
+    _REJECT_PARAMS = {
+        "contrast":  "NOISE_THRESHOLD_MULTIPLIER / MIN_ABSOLUTE_THRESHOLD (threshold)",
+        "large_dim": "LARGE_SPOT_AREA_THRESHOLD_FRAC + LARGE_SPOT_MIN_CONTRAST",
+        "dim":       "MIN_BRIGHTNESS_FRAC_SMALL / MIN_BRIGHTNESS_FRAC_LARGE",
+        "edge":      "MAX_BG_GRADIENT_RATIO",
+        "embedded":  "MIN_SURROUND_BG_RATIO",
+        "texture":   "MAX_LOCAL_TEXTURE_SMALL / MAX_LOCAL_TEXTURE_LARGE",
+        "ratio":     "MIN_CONTRAST_TEXTURE_RATIO",
+        "context":   "MAX_CONTEXT_TEXTURE",
+        "votes":     "MIN_DUST_VOTES (SOFT_CONTEXT/TEXTURE/RATIO_VOTE_THRESHOLD)",
+        "color":     "MAX_EXCESS_SATURATION",
+        "sat_high":  "MAX_SPOT_SATURATION / EMULSION_EXCESS_SAT_THRESHOLD",
+        "too_small": "MIN_SPOT_AREA_FRAC",
+        "too_large": "MAX_SPOT_AREA_FRAC",
+        "isolation": "MAX_NEARBY_ACCEPTED (ISOLATION_RADIUS_FRAC)",
+    }
+    _REJECT_SHAPE_PARAMS = {
+        "aspect":      "MIN_ASPECT_RATIO",
+        "compactness": "MIN_COMPACTNESS",
+        "solidity":    "MIN_SOLIDITY",
+        "circularity": "MIN_CIRCULARITY",
+        "circle_fill": "DOT_MIN_CIRCLE_FILL",
+    }
+
+    def _reject_params_for(self, reason, detail):
+        """The tuning.py constant name(s) behind a rejected candidate's reason, so
+        the user can find + relax it in the params panel. '' when unknown."""
+        detail = detail or ""
+        if reason == "shape":
+            for key, name in self._REJECT_SHAPE_PARAMS.items():
+                if detail.startswith(key):
+                    return name
+            return " / ".join(self._REJECT_SHAPE_PARAMS.values())
+        if reason == "dark_bg":
+            return ("MAX_DARK_BG_TEXTURE (MIN_LOCAL_BG_FRACTION)"
+                    if detail.startswith("bg=")
+                    else "MIN_LOCAL_BG_FRACTION (derived dark-bg contrast floor)")
+        return self._REJECT_PARAMS.get(reason, "")
+
     def _boost_note_for(self, spot, img_dict):
         """The multi-line '⚡ BOOSTED ×N …' info block for a boosted spot (dot OR
         stroke), including the relaxed-gate attribution. '' when not boosted. Shared
@@ -3497,10 +3539,12 @@ class DustDebugUI(DebugUIBase):
             for i in sorted(self.selected_rejected):
                 if i < len(rejected_list):
                     r = rejected_list[i]
+                    param = self._reject_params_for(r.get("reason"), r.get("detail"))
+                    param_str = f"\n  param(s): {param}" if param else ""
                     rej_lines.append(
                         f"Rejected #{i}: cx={r['cx']:.0f} cy={r['cy']:.0f}  "
                         f"area={r['area']}  contrast={r['contrast']:.1f}\n"
-                        f"  reason={r['reason']}  detail={r['detail']}")
+                        f"  reason={r['reason']}  detail={r['detail']}{param_str}")
             if len(self.selected_rejected) > 1:
                 lines.append(f"{len(self.selected_rejected)} rejected candidates selected")
             lines.extend(rej_lines[:3])

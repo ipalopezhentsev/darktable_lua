@@ -132,6 +132,14 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
     MAX_NEARBY_ACCEPTED; stroke: STROKE_MIN_BRIGHTNESS_FRAC / STROKE_MIN_RIDGE_DROP).
     Shown on ALL selection paths (spot body, stroke node, healing source) via the
     shared `_boost_note_for`. Guarded by `tests/test_boost_region.py`.
+  - **Rejected-candidate reason → param:** selecting a rejected candidate now also
+    prints the tuning.py constant(s) behind its `reason` (`_reject_params_for` +
+    the `_REJECT_PARAMS` / `_REJECT_SHAPE_PARAMS` maps; "shape"/"dark_bg" refined by
+    the detail string) — e.g. `reason=ratio` → `MIN_CONTRAST_TEXTURE_RATIO`,
+    `reason=texture` → `MAX_LOCAL_TEXTURE_SMALL/LARGE` — so the user knows which
+    right-panel param to relax to recover it. A test asserts EVERY reason emitted by
+    `detect_dust.log_reject` (+ the counter-only too_small/too_large/isolation) has
+    a mapping, so a newly-added reason can't silently miss one.
   - **Region-only detection (`detect_dust.detect_region`) — the key to speed.** A
     full-frame boosted detect was unusable (~25s; raised sensitivity explodes the
     per-candidate reject loop across the whole frame). `detect_region(image_path,

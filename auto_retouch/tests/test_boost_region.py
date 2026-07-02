@@ -180,6 +180,41 @@ def test_boost_note_for():
         "boosted stroke node/source shows the ⚡ BOOSTED note + attribution")
 
 
+def test_reject_param_mapping():
+    ui = _bare_ui()
+    # simple reasons -> the tuning constant that gates them
+    for reason, needle in (("ratio", "MIN_CONTRAST_TEXTURE_RATIO"),
+                           ("texture", "MAX_LOCAL_TEXTURE"),
+                           ("context", "MAX_CONTEXT_TEXTURE"),
+                           ("color", "MAX_EXCESS_SATURATION"),
+                           ("edge", "MAX_BG_GRADIENT_RATIO"),
+                           ("dim", "MIN_BRIGHTNESS_FRAC"),
+                           ("contrast", "NOISE_THRESHOLD_MULTIPLIER"),
+                           ("isolation", "MAX_NEARBY_ACCEPTED")):
+        _ok(needle in ui._reject_params_for(reason, ""),
+            f"reject reason {reason!r} names {needle}")
+    # "shape" is disambiguated by the detail prefix
+    _ok(ui._reject_params_for("shape", "solidity=0.4<0.5") == "MIN_SOLIDITY",
+        "shape/solidity -> MIN_SOLIDITY")
+    _ok(ui._reject_params_for("shape", "circularity=0.1<0.15") == "MIN_CIRCULARITY",
+        "shape/circularity -> MIN_CIRCULARITY")
+    # "dark_bg" texture vs derived-contrast form
+    _ok("MAX_DARK_BG_TEXTURE" in ui._reject_params_for("dark_bg", "bg=66 tex=12>9"),
+        "dark_bg (bg= form) -> MAX_DARK_BG_TEXTURE")
+    _ok(ui._reject_params_for("nonsense", "") == "", "unknown reason -> empty")
+
+    # every reason code emitted by detect_dust.log_reject / the reject counters is
+    # mapped (guards against a new reason being added without a param mapping)
+    import re
+    with open(os.path.join(FEATURE, "detect_dust.py"), encoding="utf-8") as _f:
+        src = _f.read()
+    reasons = set(re.findall(r'log_reject\([^,]+,[^,]+,[^,]+,[^,]+,\s*"([^"]+)"', src))
+    reasons |= {"too_small", "too_large", "isolation"}   # counter-only rejects
+    for reason in sorted(reasons):
+        _ok(ui._reject_params_for(reason, "x") != "" or reason == "",
+            f"reason {reason!r} from detect_dust has a param mapping")
+
+
 def test_boost_tool_toggle():
     import types
     ui = _bare_ui()
@@ -217,5 +252,6 @@ if __name__ == "__main__":
     test_boost_is_auto()
     test_rep_point_and_attribution()
     test_boost_note_for()
+    test_reject_param_mapping()
     test_boost_tool_toggle()
     print("\nALL BOOST-REGION TESTS PASSED")
