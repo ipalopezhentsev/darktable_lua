@@ -52,6 +52,22 @@ script_data.destroy_method = nil
 script_data.restart = nil
 script_data.show = nil
 
+-- Parse close_choices.txt written by the debug UI's finish dialog:
+-- `apply=0|1` + `delete_temp=0|1`. Returns { apply=bool, delete_temp=bool },
+-- or nil when the file is missing (UI closed without the dialog / cancelled).
+local function parse_close_choices(export_dir)
+  local file = io.open(export_dir .. "/close_choices.txt", "r")
+  if not file then return nil end
+  local choices = { apply = false, delete_temp = false }
+  for line in file:lines() do
+    local k, v = line:match("^([%w_]+)=(%d+)$")
+    if k == "apply" then choices.apply = (v == "1")
+    elseif k == "delete_temp" then choices.delete_temp = (v == "1") end
+  end
+  file:close()
+  return choices
+end
+
 -- Parse crop results file (simple line format: OK|filename|L=x|T=x|R=x|B=x or ERR|filename|message)
 local function parse_crop_results(results_file_path)
   local file = io.open(results_file_path, "r")
@@ -232,7 +248,10 @@ end
 --   open, and this function returns nil (no results to apply).
 -- Returns: crop_results, filename_to_image, export_dir (or nil on failure /
 --   detached debug launch)
-local function export_and_detect(images, debug_ui_mode)
+-- debug_blocking: run the debug UI in the FOREGROUND (blocking) instead of the
+-- detached launch — the unified edit action needs this so it can read
+-- crop_results.txt + close_choices.txt after the UI closes.
+local function export_and_detect(images, debug_ui_mode, debug_blocking)
   -- Create temp folder
   local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
   local export_dir = temp_dir .. "/darktable_autocrop_" .. os.time()
@@ -307,8 +326,11 @@ local function export_and_detect(images, debug_ui_mode)
   local command = string.format('conda run -n autocrop python "%s"%s%s%s',
                                  python_script, debug_flag, vis_flag, file_args)
 
-  -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
-  if debug_ui_mode then
+  -- In debug UI mode, launch Python detached so darktable isn't blocked while the
+  -- UI is open — UNLESS debug_blocking (the unified edit action wants to read
+  -- crop_results.txt + close_choices.txt after the UI closes, so it falls through
+  -- to the foreground path below).
+  if debug_ui_mode and not debug_blocking then
     dt.print(_("Running crop detection in background..."))
     if dt.configuration.running_os == "windows" then
       local bat_file = export_dir .. "/run_debug.bat"
@@ -360,23 +382,11 @@ local function export_and_detect(images, debug_ui_mode)
   return crop_results, filename_to_image, export_dir
 end
 
--- Debug mode: export, detect and open the debug UI - no crop application
-local function export_and_find_edges_debug()
-  dlog.log_level(dlog.info)
-  local images = dt.gui.selection()
-
-  if #images == 0 then
-    dt.print(_("No images selected"))
-    return
-  end
-
-  export_and_detect(images, true)
-  -- Detached launch: detection runs in background and opens debug_ui.py when done
-end
-
--- Export, detect, and apply crops directly to source images (no virtual copies)
--- keep_temp: if true, the temp folder is kept after a successful run for analysis
-local function export_detect_and_apply_inplace(keep_temp)
+-- Unified continuous-edit action: export + detect + open the crop debug UI
+-- (blocking). On close a finish dialog decides whether to apply the crop (the
+-- user's edge corrections, else the auto detection) in-place and whether to
+-- delete the temp folder.
+local function edit_crop()
   dlog.log_level(dlog.info)
   math.randomseed(os.time() + os.clock() * 1000)
 
@@ -387,119 +397,88 @@ local function export_detect_and_apply_inplace(keep_temp)
     return
   end
 
-  local crop_results, filename_to_image, export_dir = export_and_detect(images, false)
-  if not crop_results then
+  -- Blocking debug UI: auto_crop.py detects, opens the UI foreground in --apply
+  -- mode, and on close the UI (re)writes crop_results.txt + close_choices.txt.
+  local crop_results, filename_to_image, export_dir = export_and_detect(images, true, true)
+  if not export_dir then
     return
   end
 
-  -- Apply crops in-place (no virtual copies)
-  dlog.msg(dlog.info, "export_detect_and_apply_inplace",
-    string.format("Applying crops to %d images (in-place, no virtual copies)...", #crop_results))
+  local choices = parse_close_choices(export_dir)
+  local do_apply = choices and choices.apply
+  local do_delete = choices and choices.delete_temp
 
-  local stats = {
-    applied = 0,
-    failed = 0
-  }
+  if not do_apply then
+    dt.print(_("Debug UI closed without applying - nothing written to darktable"))
+  elseif not crop_results then
+    dt.print(_("Apply was chosen but the UI produced no results - nothing applied"))
+  else
+    dlog.msg(dlog.info, "edit_crop",
+      string.format("Applying crops to %d images (in-place, no virtual copies)...", #crop_results))
 
-  for idx, result_data in ipairs(crop_results) do
-    dlog.msg(dlog.info, "export_detect_and_apply_inplace",
-      string.format("Processing result %d, status=%s", idx, result_data.status or "nil"))
+    local stats = { applied = 0, failed = 0 }
 
-    if result_data.status == "success" then
-      local original_image = filename_to_image[result_data.filename]
-
-      if original_image then
-        dt.print(string.format(_("Processing %s (in-place)..."), original_image.filename))
-
-        local success, error_msg = apply_crop_in_place(original_image, result_data.crop)
-
-        if success then
-          stats.applied = stats.applied + 1
-          dlog.msg(dlog.info, "export_detect_and_apply_inplace",
-            string.format("Applied in-place crop: L=%.2f%% T=%.2f%% R=%.2f%% B=%.2f%%",
-              result_data.crop.left, result_data.crop.top,
-              result_data.crop.right, result_data.crop.bottom))
+    for idx, result_data in ipairs(crop_results) do
+      if result_data.status == "success" then
+        local original_image = filename_to_image[result_data.filename]
+        if original_image then
+          dt.print(string.format(_("Processing %s (in-place)..."), original_image.filename))
+          local success, error_msg = apply_crop_in_place(original_image, result_data.crop)
+          if success then
+            stats.applied = stats.applied + 1
+            dlog.msg(dlog.info, "edit_crop",
+              string.format("Applied in-place crop: L=%.2f%% T=%.2f%% R=%.2f%% B=%.2f%%",
+                result_data.crop.left, result_data.crop.top,
+                result_data.crop.right, result_data.crop.bottom))
+          else
+            stats.failed = stats.failed + 1
+            dt.print(string.format(_("  *** FAILED to apply crop: %s ***"), error_msg or "Unknown error"))
+          end
         else
           stats.failed = stats.failed + 1
-          dt.print(string.format(_("  *** FAILED to apply crop: %s ***"), error_msg or "Unknown error"))
+          dt.print(string.format(_("Warning: Could not find original image for %s"), result_data.filename))
         end
       else
         stats.failed = stats.failed + 1
-        dt.print(string.format(_("Warning: Could not find original image for %s"), result_data.filename))
+        dt.print(string.format(_("Skipped %s: %s"), result_data.filename, result_data.error or "Unknown error"))
       end
-    else
-      stats.failed = stats.failed + 1
-      dt.print(string.format(_("Skipped %s: %s"), result_data.filename, result_data.error or "Unknown error"))
     end
+
+    dt.print(string.format(_("Auto Crop Complete: %d applied, %d failed"),
+      stats.applied, stats.failed))
   end
 
-  dt.print(string.format(_("Auto Crop In-Place Complete: %d applied, %d failed"),
-    stats.applied, stats.failed))
-
-  -- Clean up temp dir if no errors (keep on failure or in keep-temp mode)
-  if stats.failed == 0 and not keep_temp then
+  if do_delete then
     df.rmdir(export_dir)
-    dlog.msg(dlog.info, "export_detect_and_apply_inplace", "Removed temp dir: " .. export_dir)
+    dlog.msg(dlog.info, "edit_crop", "Removed temp dir: " .. export_dir)
+    dt.print(string.format(_("Removed temp folder: %s"), export_dir))
   else
-    dt.print(string.format(_("Temp folder kept for analysis: %s"), export_dir))
-    dlog.msg(dlog.info, "export_detect_and_apply_inplace",
-      "Keeping temp dir for inspection: " .. export_dir)
+    dt.print(string.format(_("Temp folder kept: %s"), export_dir))
   end
 end
 
 local function destroy()
-    dt.gui.libs.image.destroy_action("AutoCrop_Debug")
-    dt.gui.libs.image.destroy_action("AutoCrop_InPlace")
-    dt.gui.libs.image.destroy_action("AutoCrop_InPlace_KeepTemp")
+    dt.gui.libs.image.destroy_action("AutoCrop")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
-    pcall(dt.destroy_event, "AutoCrop_Debug", "shortcut")
-    pcall(dt.destroy_event, "AutoCrop_InPlace", "shortcut")
-    pcall(dt.destroy_event, "AutoCrop_InPlace_KeepTemp", "shortcut")
+    pcall(dt.destroy_event, "AutoCrop", "shortcut")
 end
 
--- Mode 1: debug UI (detect + annotate, no apply)
+-- Unified continuous-edit action: export + detect + open the crop debug UI
+-- (blocking). On close a finish dialog decides whether to apply the crop
+-- (the user's edge corrections, else the auto detection) and whether to delete
+-- the temp folder.
 dt.gui.libs.image.register_action(
-    "AutoCrop_Debug",
-    _("Auto crop debug (open debug UI, no apply)"),
-    function() export_and_find_edges_debug() end,
-    _("Export, detect margins and open the crop debug UI - no crop applied")
+    "AutoCrop",
+    _("Auto crop (edit in debug UI, apply on close)"),
+    function() edit_crop() end,
+    _("Export, detect margins, open the crop debug UI; on close choose whether to apply the crop in-place and whether to delete the temp folder")
 )
 
 dt.register_event(
-    "AutoCrop_Debug",
+    "AutoCrop",
     "shortcut",
-    function(event, shortcut) export_and_find_edges_debug() end,
-    "AutoCrop_Debug"
-)
-
--- Mode 2: fully automatic, temp folder removed on success
-dt.gui.libs.image.register_action(
-    "AutoCrop_InPlace",
-    _("Auto crop in-place (no virtual copy)"),
-    function() export_detect_and_apply_inplace(false) end,
-    _("Export, detect, and apply crop margins directly to selected images")
-)
-
-dt.register_event(
-    "AutoCrop_InPlace",
-    "shortcut",
-    function(event, shortcut) export_detect_and_apply_inplace(false) end,
-    "AutoCrop_InPlace"
-)
-
--- Mode 3: fully automatic, temp folder kept for analysis
-dt.gui.libs.image.register_action(
-    "AutoCrop_InPlace_KeepTemp",
-    _("Auto crop in-place (keep temp folder)"),
-    function() export_detect_and_apply_inplace(true) end,
-    _("Same as in-place, but keeps the temp folder and log for analysis")
-)
-
-dt.register_event(
-    "AutoCrop_InPlace_KeepTemp",
-    "shortcut",
-    function(event, shortcut) export_detect_and_apply_inplace(true) end,
-    "AutoCrop_InPlace_KeepTemp"
+    function(event, shortcut) edit_crop() end,
+    "AutoCrop"
 )
 
 script_data.destroy = destroy

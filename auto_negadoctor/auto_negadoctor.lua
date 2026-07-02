@@ -165,6 +165,22 @@ local function parse_applied_results(results_file_path)
   return results
 end
 
+-- Parse close_choices.txt written by the debug UI's finish dialog:
+-- `apply=0|1` + `delete_temp=0|1`. Returns { apply=bool, delete_temp=bool },
+-- or nil when the file is missing (UI closed without the dialog / cancelled).
+local function parse_close_choices(export_dir)
+  local file = io.open(export_dir .. "/close_choices.txt", "r")
+  if not file then return nil end
+  local choices = { apply = false, delete_temp = false }
+  for line in file:lines() do
+    local k, v = line:match("^([%w_]+)=(%d+)$")
+    if k == "apply" then choices.apply = (v == "1")
+    elseif k == "delete_temp" then choices.delete_temp = (v == "1") end
+  end
+  file:close()
+  return choices
+end
+
 -- ===================================================================
 -- XMP helpers
 -- ===================================================================
@@ -493,85 +509,6 @@ local function insert_history_entry(xmp_content, make_entry_xml)
   xmp_content = xmp_content:gsub('darktable:history_end="%d+"',
     string.format('darktable:history_end="%d"', new_history_end))
   return xmp_content, new_history_num
-end
-
--- Apply negadoctor params to a source image's XMP. If a negadoctor entry
--- already exists (only a DISABLED one can get here - pre-flight aborts on
--- enabled ones), its params are replaced in place and it is re-enabled;
--- otherwise a new history entry is inserted.
-local function apply_negadoctor_in_place(image, params_hex)
-  dlog.msg(dlog.info, "apply_negadoctor_in_place", "Called for " .. image.filename)
-
-  local success, error_msg = pcall(function()
-    local xmp_content, xmp_path = read_xmp(image)
-    if not xmp_path then
-      error("No sidecar path for image: " .. image.filename)
-    end
-    if not xmp_content then
-      error("XMP sidecar does not exist yet for " .. image.filename ..
-            " - open the image once in darkroom so darktable creates it")
-    end
-
-    -- Find an existing negadoctor entry (take the last one by position)
-    local existing = nil
-    for i, entry in ipairs(scan_history_entries(xmp_content)) do
-      if entry.operation == "negadoctor" then
-        existing = entry
-      end
-    end
-
-    local current_history_end = tonumber(xmp_content:match('darktable:history_end="(%d+)"')) or 0
-
-    if existing then
-      -- Replace params in place and force enabled; never grows the history
-      local new_entry = existing.text
-        :gsub('darktable:params="[^"]*"',
-              'darktable:params="' .. params_hex .. '"')
-        :gsub('darktable:enabled="%d"', 'darktable:enabled="1"')
-      xmp_content = xmp_content:sub(1, existing.s - 1) .. new_entry ..
-                    xmp_content:sub(existing.e + 1)
-      if existing.num >= current_history_end then
-        -- The entry sat above history_end (inactive tail) - extend to cover it
-        xmp_content = xmp_content:gsub('darktable:history_end="%d+"',
-          string.format('darktable:history_end="%d"', existing.num + 1))
-      end
-      dlog.msg(dlog.info, "apply_negadoctor_in_place",
-        string.format("Replaced existing negadoctor entry num=%d", existing.num))
-    else
-      -- Insert a new entry. history_end protection: use the max of the
-      -- scanned num and history_end-1 so disabled trailing steps are not
-      -- deactivated (the auto_retouch fix).
-      local scanned_max = find_max_history_num(xmp_content)
-      local new_history_num = math.max(scanned_max, current_history_end - 1) + 1
-      local new_history_end = new_history_num + 1
-
-      local module_xml = create_negadoctor_module_xml(new_history_num, params_hex)
-      local before_seq_end = xmp_content:find("</rdf:Seq>%s*</darktable:history>")
-      if not before_seq_end then
-        error("Could not find history sequence end tag in XMP")
-      end
-      xmp_content = xmp_content:sub(1, before_seq_end - 1) .. "\n" ..
-                    module_xml .. "\n" ..
-                    xmp_content:sub(before_seq_end)
-      xmp_content = xmp_content:gsub('darktable:history_end="%d+"',
-        string.format('darktable:history_end="%d"', new_history_end))
-      dlog.msg(dlog.info, "apply_negadoctor_in_place",
-        string.format("Inserted negadoctor at num=%d, history_end=%d",
-          new_history_num, new_history_end))
-      -- No iop_order_list edit needed: negadoctor at multi_priority 0 is part
-      -- of every built-in module order.
-    end
-
-    finalize_xmp(image, xmp_path, xmp_content, "apply_negadoctor_in_place")
-    dt.print(_("  Negadoctor applied - check darkroom view"))
-  end)
-
-  if not success then
-    dlog.msg(dlog.error, "apply_negadoctor_in_place", string.format("Failed: %s", tostring(error_msg)))
-    return false, error_msg or "Unknown error"
-  end
-
-  return true, nil
 end
 
 -- Annotate+apply flow: ALWAYS insert a NEW negadoctor history entry (per the
@@ -1084,13 +1021,11 @@ local function export_and_detect(images, debug_ui_mode, ai_tune, annotate_apply)
   end
 
   -- In annotate+apply mode the per-frame params/crop come from the UI's
-  -- applied_results.txt (the user's corrections over the auto analysis).
+  -- applied_results.txt (the user's corrections over the auto analysis). It may
+  -- be absent when the user closed without choosing "apply" in the finish
+  -- dialog; still return export_dir so the caller can read close_choices.txt.
   if annotate_apply then
     local applied = parse_applied_results(export_dir .. "/applied_results.txt")
-    if not applied then
-      dt.print(_("No applied results found (debug UI closed without producing them) - nothing applied"))
-      return nil, nil, nil, nil
-    end
     return applied, filename_to_image, export_dir, vignette
   end
 
@@ -1101,25 +1036,14 @@ end
 -- Entry points
 -- ===================================================================
 
--- Mode 1: debug UI (analyze + annotate, no apply). ai_tune adds the vision-LLM
--- alternate variant to the session (switchable in the debug UI with key A).
-local function export_and_invert_debug(ai_tune)
-  dlog.log_level(dlog.info)
-  local images = dt.gui.selection()
-
-  if #images == 0 then
-    dt.print(_("No images selected"))
-    return
-  end
-
-  export_and_detect(images, true, ai_tune)
-  -- Detached launch: analysis runs in background and opens debug_ui.py when done
-end
-
--- Modes 2/3: export, analyze, and write negadoctor params into the XMPs.
--- ai_tune writes the vision-LLM nudged params (spec 03) instead of the
--- analytical ones; the analytical pipeline still runs first, unchanged.
-local function export_invert_and_apply(keep_temp, ai_tune)
+-- Unified continuous-edit action. Always: export + analyze + open the debug UI
+-- BLOCKING (continuous-edit / clean-export path, no abort on already-inverted
+-- frames). On close the UI's finish dialog decides what happens: if "apply" is
+-- checked, write the user's corrections (auto where none) into the XMPs -
+-- vignette (lens), crop, and negadoctor as a NEW history item; if "delete temp"
+-- is checked, remove the temp folder. ai_tune adds the vision-LLM variant
+-- (spec 03), switchable in the UI with key A and applied if it's the active one.
+local function export_and_edit(ai_tune)
   dlog.log_level(dlog.info)
   math.randomseed(os.time() + os.clock() * 1000)
 
@@ -1130,88 +1054,30 @@ local function export_invert_and_apply(keep_temp, ai_tune)
     return
   end
 
-  local nega_results, filename_to_image, export_dir, vignette = export_and_detect(images, false, ai_tune)
-  if not nega_results then
-    return
-  end
-
-  local stats = { applied = 0, failed = 0, lens_applied = 0, lens_kept = 0 }
-
-  for idx, result_data in ipairs(nega_results) do
-    if result_data.status == "success" then
-      local original_image = filename_to_image[result_data.filename]
-      if original_image then
-        dt.print(string.format(_("Applying negadoctor to %s..."), original_image.filename))
-
-        -- vignette correction first (lens module sits before negadoctor in
-        -- the pipe; the negadoctor params assume vignette-corrected input)
-        if vignette and vignette.params then
-          local lens_outcome, lens_err = apply_lens_in_place(original_image, vignette.params)
-          if lens_outcome == "applied" then
-            stats.lens_applied = stats.lens_applied + 1
-          elseif lens_outcome == "kept" then
-            stats.lens_kept = stats.lens_kept + 1
-          else
-            dt.print(string.format(_("  Warning: lens/vignette apply failed: %s"),
-              lens_err or "Unknown error"))
-          end
-        end
-
-        local success, error_msg = apply_negadoctor_in_place(original_image, result_data.params_hex)
-        if success then
-          stats.applied = stats.applied + 1
-        else
-          stats.failed = stats.failed + 1
-          dt.print(string.format(_("  *** FAILED to apply: %s ***"), error_msg or "Unknown error"))
-        end
-      else
-        stats.failed = stats.failed + 1
-        dt.print(string.format(_("Warning: Could not find original image for %s"), result_data.filename))
-      end
-    else
-      stats.failed = stats.failed + 1
-      dt.print(string.format(_("Skipped %s: %s"), result_data.filename, result_data.error or "Unknown error"))
-    end
-  end
-
-  dt.print(string.format(_("Auto Negadoctor Complete: %d applied, %d failed; lens/vignette: %d applied, %d kept"),
-    stats.applied, stats.failed, stats.lens_applied, stats.lens_kept))
-
-  if stats.failed == 0 and not keep_temp then
-    df.rmdir(export_dir)
-    dlog.msg(dlog.info, "export_invert_and_apply", "Removed temp dir: " .. export_dir)
-  else
-    dt.print(string.format(_("Temp folder kept for analysis: %s"), export_dir))
-  end
-end
-
--- Mode 5: annotate + apply. Export and analyze like the InPlace flow, open the
--- debug UI (blocking), and when the user closes it, write the user's corrections
--- (auto where none) into the XMPs: vignette (lens), crop, and negadoctor as a
--- NEW history item. The temp folder is kept (it holds the user's annotations).
-local function export_annotate_and_apply()
-  dlog.log_level(dlog.info)
-  math.randomseed(os.time() + os.clock() * 1000)
-
-  local images = dt.gui.selection()
-
-  if #images == 0 then
-    dt.print(_("No images selected"))
-    return
-  end
-
-  -- annotate_apply = true: blocking foreground run; results come from the UI's
-  -- applied_results.txt (per-frame params + crop) on close.
+  -- annotate_apply = true: blocking foreground run; results (if the user chose
+  -- to apply) come from the UI's applied_results.txt on close.
   local applied_results, filename_to_image, export_dir, vignette =
-    export_and_detect(images, false, false, true)
-  if not applied_results then
-    return
+    export_and_detect(images, false, ai_tune, true)
+  if not export_dir then
+    return   -- export / analysis / launch failed
   end
 
-  local stats = { applied = 0, failed = 0, cropped = 0, crop_failed = 0,
-                  lens_applied = 0, lens_kept = 0 }
+  local choices = parse_close_choices(export_dir)
+  local do_apply = choices and choices.apply
+  local do_delete = choices and choices.delete_temp
 
-  for idx, result_data in ipairs(applied_results) do
+  if not do_apply then
+    dt.print(_("Debug UI closed without applying - nothing written to darktable"))
+  elseif not applied_results then
+    dt.print(_("Apply was chosen but the UI produced no results - nothing applied"))
+    do_apply = false
+  end
+
+  if do_apply then
+    local stats = { applied = 0, failed = 0, cropped = 0, crop_failed = 0,
+                    lens_applied = 0, lens_kept = 0 }
+
+    for idx, result_data in ipairs(applied_results) do
     if result_data.status == "success" then
       local original_image = filename_to_image[result_data.filename]
       if original_image then
@@ -1258,11 +1124,19 @@ local function export_annotate_and_apply()
     end
   end
 
-  dt.print(string.format(
-    _("Annotate+Apply complete: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept"),
-    stats.applied, stats.cropped, stats.failed + stats.crop_failed,
-    stats.lens_applied, stats.lens_kept))
-  dt.print(string.format(_("Temp folder (with your annotations) kept: %s"), export_dir))
+    dt.print(string.format(
+      _("Applied: %d negadoctor, %d cropped, %d failed; lens: %d applied, %d kept"),
+      stats.applied, stats.cropped, stats.failed + stats.crop_failed,
+      stats.lens_applied, stats.lens_kept))
+  end
+
+  if do_delete then
+    df.rmdir(export_dir)
+    dlog.msg(dlog.info, "export_and_edit", "Removed temp dir: " .. export_dir)
+    dt.print(string.format(_("Removed temp folder: %s"), export_dir))
+  else
+    dt.print(string.format(_("Temp folder kept: %s"), export_dir))
+  end
 end
 
 -- Mode 6: apply annotations from a SAVED ground-truth folder (no export/analyze).
@@ -1433,117 +1307,49 @@ end
 -- ===================================================================
 
 local function destroy()
-    dt.gui.libs.image.destroy_action("AutoNegadoctor_Debug")
-    dt.gui.libs.image.destroy_action("AutoNegadoctor_InPlace")
-    dt.gui.libs.image.destroy_action("AutoNegadoctor_InPlace_KeepTemp")
-    dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_Debug")
-    dt.gui.libs.image.destroy_action("AutoNegadoctor_AI_InPlace")
-    dt.gui.libs.image.destroy_action("AutoNegadoctor_Annotate_Apply")
+    dt.gui.libs.image.destroy_action("AutoNegadoctor")
+    dt.gui.libs.image.destroy_action("AutoNegadoctor_AI")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Apply_From_Folder")
     dt.gui.libs.image.destroy_action("AutoNegadoctor_Remove")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
-    pcall(dt.destroy_event, "AutoNegadoctor_Debug", "shortcut")
-    pcall(dt.destroy_event, "AutoNegadoctor_InPlace", "shortcut")
-    pcall(dt.destroy_event, "AutoNegadoctor_InPlace_KeepTemp", "shortcut")
-    pcall(dt.destroy_event, "AutoNegadoctor_AI_Debug", "shortcut")
-    pcall(dt.destroy_event, "AutoNegadoctor_AI_InPlace", "shortcut")
-    pcall(dt.destroy_event, "AutoNegadoctor_Annotate_Apply", "shortcut")
+    pcall(dt.destroy_event, "AutoNegadoctor", "shortcut")
+    pcall(dt.destroy_event, "AutoNegadoctor_AI", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_Apply_From_Folder", "shortcut")
     pcall(dt.destroy_event, "AutoNegadoctor_Remove", "shortcut")
 end
 
--- Mode 1: debug UI (analyze + annotate, no apply)
+-- Unified continuous-edit action: export + analyze + open the debug UI
+-- (blocking). On close a finish dialog asks whether to apply the annotations
+-- (auto where none) into the XMPs and whether to delete the temp folder.
 dt.gui.libs.image.register_action(
-    "AutoNegadoctor_Debug",
-    _("Auto negadoctor debug (open debug UI, no apply)"),
-    function() export_and_invert_debug() end,
-    _("Export, analyze the roll and open the negadoctor debug UI - nothing applied")
+    "AutoNegadoctor",
+    _("Auto negadoctor (edit in debug UI, apply on close)"),
+    function() export_and_edit(false) end,
+    _("Export, analyze the roll, and open the debug UI; on close choose whether to apply your annotations (negadoctor new history item, crop, vignette) and whether to delete the temp folder")
 )
 
 dt.register_event(
-    "AutoNegadoctor_Debug",
+    "AutoNegadoctor",
     "shortcut",
-    function(event, shortcut) export_and_invert_debug() end,
-    "AutoNegadoctor_Debug"
+    function(event, shortcut) export_and_edit(false) end,
+    "AutoNegadoctor"
 )
 
--- Mode 2: fully automatic, temp folder removed on success
+-- Spec 03: AI variant — same continuous-edit flow, plus the vision-LLM
+-- (gemma3/Ollama) alternate variant in the session; switch Analytical<->AI in
+-- the UI with key A. If AI is the active variant on close, its params are applied.
 dt.gui.libs.image.register_action(
-    "AutoNegadoctor_InPlace",
-    _("Auto negadoctor in-place"),
-    function() export_invert_and_apply(false) end,
-    _("Export, analyze the roll, and write negadoctor params into the selected images' XMPs")
+    "AutoNegadoctor_AI",
+    _("Auto negadoctor AI (vision-LLM variant, edit in debug UI)"),
+    function() export_and_edit(true) end,
+    _("Like the main action, but also computes the vision-LLM per-scene variant for A/B comparison (slower); the active variant on close is applied")
 )
 
 dt.register_event(
-    "AutoNegadoctor_InPlace",
+    "AutoNegadoctor_AI",
     "shortcut",
-    function(event, shortcut) export_invert_and_apply(false) end,
-    "AutoNegadoctor_InPlace"
-)
-
--- Mode 3: fully automatic, temp folder kept for analysis
-dt.gui.libs.image.register_action(
-    "AutoNegadoctor_InPlace_KeepTemp",
-    _("Auto negadoctor in-place (keep temp folder)"),
-    function() export_invert_and_apply(true) end,
-    _("Same as in-place, but keeps the temp folder and log for analysis")
-)
-
-dt.register_event(
-    "AutoNegadoctor_InPlace_KeepTemp",
-    "shortcut",
-    function(event, shortcut) export_invert_and_apply(true) end,
-    "AutoNegadoctor_InPlace_KeepTemp"
-)
-
--- Spec 03: AI debug — same as Debug, plus the vision-LLM (gemma3/Ollama)
--- alternate variant in the session; switch Analytical<->AI in the UI with key A.
-dt.gui.libs.image.register_action(
-    "AutoNegadoctor_AI_Debug",
-    _("Auto negadoctor AI debug (vision-LLM variant, open debug UI)"),
-    function() export_and_invert_debug(true) end,
-    _("Like the debug action, but also computes the vision-LLM per-scene variant for A/B comparison (slower)")
-)
-
-dt.register_event(
-    "AutoNegadoctor_AI_Debug",
-    "shortcut",
-    function(event, shortcut) export_and_invert_debug(true) end,
-    "AutoNegadoctor_AI_Debug"
-)
-
--- Spec 03: AI in-place — writes the vision-LLM nudged params into the XMPs.
--- The full analytical pipeline still runs first; AI only nudges the result.
-dt.gui.libs.image.register_action(
-    "AutoNegadoctor_AI_InPlace",
-    _("Auto negadoctor AI in-place (vision-LLM variant)"),
-    function() export_invert_and_apply(false, true) end,
-    _("Export, analyze, then apply the vision-LLM per-scene tuned params (gemma3/Ollama) to the XMPs")
-)
-
-dt.register_event(
-    "AutoNegadoctor_AI_InPlace",
-    "shortcut",
-    function(event, shortcut) export_invert_and_apply(false, true) end,
-    "AutoNegadoctor_AI_InPlace"
-)
-
--- Mode 5: annotate + apply — export, analyze, open the debug UI (blocking), and
--- on close write the user's corrections (auto where none) to the XMPs: vignette,
--- crop, and negadoctor as a new history item.
-dt.gui.libs.image.register_action(
-    "AutoNegadoctor_Annotate_Apply",
-    _("Auto negadoctor annotate & apply (debug UI, apply on close)"),
-    function() export_annotate_and_apply() end,
-    _("Export, analyze, open the debug UI; when you close it, apply your annotations (auto where none) - negadoctor (new history item), crop and vignette")
-)
-
-dt.register_event(
-    "AutoNegadoctor_Annotate_Apply",
-    "shortcut",
-    function(event, shortcut) export_annotate_and_apply() end,
-    "AutoNegadoctor_Annotate_Apply"
+    function(event, shortcut) export_and_edit(true) end,
+    "AutoNegadoctor_AI"
 )
 
 -- Mode 6: apply annotations from a SAVED ground-truth folder (no export/analyze).

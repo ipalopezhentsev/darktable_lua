@@ -1210,18 +1210,22 @@ class NegadoctorDebugUI(DebugUIBase):
             return None
         return [left, top, right, bottom]
 
-    def _write_applied_results(self):
+    def write_apply_results(self):
         """Write applied_results.txt: one `OK|stem|params=<hex>|crop=L,T,R,B`
         line per frame, params being the user's corrections applied over
         the auto analysis (auto where the user added none). Crop is `none` when
-        there is no usable box. Read back by the Lua apply step."""
+        there is no usable box. Read back by the Lua apply step.
+
+        The fallback base is the ACTIVE variant (`_variant_params`), so when the
+        AI variant is on screen (key A) its params are what gets applied — this
+        is what the kept 'AI' action relies on (the old AI_InPlace)."""
         lines = []
         for img in self.images:
             stem = img["stem"]
             params = img.get("params")
             if not params:
                 continue
-            final = self._corrected_params(img) or params
+            final = self._corrected_params(img) or self._variant_params(img) or params
             try:
                 params_hex = nm.encode_negadoctor_params(final)
             except Exception as e:   # pragma: no cover - defensive
@@ -1244,13 +1248,8 @@ class NegadoctorDebugUI(DebugUIBase):
         if (self.images and getattr(self, "_session_switched", False)
                 and not getattr(self, "review_mode", False)):
             self._persist_active_session(self._current_preset_label)
-        # In apply mode emit the decisions FIRST (uses the in-memory annotations
-        # for every frame), then let the base save/report/destroy run.
-        if self.apply_mode:
-            try:
-                self._write_applied_results()
-            except Exception as e:   # pragma: no cover - defensive
-                print(f"Failed to write applied results: {e}")
+        # The base pops the close dialog (when CLOSE_DIALOG) and calls
+        # write_apply_results() only if the user chose to apply.
         super()._on_close()
 
     def _schedule_live_render(self, delay_ms=250):
@@ -4868,6 +4867,8 @@ def main():
     #   --preset N : run the first analysis under preset N (name or path)
     if "--apply" in sys.argv:
         NegadoctorDebugUI.apply_mode = True
+        # apply-capable session => the close dialog decides apply / delete-temp.
+        NegadoctorDebugUI.CLOSE_DIALOG = True
     if "--run" in sys.argv:
         NegadoctorDebugUI.run_mode = True
         NegadoctorDebugUI.ALLOW_EMPTY_SESSION = True   # populate progressively
@@ -4877,6 +4878,9 @@ def main():
         # pop a native folder picker (apply-from-folder flow); the session dir
         # is then the user's chosen ground-truth folder, not a positional arg.
         NegadoctorDebugUI.choose_dir = True
+        # A saved ground-truth folder must never be deleted: grey out the
+        # delete-temp checkbox (apply stays checked by default).
+        NegadoctorDebugUI.CLOSE_DELETE_TEMP_ENABLED = False
     argv, skip = [], False
     for i, a in enumerate(sys.argv):
         if skip:

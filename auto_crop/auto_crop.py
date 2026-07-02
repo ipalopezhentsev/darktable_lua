@@ -971,7 +971,12 @@ def main():
         import subprocess
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
         print(f"Launching debug UI: {debug_ui_script}", flush=True)
-        subprocess.Popen([sys.executable, str(debug_ui_script), str(output_dir)])
+        # BLOCKING + --apply: the unified crop action reviews the detected edges in
+        # the UI; on close the finish dialog decides whether crop_results.txt (with
+        # the user's edge corrections) is rewritten for the Lua apply step. Run
+        # foreground so the Lua caller (which waits on this process) can then read
+        # crop_results.txt + close_choices.txt.
+        subprocess.run([sys.executable, str(debug_ui_script), str(output_dir), "--apply"])
 
     # Exit with error code if any files failed
     if error_count > 0:

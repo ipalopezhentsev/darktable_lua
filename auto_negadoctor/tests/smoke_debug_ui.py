@@ -67,9 +67,12 @@ def main():
 
     root = tk.Tk()
     app = dbg.NegadoctorDebugUI(root, str(session))
-    # Exercise the annotate+apply flow: on close the UI must write
-    # applied_results.txt (verified in verify_outputs).
+    # Exercise the annotate+apply flow: on close the UI pops the finish dialog
+    # (auto-confirmed here, apply on by default) and must write both
+    # close_choices.txt and applied_results.txt (verified in verify_outputs).
     app.apply_mode = True
+    app.CLOSE_DIALOG = True
+    app.CLOSE_DIALOG_AUTOCONFIRM = True
     failures = []
 
     def step(name, fn):
@@ -1057,6 +1060,16 @@ def main():
                     assert len(parts) == 4 and parts[2] > parts[0] \
                         and parts[3] > parts[1], f"bad crop: {cval}"
         step("verify_applied_results", verify_applied_results)
+
+        # Close dialog: the decision file records apply/delete-temp for the Lua
+        # side (here auto-confirmed => apply=1, delete_temp=0 by default).
+        def verify_close_choices():
+            cp = session / dbg.NegadoctorDebugUI.CLOSE_CHOICES_FILENAME
+            assert cp.exists(), "close_choices.txt missing"
+            txt = cp.read_text()
+            assert "apply=1" in txt, f"expected apply=1, got: {txt!r}"
+            assert "delete_temp=0" in txt, f"expected delete_temp=0, got: {txt!r}"
+        step("verify_close_choices", verify_close_choices)
 
         if failures:
             print("SMOKE FAILURES:")

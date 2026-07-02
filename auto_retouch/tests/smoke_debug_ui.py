@@ -185,7 +185,22 @@ def main():
         step("review_cycle", review_cycle)
 
         step("clear_selection", lambda: app._clear_selection())
-        step("close", lambda: app._on_close())
+
+        # Exercise the close dialog: auto-confirm (apply on by default) so close
+        # writes close_choices.txt (and, apply on, dust_results.txt) without a
+        # blocking modal.
+        def close_with_dialog():
+            import os
+            app.apply_mode = True
+            app.CLOSE_DIALOG = True
+            app.CLOSE_DIALOG_AUTOCONFIRM = True
+            app._on_close()
+            cp = os.path.join(app.session_dir, app.CLOSE_CHOICES_FILENAME)
+            assert os.path.exists(cp), "close_choices.txt missing"
+            txt = open(cp).read()
+            assert "apply=1" in txt and "delete_temp=0" in txt, \
+                f"unexpected close_choices: {txt!r}"
+        step("close", close_with_dialog)
         if failures:
             print("SMOKE FAILURES:")
             for f in failures:

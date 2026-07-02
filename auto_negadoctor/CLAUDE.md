@@ -345,50 +345,54 @@ self-consistent: lightest area prints at 0.1 pre-gamma, densest at 0.96).
 
 ### Registered Actions
 
-NOTE (2026-06-22): for the THREE debug-UI actions below, `main()` no longer runs
-`process_roll` — it just launches `debug_ui.py --run` and the **UI runs the
-analysis itself behind a progress bar** (see the Debug UI "Self-run + progress"
-note). The analysis algorithm is unchanged; only the launch point moved.
+CONSOLIDATED (2026-07-02): the old Debug / InPlace / InPlace_KeepTemp / AI_Debug /
+AI_InPlace / Annotate_Apply six-action set collapsed into ONE unified
+continuous-edit action (+ a kept AI variant). The "debug vs apply vs keep-temp" and
+"analytical vs AI-apply" choices are now the close dialog + the active variant.
+Surviving actions: **AutoNegadoctor**, **AutoNegadoctor_AI**,
+**AutoNegadoctor_Apply_From_Folder**, **AutoNegadoctor_Remove**.
 
-- **AutoNegadoctor_Debug** (`export_and_invert_debug`) — mode 1: export +
-  analyze detached (hidden bat/vbs launch), opens the debug UI; no apply.
-- **AutoNegadoctor_InPlace** (`export_invert_and_apply(false)`) — mode 2:
-  full pipeline, params written to XMPs, temp removed on success.
-- **AutoNegadoctor_InPlace_KeepTemp** (`export_invert_and_apply(true)`) —
-  mode 3: same, temp folder kept for analysis.
-- **AutoNegadoctor_AI_Debug** (`export_and_invert_debug(true)`) — like Debug,
-  but also computes the spec-03 vision-LLM ALTERNATE variant (`--ai-tune`); the
-  debug UI switches Analytical↔AI with key **A**.
-- **AutoNegadoctor_AI_InPlace** (`export_invert_and_apply(false, true)`) — like
-  InPlace, but the params written to the XMPs are the vision-LLM nudged variant.
-  The full analytical pipeline still runs first, unchanged.
-- **AutoNegadoctor_Annotate_Apply** (`export_annotate_and_apply`) — the
-  annotate-and-apply flow: export + analyze (like InPlace), open the debug UI
-  **BLOCKING** (foreground, `--annotate-apply` → Python `subprocess.run`s the UI
-  and waits), and when the user CLOSES the UI, write their corrections (auto
-  where none) into the XMPs. The debug UI in `apply_mode` writes
-  `applied_results.txt` on close (`OK|stem|params=<hex>|crop=L,T,R,B`,
-  params = `_corrected_params` over the auto analysis, crop = the user's crop
-  annotation else the auto content border, as normalized [0,1] edge positions).
-  Lua then applies per frame: vignette (`apply_lens_in_place`), crop
-  (`apply_crop_new_item`, crop module modversion 3, same 4-float+8-zero encoding
-  as auto_crop — positions are post-orientation so orientation is preserved, the
-  flip entry is never touched) and negadoctor (`apply_negadoctor_new_item` —
-  ALWAYS a NEW history item, per the user's request, not an in-place replace).
-  **Continuous edit:** this flow may be re-run on already-inverted frames (no
-  abort — see Data Flow §1); the re-analysis exports the clean negative and the
-  new corrections stack as fresh negadoctor/crop history entries on top.
-  Both crop and negadoctor insert via the shared `insert_history_entry`
-  (history_end-protected). The temp folder is KEPT (it holds the annotations).
-  Guarded by `tests/smoke_debug_ui.py` (sets `apply_mode`, verifies
-  `applied_results.txt` shape on close).
+NOTE (2026-06-22): for the debug-UI actions, `main()` no longer runs `process_roll`
+— it launches `debug_ui.py --run` and the **UI runs the analysis itself behind a
+progress bar** (see the Debug UI "Self-run + progress" note). The analysis algorithm
+is unchanged; only the launch point moved.
+
+- **AutoNegadoctor** (`export_and_edit(false)`) — the unified continuous-edit
+  action. Always: export + analyze + open the debug UI **BLOCKING** (the
+  continuous-edit / clean-export path, so it NEVER aborts on already-inverted
+  frames — always passes `annotate_apply=true` to `export_and_detect`). On close
+  the shared finish dialog (see root CLAUDE.md / `common/debug_ui_base.py`) asks
+  (1) apply annotations back, (2) delete temp folder; the UI writes
+  `close_choices.txt` and — only when apply is chosen — the base hook
+  `write_apply_results` (was `_write_applied_results`) writes `applied_results.txt`
+  (`OK|stem|params=<hex>|crop=L,T,R,B`, params = `_corrected_params` over the auto
+  analysis — with the ACTIVE variant as fallback base, so the AI variant applies
+  if it's on screen; crop = the user's crop annotation else the auto content
+  border, normalized [0,1]). Lua reads `close_choices.txt`; if apply, it applies
+  per frame: vignette (`apply_lens_in_place`), crop (`apply_crop_new_item`, crop
+  module modversion 3, same 4-float+8-zero encoding as auto_crop — positions are
+  post-orientation so orientation is preserved, the flip entry is never touched)
+  and negadoctor (`apply_negadoctor_new_item` — ALWAYS a NEW history item), and
+  deletes the temp dir if chosen (default keep). **Continuous edit:** re-running on
+  already-inverted frames re-analyzes the clean negative and stacks the new
+  corrections as fresh negadoctor/crop history entries on top. Both crop and
+  negadoctor insert via the shared `insert_history_entry` (history_end-protected).
+  Guarded by `tests/smoke_debug_ui.py` (sets `CLOSE_DIALOG` + `CLOSE_DIALOG_AUTOCONFIRM`,
+  verifies `applied_results.txt` + `close_choices.txt` on close).
+- **AutoNegadoctor_AI** (`export_and_edit(true)`) — the same continuous-edit flow
+  plus the spec-03 vision-LLM ALTERNATE variant (`--ai-tune`); the debug UI switches
+  Analytical↔AI with key **A**, and whichever variant is active on close is what
+  `write_apply_results` applies (this replaces the old AI_InPlace). The full
+  analytical pipeline still runs first, unchanged.
 - **AutoNegadoctor_Apply_From_Folder** (`export_apply_from_folder`) — apply
   SAVED annotations from a user-picked ground-truth folder (NO export/analyze).
   Launches `debug_ui.py --choose-dir --apply` foreground: the base
   (`common/debug_ui_base.py`) pops a native `filedialog.askdirectory()` and echoes
   `CHOSEN_DIR|<path>` to stdout; the UI loads the folder's existing
   `*_debug_nega.json` + `*_annotations.json` (no `--run`), the user reviews, and on
-  close apply mode writes `applied_results.txt`. Lua reads that + the folder's
+  close the finish dialog fires (apply checked by default; **delete-temp greyed
+  out** since `--choose-dir` sets `CLOSE_DELETE_TEMP_ENABLED=False` — a saved GT
+  folder must never be deleted) and, if apply, writes `applied_results.txt`. Lua reads that + the folder's
   existing `negadoctor_results.txt` (vignette, via `parse_nega_results`) and applies
   vignette + crop + negadoctor (NEW history items) to the selected images, matched
   by sanitized stem (folder frames not selected are skipped). Saved annotations win;

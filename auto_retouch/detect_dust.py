@@ -3832,7 +3832,12 @@ def run_sensor_dust_mode(image_paths, transforms, output_dir, debug_ui=False, cf
         import subprocess
         debug_ui_script = Path(__file__).parent / "debug_ui.py"
         print(f"Launching debug UI: {debug_ui_script}", flush=True)
-        subprocess.Popen([sys.executable, str(debug_ui_script), output_dir])
+        # BLOCKING + --apply: the unified sensor action reviews the consensus in
+        # the UI and, on close, the finish dialog decides whether dust_results.txt
+        # (final spot set) is written for the Lua apply step. Running foreground so
+        # the Lua caller (which waits on this process) can then read the results +
+        # close_choices.txt.
+        subprocess.run([sys.executable, str(debug_ui_script), output_dir, "--apply"])
 
     return any_errors
 

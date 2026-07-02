@@ -179,6 +179,19 @@ class DebugUIBase:
     # auto-load of image 0) and have them appended later via add_image() — for
     # subclasses that analyze + populate progressively after the window is up.
     ALLOW_EMPTY_SESSION = False
+    # When True, closing the window first pops the "finish editing" dialog (two
+    # checkboxes: apply annotations back to darktable / delete the temp folder),
+    # writes close_choices.txt for the Lua caller, and calls write_apply_results()
+    # only when "apply" was chosen. Set by every continuous-edit / apply flow.
+    CLOSE_DIALOG = False
+    CLOSE_APPLY_DEFAULT = True          # initial state of the "apply" checkbox
+    CLOSE_DELETE_TEMP_DEFAULT = False   # initial state of the "delete temp" checkbox
+    CLOSE_DELETE_TEMP_ENABLED = True    # False => checkbox greyed out (e.g. a saved
+                                        # ground-truth folder must never be deleted)
+    # Set by the smoke tests to skip the modal and use the CLOSE_* defaults, so
+    # the close path can be driven programmatically.
+    CLOSE_DIALOG_AUTOCONFIRM = False
+    CLOSE_CHOICES_FILENAME = "close_choices.txt"
 
     def __init__(self, root, session_dir):
         self.root = root
@@ -2211,11 +2224,104 @@ class DebugUIBase:
     # Report generation & close
     # ------------------------------------------------------------------
 
+    def write_apply_results(self):
+        """Hook: write the feature's apply-back results file (applied_results.txt /
+        dust_results.txt / crop_results.txt). Called from _on_close ONLY when the
+        close dialog's "apply" checkbox was chosen. No-op by default."""
+        pass
+
+    def _prompt_close_choices(self):
+        """Modal 'finish editing' dialog with two checkboxes. Returns
+        (action, apply, delete) where action is "finish" or "cancel". In
+        CLOSE_DIALOG_AUTOCONFIRM mode the modal is skipped and the CLOSE_* defaults
+        are returned (for programmatic/test-driven close)."""
+        if self.CLOSE_DIALOG_AUTOCONFIRM:
+            return ("finish", bool(self.CLOSE_APPLY_DEFAULT),
+                    bool(self.CLOSE_DELETE_TEMP_DEFAULT and self.CLOSE_DELETE_TEMP_ENABLED))
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Finish editing")
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+
+        apply_var = tk.BooleanVar(value=bool(self.CLOSE_APPLY_DEFAULT))
+        delete_var = tk.BooleanVar(
+            value=bool(self.CLOSE_DELETE_TEMP_DEFAULT and self.CLOSE_DELETE_TEMP_ENABLED))
+        result = {"action": "cancel"}
+
+        frm = ttk.Frame(dlg, padding=16)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="What should happen when this window closes?").pack(
+            anchor="w", pady=(0, 10))
+        ttk.Checkbutton(frm, text="Apply annotations back to darktable",
+                        variable=apply_var).pack(anchor="w")
+        del_cb = ttk.Checkbutton(frm, text="Delete the temporary export folder",
+                                 variable=delete_var)
+        del_cb.pack(anchor="w", pady=(4, 0))
+        if not self.CLOSE_DELETE_TEMP_ENABLED:
+            del_cb.state(["disabled"])
+
+        btns = ttk.Frame(frm)
+        btns.pack(anchor="e", pady=(16, 0))
+
+        def _finish():
+            result["action"] = "finish"
+            dlg.destroy()
+
+        def _cancel():
+            result["action"] = "cancel"
+            dlg.destroy()
+
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right")
+        ttk.Button(btns, text="Finish", command=_finish).pack(side="right", padx=(0, 8))
+        dlg.protocol("WM_DELETE_WINDOW", _cancel)
+        dlg.bind("<Return>", lambda e: _finish())
+        dlg.bind("<Escape>", lambda e: _cancel())
+
+        # Center over the parent window (default placement lands top-left).
+        dlg.update_idletasks()
+        w, h = dlg.winfo_width(), dlg.winfo_height()
+        px, py = self.root.winfo_rootx(), self.root.winfo_rooty()
+        pw, ph = self.root.winfo_width(), self.root.winfo_height()
+        x = px + max(0, (pw - w) // 2)
+        y = py + max(0, (ph - h) // 2)
+        dlg.geometry(f"+{x}+{y}")
+        dlg.grab_set()
+        dlg.focus_set()
+        self.root.wait_window(dlg)
+        return (result["action"], bool(apply_var.get()),
+                bool(delete_var.get() and self.CLOSE_DELETE_TEMP_ENABLED))
+
+    def _write_close_choices(self, apply_back, delete_temp):
+        """Persist the dialog decision for the Lua caller to read after the UI
+        exits: `apply=0|1` + `delete_temp=0|1`."""
+        path = os.path.join(self.session_dir, self.CLOSE_CHOICES_FILENAME)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"apply={1 if apply_back else 0}\n")
+            f.write(f"delete_temp={1 if delete_temp else 0}\n")
+        print(f"Close choices written to: {path} "
+              f"(apply={int(bool(apply_back))} delete_temp={int(bool(delete_temp))})")
+
     def _on_close(self):
         # Save current image annotations (none yet if the session is still empty)
         if self.images:
             stem = self.images[self.current_idx]["stem"]
             self._auto_save(stem)
+
+        # Continuous-edit / apply flows: pop the finish dialog and honor its
+        # choices. Cancel returns to the UI without closing.
+        if self.CLOSE_DIALOG and self.images:
+            action, apply_back, delete_temp = self._prompt_close_choices()
+            if action != "finish":
+                return
+            self._write_close_choices(apply_back, delete_temp)
+            if apply_back:
+                try:
+                    self.write_apply_results()
+                except Exception as e:   # pragma: no cover - defensive
+                    print(f"Failed to write apply results: {e}")
+
+        if self.images:
             self._write_debug_report()
         self.root.destroy()
 

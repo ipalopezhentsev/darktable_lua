@@ -224,7 +224,7 @@ class DustDebugUI(DebugUIBase):
                 spots.append(sp)
         return spots
 
-    def _write_apply_results(self):
+    def write_apply_results(self):
         """Write dust_results.txt for the Lua apply step: the FINAL spot set per
         frame healed via generate_xmp_data_for_spots (using the folder's
         transform_params.txt for flip/crop/ashift). Mirrors write_dust_results'
@@ -265,13 +265,8 @@ class DustDebugUI(DebugUIBase):
                     f.write(stem + "\n")
             print(f"Import-GT: {len(changed)} frame(s) changed vs imported retouch")
 
-    def _on_close(self):
-        if self.apply_mode:
-            try:
-                self._write_apply_results()
-            except Exception as e:   # pragma: no cover - defensive
-                print(f"Failed to write apply results: {e}")
-        super()._on_close()
+    # _on_close is inherited from the base: it pops the close dialog (when
+    # CLOSE_DIALOG) and calls write_apply_results() only if the user chose apply.
 
     def _images_from_dir(self, session_dir):
         """Minimal img_dicts from a directory of JPGs (no debug_spots.json). Each is
@@ -3333,11 +3328,16 @@ def main():
     #   --choose-dir  : pop a native folder picker instead of a positional dir
     if "--apply" in sys.argv:
         DustDebugUI.apply_mode = True
+        # apply-capable session => the close dialog decides apply / delete-temp.
+        DustDebugUI.CLOSE_DIALOG = True
     if "--choose-dir" in sys.argv:
         DustDebugUI.choose_dir = True
+        # A saved ground-truth folder must never be deleted: grey out delete-temp.
+        DustDebugUI.CLOSE_DELETE_TEMP_ENABLED = False
     if "--import-gt" in sys.argv:
         DustDebugUI.import_gt = True
         DustDebugUI.apply_mode = True   # import-GT always writes on close
+        DustDebugUI.CLOSE_DIALOG = True
     sys.argv = [a for a in sys.argv if a not in ("--apply", "--choose-dir", "--import-gt")]
     DustDebugUI.run_main(
         usage="Usage: debug_ui.py <export_dir> [--apply] [--choose-dir] [--import-gt]")

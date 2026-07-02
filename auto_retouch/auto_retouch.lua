@@ -386,6 +386,22 @@ end
 -- Parse dust detection results
 -- ===================================================================
 
+-- Parse close_choices.txt written by the debug UI's finish dialog:
+-- `apply=0|1` + `delete_temp=0|1`. Returns { apply=bool, delete_temp=bool },
+-- or nil when the file is missing (UI closed without the dialog / cancelled).
+local function parse_close_choices(export_dir)
+  local file = io.open(export_dir .. "/close_choices.txt", "r")
+  if not file then return nil end
+  local choices = { apply = false, delete_temp = false }
+  for line in file:lines() do
+    local k, v = line:match("^([%w_]+)=(%d+)$")
+    if k == "apply" then choices.apply = (v == "1")
+    elseif k == "delete_temp" then choices.delete_temp = (v == "1") end
+  end
+  file:close()
+  return choices
+end
+
 local function parse_dust_results(results_file_path)
   local file = io.open(results_file_path, "r")
   if not file then
@@ -832,8 +848,11 @@ local function export_frames(images, export_dir)
   return exported_files, filename_to_image
 end
 
--- Export images at full resolution and run Python dust detection
-local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
+-- Export images at full resolution and run Python dust detection.
+-- debug_blocking: run the debug UI in the FOREGROUND (blocking) instead of the
+-- detached launch — the unified sensor action needs this so it can read
+-- dust_results.txt + close_choices.txt after the UI closes.
+local function export_and_detect(images, debug_ui_mode, sensor_dust_mode, debug_blocking)
   -- Create temp folder
   local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
   local export_dir = temp_dir .. "/darktable_autoretouch_" .. os.time()
@@ -873,8 +892,11 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
   local command = string.format('conda run --no-capture-output -n autocrop python -u "%s"%s%s%s%s',
                                  python_script, debug_flag, sensor_dust_flag, ml_flag, file_args)
 
-  -- In debug UI mode, launch Python detached so darktable isn't blocked while the UI is open
-  if debug_ui_mode then
+  -- In debug UI mode, launch Python detached so darktable isn't blocked while the
+  -- UI is open — UNLESS debug_blocking (the unified sensor action wants to read
+  -- results + close_choices after the UI closes, so it falls through to the
+  -- foreground pipe path below).
+  if debug_ui_mode and not debug_blocking then
     dt.print(_("Running detection in background (conda env + detection can take ~30s)..."))
     if dt.configuration.running_os == "windows" then
       local bat_file = export_dir .. "/run_debug.bat"
@@ -934,111 +956,18 @@ local function export_and_detect(images, debug_ui_mode, sensor_dust_mode)
   -- Parse results
   local results_file = export_dir .. "/dust_results.txt"
   local dust_results = parse_dust_results(results_file)
-  if not dust_results then
+  if not dust_results and not debug_blocking then
     dt.print(_("Failed to parse dust results, aborting"))
     return nil, nil, nil
   end
-
+  -- debug_blocking: dust_results may be nil (user closed without applying);
+  -- still return export_dir so the caller can read close_choices.txt.
   return dust_results, filename_to_image, export_dir
 end
 
 -- ===================================================================
 -- Entry points
 -- ===================================================================
-
--- Debug mode: export and detect only, no retouch application
-local function export_and_detect_dust_debug()
-  dlog.log_level(dlog.info)
-  local images = dt.gui.selection()
-
-  if #images == 0 then
-    dt.print(_("No images selected"))
-    return
-  end
-
-  export_and_detect(images, true)
-end
-
--- Sensor dust debug mode: export, detect and open the debug UI - no apply
-local function export_and_detect_sensor_dust_debug()
-  dlog.log_level(dlog.info)
-  local images = dt.gui.selection()
-
-  if #images < 2 then
-    dt.print(_("Select 2 or more images from the same scanning session for sensor dust removal"))
-    return
-  end
-
-  export_and_detect(images, true, true)
-end
-
--- Full pipeline: export, detect, apply retouch to source images
--- keep_temp: if true, the temp folder is kept after a successful run for analysis
-local function export_detect_and_apply_retouch_inplace(keep_temp)
-  dlog.log_level(dlog.info)
-  math.randomseed(os.time() + os.clock() * 1000)
-
-  local images = dt.gui.selection()
-
-  if #images == 0 then
-    dt.print(_("No images selected"))
-    return
-  end
-
-  local dust_results, filename_to_image, export_dir = export_and_detect(images, false)
-  if not dust_results then
-    return
-  end
-
-  dlog.msg(dlog.info, "export_detect_and_apply_retouch_inplace", "Applying retouch to images...")
-
-  local stats = {
-    applied = 0,
-    skipped = 0,
-    failed = 0
-  }
-
-  for filename, dust_data in pairs(dust_results) do
-    if dust_data.error then
-      stats.failed = stats.failed + 1
-      dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
-    elseif dust_data.count == 0 then
-      stats.skipped = stats.skipped + 1
-      dt.print(string.format(_("No dust spots found in %s"), filename))
-    else
-      local original_image = filename_to_image[filename]
-      if original_image then
-        dt.print(string.format(_("Applying retouch to %s (%d spots)..."),
-          original_image.filename, dust_data.count))
-
-        local success, error_msg = apply_retouch_in_place(original_image, dust_data, _("film dust"))
-
-        if success then
-          stats.applied = stats.applied + 1
-        else
-          stats.failed = stats.failed + 1
-          dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), error_msg or "Unknown error"))
-        end
-      else
-        stats.failed = stats.failed + 1
-        dt.print(string.format(_("Warning: Could not find original image for %s"), filename))
-      end
-    end
-  end
-
-  dt.print(string.format(_("Auto Retouch Complete: %d applied, %d no dust, %d failed"),
-    stats.applied, stats.skipped, stats.failed))
-
-  -- Clean up temp dir if no errors (keep on failure or in keep-temp mode)
-  if stats.failed == 0 and not keep_temp then
-    df.rmdir(export_dir)
-    dlog.msg(dlog.info, "export_detect_and_apply_retouch_inplace", "Removed temp dir: " .. export_dir)
-  else
-    dt.print(string.format(_("Temp folder kept for analysis: %s"), export_dir))
-    dlog.msg(dlog.info, "export_detect_and_apply_retouch_inplace",
-      "Keeping temp dir for inspection: " .. export_dir)
-  end
-end
 
 -- Apply healing from a SAVED ground-truth folder (no export/detect). Pops a
 -- native folder picker (in the dust debug UI), opens the UI on the chosen folder
@@ -1252,67 +1181,88 @@ local function export_import_and_edit()
   local _drain = pipe:read("*all")   -- block until the UI window closes (drain to EOF)
   pipe:close()
 
-  -- 6. Read the final set + the changed-frame list.
-  local dust_results = parse_dust_results(export_dir .. "/dust_results.txt")
-  if not dust_results then
-    dt.print(string.format(_("No results in %s (UI closed without producing them) - nothing applied"), export_dir))
-    return
-  end
+  -- 6. Finish-dialog choices, then (if apply) the final set + changed-frame list.
+  local choices = parse_close_choices(export_dir)
+  local do_apply = choices and choices.apply
+  local do_delete = choices and choices.delete_temp
 
-  local changed = {}
-  local cf = io.open(export_dir .. "/import_changed.txt", "r")
-  if cf then
-    for line in cf:lines() do
-      local stem = line:gsub("%s+$", "")
-      if stem ~= "" then changed[stem] = true end
-    end
-    cf:close()
-  end
-
-  -- 7. Apply ONLY the changed frames: disable prior dust instances (keep sensor)
-  --    and add the final set as a new instance; remove all dust if the final set
-  --    is empty. Unchanged frames are left exactly as they were.
-  local stats = { applied = 0, removed = 0, unchanged = 0, failed = 0, not_selected = 0 }
-  for filename, dust_data in pairs(dust_results) do
-    local original_image = filename_to_image_sel[filename]
-    if not original_image then
-      stats.not_selected = stats.not_selected + 1
-    elseif not changed[filename] then
-      stats.unchanged = stats.unchanged + 1
-    elseif dust_data.error then
-      stats.failed = stats.failed + 1
-      dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
-    elseif dust_data.count == 0 then
-      -- User removed all dust: disable prior dust instances, add nothing.
-      local ok, err = disable_prior_dust_in_place(original_image, sensor_label)
-      if ok then
-        stats.removed = stats.removed + 1
-        dt.print(string.format(_("Removed dust retouch from %s (now empty)"), original_image.filename))
-      else
-        stats.failed = stats.failed + 1
-        dt.print(string.format(_("  *** FAILED to remove retouch: %s ***"), tostring(err)))
-      end
+  if not do_apply then
+    dt.print(_("Debug UI closed without applying - nothing written to darktable"))
+  else
+    local dust_results = parse_dust_results(export_dir .. "/dust_results.txt")
+    if not dust_results then
+      dt.print(_("Apply was chosen but the UI produced no results - nothing applied"))
     else
-      dt.print(string.format(_("Applying edited retouch to %s (%d spots)..."),
-        original_image.filename, dust_data.count))
-      local ok, err = apply_retouch_in_place(original_image, dust_data, dust_label, sensor_label)
-      if ok then
-        stats.applied = stats.applied + 1
-      else
-        stats.failed = stats.failed + 1
-        dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), err or "Unknown error"))
+      local changed = {}
+      local cf = io.open(export_dir .. "/import_changed.txt", "r")
+      if cf then
+        for line in cf:lines() do
+          local stem = line:gsub("%s+$", "")
+          if stem ~= "" then changed[stem] = true end
+        end
+        cf:close()
       end
+
+      -- 7. Apply ONLY the changed frames: disable prior dust instances (keep
+      --    sensor) and add the final set as a new instance; remove all dust if
+      --    the final set is empty. Unchanged frames are left exactly as they were.
+      local stats = { applied = 0, removed = 0, unchanged = 0, failed = 0, not_selected = 0 }
+      for filename, dust_data in pairs(dust_results) do
+        local original_image = filename_to_image_sel[filename]
+        if not original_image then
+          stats.not_selected = stats.not_selected + 1
+        elseif not changed[filename] then
+          stats.unchanged = stats.unchanged + 1
+        elseif dust_data.error then
+          stats.failed = stats.failed + 1
+          dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
+        elseif dust_data.count == 0 then
+          -- User removed all dust: disable prior dust instances, add nothing.
+          local ok, err = disable_prior_dust_in_place(original_image, sensor_label)
+          if ok then
+            stats.removed = stats.removed + 1
+            dt.print(string.format(_("Removed dust retouch from %s (now empty)"), original_image.filename))
+          else
+            stats.failed = stats.failed + 1
+            dt.print(string.format(_("  *** FAILED to remove retouch: %s ***"), tostring(err)))
+          end
+        else
+          dt.print(string.format(_("Applying edited retouch to %s (%d spots)..."),
+            original_image.filename, dust_data.count))
+          local ok, err = apply_retouch_in_place(original_image, dust_data, dust_label, sensor_label)
+          if ok then
+            stats.applied = stats.applied + 1
+          else
+            stats.failed = stats.failed + 1
+            dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), err or "Unknown error"))
+          end
+        end
+      end
+
+      dt.print(string.format(
+        _("Edit complete: %d applied, %d emptied, %d unchanged, %d failed, %d not selected"),
+        stats.applied, stats.removed, stats.unchanged, stats.failed, stats.not_selected))
     end
   end
 
-  dt.print(string.format(
-    _("Edit-existing complete: %d applied, %d emptied, %d unchanged, %d failed, %d not selected. GT folder kept: %s"),
-    stats.applied, stats.removed, stats.unchanged, stats.failed, stats.not_selected, export_dir))
-  dlog.msg(dlog.info, "export_import_and_edit", "GT folder kept: " .. export_dir)
+  -- 8. Temp folder: kept by default (it becomes calibration GT); deleted only if
+  --    the user ticked "delete temp" in the finish dialog.
+  if do_delete then
+    df.rmdir(export_dir)
+    dlog.msg(dlog.info, "export_import_and_edit", "Removed temp dir: " .. export_dir)
+    dt.print(string.format(_("Removed temp folder: %s"), export_dir))
+  else
+    dt.print(string.format(_("GT/temp folder kept: %s"), export_dir))
+    dlog.msg(dlog.info, "export_import_and_edit", "GT folder kept: " .. export_dir)
+  end
 end
 
--- Sensor dust pipeline: detect dust common across all selected frames, apply to each image
-local function export_detect_and_apply_sensor_dust(keep_temp)
+-- Unified sensor-dust continuous-edit action: detect dust common across all
+-- selected frames, open the debug UI (blocking) to review/annotate the
+-- cross-frame consensus, and on close a finish dialog decides whether to heal
+-- the final set into every frame's XMP (as a "sensor dust" instance) and whether
+-- to delete the temp folder.
+local function edit_sensor_dust()
   dlog.log_level(dlog.info)
   math.randomseed(os.time() + os.clock() * 1000)
 
@@ -1323,58 +1273,62 @@ local function export_detect_and_apply_sensor_dust(keep_temp)
     return
   end
 
-  local dust_results, filename_to_image, export_dir = export_and_detect(images, false, true)
-  if not dust_results then
+  -- Blocking debug UI (sensor consensus): detect_dust.py runs the consensus, opens
+  -- the UI foreground in --apply mode, and on close writes dust_results.txt (if the
+  -- user chose apply) + close_choices.txt.
+  local dust_results, filename_to_image, export_dir = export_and_detect(images, true, true, true)
+  if not export_dir then
     return
   end
 
-  dlog.msg(dlog.info, "export_detect_and_apply_sensor_dust", "Applying sensor dust retouch to images...")
+  local choices = parse_close_choices(export_dir)
+  local do_apply = choices and choices.apply
+  local do_delete = choices and choices.delete_temp
 
-  local stats = {
-    applied = 0,
-    skipped = 0,
-    failed = 0
-  }
+  if not do_apply then
+    dt.print(_("Debug UI closed without applying - nothing written to darktable"))
+  elseif not dust_results then
+    dt.print(_("Apply was chosen but the UI produced no results - nothing applied"))
+  else
+    local stats = { applied = 0, skipped = 0, failed = 0 }
+    for filename, dust_data in pairs(dust_results) do
+      if dust_data.error then
+        stats.failed = stats.failed + 1
+        dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
+      elseif dust_data.count == 0 then
+        stats.skipped = stats.skipped + 1
+        dt.print(string.format(_("No sensor dust in crop of %s"), filename))
+      else
+        local original_image = filename_to_image[filename]
+        if original_image then
+          dt.print(string.format(_("Applying sensor dust retouch to %s (%d spot(s))..."),
+            original_image.filename, dust_data.count))
 
-  for filename, dust_data in pairs(dust_results) do
-    if dust_data.error then
-      stats.failed = stats.failed + 1
-      dt.print(string.format(_("Skipped %s: %s"), filename, dust_data.error))
-    elseif dust_data.count == 0 then
-      stats.skipped = stats.skipped + 1
-      dt.print(string.format(_("No sensor dust in crop of %s"), filename))
-    else
-      local original_image = filename_to_image[filename]
-      if original_image then
-        dt.print(string.format(_("Applying sensor dust retouch to %s (%d spot(s))..."),
-          original_image.filename, dust_data.count))
+          local success, error_msg = apply_retouch_in_place(original_image, dust_data, _("sensor dust"))
 
-        local success, error_msg = apply_retouch_in_place(original_image, dust_data, _("sensor dust"))
-
-        if success then
-          stats.applied = stats.applied + 1
+          if success then
+            stats.applied = stats.applied + 1
+          else
+            stats.failed = stats.failed + 1
+            dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), error_msg or "Unknown error"))
+          end
         else
           stats.failed = stats.failed + 1
-          dt.print(string.format(_("  *** FAILED to apply retouch: %s ***"), error_msg or "Unknown error"))
+          dt.print(string.format(_("Warning: Could not find original image for %s"), filename))
         end
-      else
-        stats.failed = stats.failed + 1
-        dt.print(string.format(_("Warning: Could not find original image for %s"), filename))
       end
     end
+
+    dt.print(string.format(_("Sensor Dust Removal: %d applied, %d no dust in crop, %d failed"),
+      stats.applied, stats.skipped, stats.failed))
   end
 
-  dt.print(string.format(_("Sensor Dust Removal: %d applied, %d no dust in crop, %d failed"),
-    stats.applied, stats.skipped, stats.failed))
-
-  -- Clean up temp dir on clean success (skipped in debug mode)
-  if stats.failed == 0 and stats.applied > 0 and not keep_temp then
+  if do_delete then
     df.rmdir(export_dir)
-    dlog.msg(dlog.info, "export_detect_and_apply_sensor_dust", "Removed temp dir: " .. export_dir)
+    dlog.msg(dlog.info, "edit_sensor_dust", "Removed temp dir: " .. export_dir)
+    dt.print(string.format(_("Removed temp folder: %s"), export_dir))
   else
-    dt.print(string.format(_("Log kept for inspection: %s"), export_dir .. "/processing.log"))
-    dlog.msg(dlog.info, "export_detect_and_apply_sensor_dust",
-      "Keeping temp dir for inspection: " .. export_dir)
+    dt.print(string.format(_("Temp folder kept: %s"), export_dir))
   end
 end
 
@@ -1383,40 +1337,35 @@ end
 -- ===================================================================
 
 local function destroy()
-    dt.gui.libs.image.destroy_action("AutoRetouch_Debug")
-    dt.gui.libs.image.destroy_action("AutoRetouch_InPlace")
-    dt.gui.libs.image.destroy_action("AutoRetouch_InPlace_KeepTemp")
+    dt.gui.libs.image.destroy_action("AutoRetouch")
     dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust")
-    dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_KeepTemp")
-    dt.gui.libs.image.destroy_action("AutoRetouch_SensorDust_Debug")
     dt.gui.libs.image.destroy_action("AutoRetouch_Apply_From_Folder")
-    dt.gui.libs.image.destroy_action("AutoRetouch_Edit_Existing")
     -- pcall: darktable throws if the event is already gone (e.g. double-destroy on reload)
-    pcall(dt.destroy_event, "AutoRetouch_Debug", "shortcut")
-    pcall(dt.destroy_event, "AutoRetouch_InPlace", "shortcut")
-    pcall(dt.destroy_event, "AutoRetouch_InPlace_KeepTemp", "shortcut")
+    pcall(dt.destroy_event, "AutoRetouch", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_SensorDust", "shortcut")
-    pcall(dt.destroy_event, "AutoRetouch_SensorDust_KeepTemp", "shortcut")
-    pcall(dt.destroy_event, "AutoRetouch_SensorDust_Debug", "shortcut")
     pcall(dt.destroy_event, "AutoRetouch_Apply_From_Folder", "shortcut")
-    pcall(dt.destroy_event, "AutoRetouch_Edit_Existing", "shortcut")
 end
 
 -- ============ Film dust ============
 
--- Mode 1: debug UI (detect + annotate, no apply)
+-- Unified continuous-edit action: export the clean (un-healed) scan, seed any
+-- existing film-dust retouch as GT over a fresh detection, open the debug UI
+-- (blocking). On close a finish dialog decides whether to apply the edited set
+-- (prior dust instances disabled, sensor dust kept) and whether to delete the
+-- temp folder. On a fresh frame the disable step is a no-op, so this subsumes the
+-- old debug / in-place actions.
 dt.gui.libs.image.register_action(
-    "AutoRetouch_Debug",
-    _("Auto retouch debug (open debug UI, no apply)"),
-    function() export_and_detect_dust_debug() end,
-    _("Export, detect dust spots and open the debug UI - nothing applied")
+    "AutoRetouch",
+    _("Auto retouch film dust (edit in debug UI, apply on close)"),
+    function() export_import_and_edit() end,
+    _("Export the clean scan, detect dust (seeding any existing film-dust retouch as GT), open the debug UI; on close choose whether to apply the edited set (sensor dust kept) and whether to delete the temp folder")
 )
 
 dt.register_event(
-    "AutoRetouch_Debug",
+    "AutoRetouch",
     "shortcut",
-    function(event, shortcut) export_and_detect_dust_debug() end,
-    "AutoRetouch_Debug"
+    function(event, shortcut) export_import_and_edit() end,
+    "AutoRetouch"
 )
 
 -- Apply from folder: pick a saved ground-truth folder, review in the debug UI,
@@ -1436,100 +1385,23 @@ dt.register_event(
     "AutoRetouch_Apply_From_Folder"
 )
 
--- Edit existing retouch (continuous edit / import GT): on frames that already
--- carry retouch, export the clean un-healed scan, seed the manual film-dust
--- shapes as GT over a fresh detection in the debug UI; on close, changed frames
--- get their prior dust instances disabled and the edited set re-applied (sensor
--- dust untouched). The temp folder is kept as calibration ground truth.
-dt.gui.libs.image.register_action(
-    "AutoRetouch_Edit_Existing",
-    _("Auto retouch edit existing (import manual shapes as GT)"),
-    function() export_import_and_edit() end,
-    _("Export the un-healed scan, import your existing film-dust retouch as ground truth over a fresh detection in the debug UI; on close re-apply the edited set (prior dust instances disabled, sensor dust kept). Temp folder kept as calibration GT")
-)
-
-dt.register_event(
-    "AutoRetouch_Edit_Existing",
-    "shortcut",
-    function(event, shortcut) export_import_and_edit() end,
-    "AutoRetouch_Edit_Existing"
-)
-
--- Mode 2: fully automatic, temp folder removed on success
-dt.gui.libs.image.register_action(
-    "AutoRetouch_InPlace",
-    _("Auto retouch in-place (heal dust)"),
-    function() export_detect_and_apply_retouch_inplace(false) end,
-    _("Detect dust spots and apply heal retouch to selected images")
-)
-
-dt.register_event(
-    "AutoRetouch_InPlace",
-    "shortcut",
-    function(event, shortcut) export_detect_and_apply_retouch_inplace(false) end,
-    "AutoRetouch_InPlace"
-)
-
--- Mode 3: fully automatic, temp folder kept for analysis
-dt.gui.libs.image.register_action(
-    "AutoRetouch_InPlace_KeepTemp",
-    _("Auto retouch in-place (keep temp folder)"),
-    function() export_detect_and_apply_retouch_inplace(true) end,
-    _("Same as in-place, but keeps the temp folder and log for analysis")
-)
-
-dt.register_event(
-    "AutoRetouch_InPlace_KeepTemp",
-    "shortcut",
-    function(event, shortcut) export_detect_and_apply_retouch_inplace(true) end,
-    "AutoRetouch_InPlace_KeepTemp"
-)
-
 -- ============ Sensor dust (cross-frame: select all frames from one scanning session) ============
 
--- Mode 1: debug UI (detect + annotate, no apply)
-dt.gui.libs.image.register_action(
-    "AutoRetouch_SensorDust_Debug",
-    _("Auto retouch sensor dust debug (open debug UI, no apply)"),
-    function() export_and_detect_sensor_dust_debug() end,
-    _("Detect sensor dust across selected frames and open the debug UI - nothing applied")
-)
-
-dt.register_event(
-    "AutoRetouch_SensorDust_Debug",
-    "shortcut",
-    function(event, shortcut) export_and_detect_sensor_dust_debug() end,
-    "AutoRetouch_SensorDust_Debug"
-)
-
--- Mode 2: fully automatic, temp folder removed on success
+-- Unified sensor-dust continuous-edit action: detect the cross-frame consensus,
+-- review in the debug UI (blocking); on close a finish dialog decides whether to
+-- heal it into every frame and whether to delete the temp folder.
 dt.gui.libs.image.register_action(
     "AutoRetouch_SensorDust",
-    _("Auto retouch sensor dust (heal sensor dust)"),
-    function() export_detect_and_apply_sensor_dust(false) end,
-    _("Detect and heal DSLR sensor dust common across all selected frames")
+    _("Auto retouch sensor dust (edit in debug UI, apply on close)"),
+    function() edit_sensor_dust() end,
+    _("Detect DSLR sensor dust common across the selected frames, open the debug UI; on close choose whether to heal it into every frame and whether to delete the temp folder")
 )
 
 dt.register_event(
     "AutoRetouch_SensorDust",
     "shortcut",
-    function(event, shortcut) export_detect_and_apply_sensor_dust(false) end,
+    function(event, shortcut) edit_sensor_dust() end,
     "AutoRetouch_SensorDust"
-)
-
--- Mode 3: fully automatic, temp folder kept for analysis
-dt.gui.libs.image.register_action(
-    "AutoRetouch_SensorDust_KeepTemp",
-    _("Auto retouch sensor dust (keep temp folder)"),
-    function() export_detect_and_apply_sensor_dust(true) end,
-    _("Same as sensor dust heal, but keeps the temp folder and log for analysis")
-)
-
-dt.register_event(
-    "AutoRetouch_SensorDust_KeepTemp",
-    "shortcut",
-    function(event, shortcut) export_detect_and_apply_sensor_dust(true) end,
-    "AutoRetouch_SensorDust_KeepTemp"
 )
 
 script_data.destroy = destroy

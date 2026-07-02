@@ -172,12 +172,23 @@ Current key fields: `cx`, `cy`, `radius_px` (raw detected, for algorithm interna
 
 ### Registered Actions
 
-Each feature has three modes: 1) debug UI (detect + annotate, no apply, detached launch so darktable isn't blocked), 2) fully automatic (temp folder removed on success), 3) automatic but temp folder kept for analysis.
+CONSOLIDATED (2026-07-02): the per-mode Debug / InPlace / InPlace_KeepTemp trios
+were removed. Each mode now has ONE **unified continuous-edit action** that always
+opens the debug UI **BLOCKING**; on close the shared finish dialog (see root
+CLAUDE.md / `common/debug_ui_base.py` — two checkboxes: apply annotations back /
+delete temp folder) decides what happens, and Lua reads `close_choices.txt` after
+the UI exits. Surviving actions: **AutoRetouch** (film), **AutoRetouch_SensorDust**,
+**AutoRetouch_Apply_From_Folder**.
 
 Film dust:
-- **AutoRetouch_Debug** (`export_and_detect_dust_debug`) - mode 1: detect + open debug UI, no apply.
-- **AutoRetouch_Edit_Existing** (`export_import_and_edit`) — **continuous edit /
-  import existing retouch as ground truth** (2026-07-01; the auto_retouch analog
+- **AutoRetouch** (`export_import_and_edit`) — the unified film-dust action (the
+  former Edit_Existing flow, which now subsumes plain Debug/InPlace: on a fresh
+  frame the disable-existing-retouch step is a no-op). Full flow below. On close it
+  reads `close_choices.txt`; the apply step (disable prior dust + add edited set for
+  the CHANGED frames) runs only if "apply" is checked, and the temp/GT folder is
+  deleted only if "delete temp" is checked (default keep — it's calibration GT).
+  Detailed continuous-edit / import-GT description (still current) — **import
+  existing retouch as ground truth** (2026-07-01; the auto_retouch analog
   of negadoctor's continuous edit). Run it on frames that already carry retouch
   (drawn by hand, or applied by us with the temp folder since deleted) to keep
   editing AND to rebuild the temp GT folder for calibration. Flow
@@ -200,17 +211,21 @@ Film dust:
      streams in and `_poll_bg_detect` → `_load_existing_annotations_for` picks up
      the seeds, so the user sees a **fresh detection with their existing shapes
      pre-marked as missed** (one combined editable set).
-  5. On close `_write_apply_results` writes `dust_results.txt` (final set =
+  5. On close the finish dialog fires; if "apply" is checked the base hook
+     `write_apply_results` (was `_write_apply_results`; now gated by the dialog,
+     not the raw `apply_mode` flag) writes `dust_results.txt` (final set =
      detected − FP + missed) AND `import_changed.txt` (stems whose committed set
      differs from `import_baseline.json`, via `import_retouch.spots_differ`).
-  6. Lua applies ONLY the changed frames: `apply_retouch_in_place(…, dust_label,
+  6. Lua reads `close_choices.txt`; if apply, it applies ONLY the changed frames:
+     `apply_retouch_in_place(…, dust_label,
      sensor_label)` disables every existing **non-sensor** retouch instance
      (`disable_retouch_entries`, keeping their history entries) and adds the edited
      set as a new instance; an emptied frame goes through `disable_prior_dust_in_place`
      (disable, add nothing). **Sensor-dust instances are never touched** (excluded
      from both the import decode and the apply-back — identified by their
      `multi_name` label, passed to Python via `source_xmp.txt`). The temp folder is
-     **KEPT** (it becomes calibration ground truth).
+     **KEPT by default** (it becomes calibration ground truth) — deleted only if the
+     user ticks "delete temp" in the finish dialog.
   - **The decoder** (`import_retouch.decode_xmp_masks`) is the inverse of
     `generate_xmp_data_for_spots`: it unions the active form ids of every enabled
     non-sensor retouch instance (clone/heal algos 1/2; consecutive applications
@@ -264,13 +279,20 @@ Film dust:
   and the apply writer share `missed_dust_to_spot`, so legacy {cx,cy}-only
   annotations still heal and edited ones honor the user's radius/source. Guarded by
   `tests/test_missed_spots.py`.
-- **AutoRetouch_InPlace** (`export_detect_and_apply_retouch_inplace(false)`) - mode 2: full pipeline: export, detect dust, apply heal retouch to source image's XMP; temp removed on success.
-- **AutoRetouch_InPlace_KeepTemp** (`export_detect_and_apply_retouch_inplace(true)`) - mode 3: same, temp folder kept.
+  (The former `AutoRetouch_Debug` / `AutoRetouch_InPlace` / `_InPlace_KeepTemp`
+  film-dust actions are gone — this unified action + close dialog covers them.)
 
 Sensor dust (select >= 2 frames from one scanning session):
-- **AutoRetouch_SensorDust_Debug** (`export_and_detect_sensor_dust_debug`) - mode 1: cross-frame detect + open debug UI (sensor session), no apply.
-- **AutoRetouch_SensorDust** (`export_detect_and_apply_sensor_dust(false)`) - mode 2: detect + heal sensor dust on all frames; temp removed on success.
-- **AutoRetouch_SensorDust_KeepTemp** (`export_detect_and_apply_sensor_dust(true)`) - mode 3: same, temp folder kept.
+- **AutoRetouch_SensorDust** (`edit_sensor_dust`) — the unified sensor action
+  (replaces the old SensorDust_Debug / SensorDust / _KeepTemp trio). Runs the
+  cross-frame consensus, then opens the debug UI **BLOCKING** in apply mode via
+  `export_and_detect(images, true, true, true)` → `detect_dust.py --debug-ui
+  --sensor-dust` → `run_sensor_dust_mode` now `subprocess.run`s `debug_ui.py --apply`
+  foreground (was a detached `Popen`). On close Lua reads `close_choices.txt` and,
+  if apply, heals the final set into every frame with the `"sensor dust"` label
+  (`apply_retouch_in_place`); the temp folder is deleted only if chosen. (Sensor is
+  multi-frame consensus, so it keeps the batch-then-launch path — no per-frame
+  streaming.)
 
 ## Known Bugs / TODOs
 

@@ -22,6 +22,7 @@ Interaction (same idiom as the dust UI: select, then Ctrl+Click / scroll):
     C — clear the correction for the selected edge
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -96,6 +97,26 @@ class CropDebugUI(DebugUIBase):
             for edge, note in data.get("edge_notes", {}).items()
             if edge in EDGES and note
         }
+
+    def write_apply_results(self):
+        """Write crop_results.txt for the Lua apply step: per-frame L/T/R/B as
+        percent-from-edge, using the user's corrected_pct where they marked an
+        edge, else the detected crop%. Matches auto_crop.write_crop_results'
+        format so the Lua parse_crop_results reads it identically."""
+        lines = []
+        for img in self.images:
+            stem = img["stem"]
+            crop = img.get("crop") or {}
+            corr = self.annotations.get(stem, {}).get("edge_corrections", {})
+            vals = {edge: float(corr.get(edge, crop.get(edge, 0.0)))
+                    for edge in EDGES}
+            lines.append(
+                f'OK|{stem}|L={vals["left"]:.2f}|T={vals["top"]:.2f}'
+                f'|R={vals["right"]:.2f}|B={vals["bottom"]:.2f}')
+        path = os.path.join(self.session_dir, "crop_results.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + ("\n" if lines else ""))
+        print(f"Apply results (crop) written to: {path} ({len(lines)} frame(s))")
 
     # ------------------------------------------------------------------
     # Edge geometry helpers
@@ -594,7 +615,12 @@ class CropDebugUI(DebugUIBase):
 # ---------------------------------------------------------------------------
 
 def main():
-    CropDebugUI.run_main(usage="Usage: debug_ui.py <session_dir>")
+    # --apply: apply-capable session => on close pop the finish dialog and, if the
+    # user chose to apply, write crop_results.txt for the Lua apply step.
+    if "--apply" in sys.argv:
+        CropDebugUI.CLOSE_DIALOG = True
+        sys.argv = [a for a in sys.argv if a != "--apply"]
+    CropDebugUI.run_main(usage="Usage: debug_ui.py <session_dir> [--apply]")
 
 
 if __name__ == "__main__":

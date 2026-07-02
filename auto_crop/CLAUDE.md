@@ -22,11 +22,21 @@ UI chrome (2026-06-24): the marker legend + the full mouse/key reference moved O
 
 ### Registered Actions
 
-Three modes (same scheme as auto_retouch):
+ONE unified continuous-edit action (2026-07-02; the old Debug / InPlace /
+InPlace_KeepTemp trio collapsed into it — the "debug vs apply vs keep-temp"
+choice is now the close dialog):
 
-- **AutoCrop_Debug** (`export_and_find_edges_debug`) - mode 1: export + detect detached (bat/vbs hidden launch on Windows so darktable isn't blocked), opens the crop debug UI when detection finishes. No crop applied; temp folder kept.
-- **AutoCrop_InPlace** (`export_detect_and_apply_inplace(false)`) - mode 2: full pipeline: export, detect, apply crop directly to source image's XMP (no virtual copies). Updates `darktable:change_timestamp` and `darktable:history_current_hash` to force preview regeneration. Temp folder removed on success.
-- **AutoCrop_InPlace_KeepTemp** (`export_detect_and_apply_inplace(true)`) - mode 3: same as InPlace but keeps the temp folder and log for analysis.
+- **AutoCrop** (`edit_crop`) — export + detect + open the crop debug UI
+  **BLOCKING** (`export_and_detect(images, true, true)` → `auto_crop.py --debug-ui`
+  runs the detect, then launches `debug_ui.py --apply` foreground). On close the
+  shared finish dialog (see root CLAUDE.md / `common/debug_ui_base.py`) asks (1)
+  apply the crop in-place, (2) delete the temp folder. `CropDebugUI.write_apply_results`
+  (re)writes `crop_results.txt` (per-edge `corrected_pct` where the user marked an
+  edge, else the detected `crop%`; same `OK|stem|L=..|T=..|R=..|B=..` format the
+  Lua `parse_crop_results` already reads); Lua then reads `close_choices.txt` and,
+  if apply, runs the existing `apply_crop_in_place` loop (updates
+  `darktable:change_timestamp` + `history_current_hash` to force preview
+  regeneration), and deletes the temp dir if chosen.
 
 ## Known Bugs / TODOs
 
