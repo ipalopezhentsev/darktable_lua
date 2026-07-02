@@ -7,8 +7,10 @@ dependencies:
   - pip
   - pillow
   - numpy
+  - markdown
   - pip:
     - opencv-python
     - scikit-learn
     - scikit-image
     - cma
+    - tkinterweb

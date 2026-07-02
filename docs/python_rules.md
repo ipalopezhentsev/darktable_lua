@@ -7,7 +7,9 @@
 
 ## Python Usage Rules
 
-- New Python dependencies must be added via `environment.yml`
+- New Python dependencies must be added via `environment.yml` (conda-first for
+  packages with native/binary parts — avoids local compilation; use a `pip:`
+  subsection for pip-only packages)
 
 ## Resolution independence (image-analysis code)
 
