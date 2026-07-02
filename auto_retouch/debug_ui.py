@@ -432,12 +432,16 @@ class DustDebugUI(DebugUIBase):
         # Lazily-computed {stem: (img_lab, L_f32, local_std, w, h)} for recommending
         # a healing source for a hand-added missed dust (prepare_source_buffers).
         self._missed_buffers = {}
+        # {stem: set(spot_idx)} — detected spots whose source_override was set by
+        # AUTO-recompute (radius change), not by a manual move. Lets a later radius
+        # change re-recompute the source while still leaving a hand-placed source
+        # untouched. In-memory only: a source loaded from disk counts as manual.
+        self._auto_source = {}
 
         # Visibility toggles — now View-menu checkbuttons (were left-panel
         # checkboxes). Created here (before the UI is built) so the menu can bind
         # to them; the BooleanVars need a root, which exists by now.
         self.show_rejected_var = tk.BooleanVar(master=self.root, value=False)
-        self.show_source_brush_var = tk.BooleanVar(master=self.root, value=False)
         # Show/hide the two object GROUPS: algo-detected spots vs the ones loaded
         # from an existing edit (imported/hand-added missed dust + threads). Both
         # on by default; toggled from the View menu + toolbar (no keyboard shortcut
@@ -1320,9 +1324,6 @@ class DustDebugUI(DebugUIBase):
         view.add_checkbutton(label="Rejected candidates",
                              variable=self.show_rejected_var,
                              command=self._redraw_markers)
-        view.add_checkbutton(label="Source brush",
-                             variable=self.show_source_brush_var,
-                             command=self._redraw_markers)
         # The calibration-review source switcher is a RADIOBUTTON submenu (the
         # bullet shows the current source) and is present ONLY in a --review
         # session (run_calibration.py --review).
@@ -2068,14 +2069,16 @@ class DustDebugUI(DebugUIBase):
                                              outline=src_color,
                                              width=2 if is_src_sel else 1,
                                              tags="source")
-                # Source brush circle (same radius as the spot brush)
-                if self.show_source_brush_var.get():
-                    src_br = radius_overrides.get(i, spot["brush_radius_px"])
-                    src_brad = max(5, src_br * self.zoom)
-                    self.canvas.create_oval(sx - src_brad, sy - src_brad,
-                                            sx + src_brad, sy + src_brad,
-                                            outline=src_color, width=1, dash=(4, 3),
-                                            tags="source")
+                # Source brush circle = the patch that gets cloned (same radius as
+                # the spot brush). Always drawn (dashed), uniform with the missed-dust
+                # source patch, so the cloned area's shape is visible for every spot.
+                src_br = radius_overrides.get(i, spot["brush_radius_px"])
+                src_brad = max(5, src_br * self.zoom)
+                self.canvas.create_oval(sx - src_brad, sy - src_brad,
+                                        sx + src_brad, sy + src_brad,
+                                        outline=src_color,
+                                        width=2 if is_src_sel else 1, dash=(4, 3),
+                                        tags="source")
 
                 # If source mismatch exists, also draw baseline source in red
                 for mismatch in ann.get("source_mismatches", []):
@@ -2284,9 +2287,44 @@ class DustDebugUI(DebugUIBase):
         factor = 1.1 if delta > 0 else (1 / 1.1)
         new_r = max(1.0, current_r * factor)
         ann["radius_overrides"][idx] = new_r
+        # The healing source's non-overlap distance scales with the brush radius, so
+        # a bigger brush needs a fresh source (mirrors the auto-detect done when a
+        # missed dust is added). Recompute UNLESS the user hand-placed the source.
+        self._recompute_source_for_radius(img_dict, idx, spot, new_r)
         self._auto_save(stem)
         self._redraw_markers()
         self._update_info_from_selection()
+
+    def _recompute_source_for_radius(self, img_dict, idx, spot, new_brush_radius_px):
+        """Re-derive a detected spot's healing source for a changed brush radius via
+        find_healing_source, storing it into source_overrides. No-op when the user
+        has hand-placed the source (a source_override not marked auto) or the frame's
+        source buffers can't be loaded (e.g. dots-only session with no JPG)."""
+        import detect_dust
+        # find_healing_source is for dot-like spots; a stroke heals its whole band
+        # from a translated anchor, so leave its source alone.
+        if spot.get("kind") == "stroke" or spot.get("cx") is None:
+            return
+        stem = img_dict["stem"]
+        ann = self.annotations[stem]
+        source_ov = ann.setdefault("source_overrides", {})
+        auto = self._auto_source.setdefault(stem, set())
+        if idx in source_ov and idx not in auto:
+            return  # respect a hand-placed source
+        buffers = self._source_buffers_for(img_dict)
+        if buffers is None:
+            return
+        img_lab, L_f32, local_std, w, h = buffers
+        base_brush = float(spot.get("brush_radius_px") or new_brush_radius_px)
+        scale = new_brush_radius_px / base_brush if base_brush else 1.0
+        radius_px = max(1.0, float(spot.get("radius_px") or new_brush_radius_px) * scale)
+        detected = img_dict.get("detected") or []
+        src = detect_dust.find_healing_source(
+            spot["cx"], spot["cy"], radius_px, new_brush_radius_px,
+            img_lab, L_f32, local_std, detected, w, h)
+        if src is not None:
+            source_ov[idx] = (float(src[0]), float(src[1]))
+            auto.add(idx)
 
     def _thread_add_point(self, canvas_x, canvas_y):
         """Append a centerline point (from canvas coords) to the in-progress thread."""
@@ -2516,6 +2554,8 @@ class DustDebugUI(DebugUIBase):
         if self.selected_source is not None:
             self.annotations[stem].setdefault("source_overrides", {})[self.selected_source] = (
                 float(ix), float(iy))
+            # Hand-placed: exempt from future radius-driven source recompute.
+            self._auto_source.get(stem, set()).discard(self.selected_source)
             self._auto_save(stem)
             self._redraw_markers()
             self._set_info_text(

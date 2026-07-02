@@ -100,9 +100,11 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
   shared base skeleton too: the common ◀ ▶ / － ＋ / Fit buttons come from the base
   `build_toolbar`, and the dust UI adds its widgets via `build_feature_toolbar`
   (FP/Missed count label left; the review fitted/live toggle + 'Detect with:'
-  preset combo right). The **`Show rejected candidates` / `Show source brush`
-  toggles moved from left-panel checkboxes to View-menu checkbuttons** (the
-  BooleanVars are created in `init_selection_state` so the menu can bind them),
+  preset combo right). The **`Show rejected candidates` toggle moved from a
+  left-panel checkbox to a View-menu checkbutton** (its BooleanVar is created in
+  `init_selection_state` so the menu can bind it). (The former `Show source brush`
+  toggle is gone — the source patch circle is now ALWAYS drawn, uniform for
+  detected and hand-added spots.)
   and the **per-frame status (dims / detected / rejected / timings) moved from the
   hidden left status label into the bottom "Selected" box** via `default_info_text`
   (refreshed in `update_counts` so run-mode streaming counts stay live). The View /
