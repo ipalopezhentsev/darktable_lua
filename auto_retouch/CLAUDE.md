@@ -140,6 +140,13 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
     right-panel param to relax to recover it. A test asserts EVERY reason emitted by
     `detect_dust.log_reject` (+ the counter-only too_small/too_large/isolation) has
     a mapping, so a newly-added reason can't silently miss one.
+  - **Detected-spot governing params:** selecting a single accepted spot appends a
+    compact "governing params" line (`_detected_param_hint`, kind-aware) mapping its
+    shown metrics to the controlling constants (dot: area↔MIN/MAX_SPOT_AREA_FRAC,
+    contrast↔threshold/LARGE_SPOT_MIN_CONTRAST, texture↔MAX_LOCAL_TEXTURE_*,
+    ratio↔MIN_CONTRAST_TEXTURE_RATIO, excess_sat↔MAX_EXCESS_SATURATION; stroke: the
+    STROKE_* equivalents) — so every marker class (boosted / rejected / accepted)
+    now cross-references the right-panel params table. Omitted on multi-select.
   - **Region-only detection (`detect_dust.detect_region`) — the key to speed.** A
     full-frame boosted detect was unusable (~25s; raised sensitivity explodes the
     per-candidate reject loop across the whole frame). `detect_region(image_path,

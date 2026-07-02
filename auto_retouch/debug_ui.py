@@ -1866,6 +1866,20 @@ class DustDebugUI(DebugUIBase):
                     else "MIN_LOCAL_BG_FRACTION (derived dark-bg contrast floor)")
         return self._REJECT_PARAMS.get(reason, "")
 
+    def _detected_param_hint(self, spot):
+        """Compact map of a detected spot's shown metrics to the tuning.py constants
+        that govern them, so the user can find the controlling param in the right
+        panel (the accepted-spot analogue of the rejected-reason → param hint)."""
+        if spot.get("kind") == "stroke":
+            return ("governing params: length↔STROKE_MIN_LENGTH_FRAC · "
+                    "width↔STROKE_MAX_WIDTH_FRAC · elong↔STROKE_MIN_ELONGATION · "
+                    "texture↔STROKE_MAX_BAND_TEXTURE/STROKE_MAX_CONTEXT_TEXTURE · "
+                    "crispness↔STROKE_MIN_CRISPNESS · excess_sat↔STROKE_MAX_EXCESS_SAT")
+        return ("governing params: area↔MIN_SPOT_AREA_FRAC/MAX_SPOT_AREA_FRAC · "
+                "contrast↔NOISE_THRESHOLD_MULTIPLIER (LARGE_SPOT_MIN_CONTRAST) · "
+                "texture↔MAX_LOCAL_TEXTURE_SMALL/LARGE · "
+                "ratio↔MIN_CONTRAST_TEXTURE_RATIO · excess_sat↔MAX_EXCESS_SATURATION")
+
     def _boost_note_for(self, spot, img_dict):
         """The multi-line '⚡ BOOSTED ×N …' info block for a boosted spot (dot OR
         stroke), including the relaxed-gate attribution. '' when not boosted. Shared
@@ -3525,12 +3539,16 @@ class DustDebugUI(DebugUIBase):
                     nf = s.get("n_frames")
                     bn_str += f"  n_frames={nf}" if nf is not None else ""
                     boost_str = self._boost_note_for(s, img_dict)
+                    # Only annotate governing params for a SINGLE selection (keeps a
+                    # multi-select list compact).
+                    hint = (f"\n  {self._detected_param_hint(s)}"
+                            if len(self.selected_detected) == 1 else "")
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
                         f"enc_r={s['radius_px']:.1f}px{bn_str}  area={s['area']}\n"
                         f"  contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
                         f"excess_sat={s['excess_sat']:.1f}  status={status}"
-                        f"{src_str}{rm_str}{rc_str}{boost_str}")
+                        f"{src_str}{rm_str}{rc_str}{boost_str}{hint}")
             if len(self.selected_detected) > 1:
                 lines = [f"{len(self.selected_detected)} spots selected"] + lines[:3]
         elif self.selected_rejected:
