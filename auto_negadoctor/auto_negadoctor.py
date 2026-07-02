@@ -238,6 +238,29 @@ CLIP_SRGB_THR = 0.97               # stored-encoding value above this counts as 
 PRINT_TUNE_SUBSAMPLE_FRAC = 0.003  # render every Nth pixel during tuning; stride
                                    # = frac of width (keeps sample count ~constant)
 
+# --- black & white film support ----------------------------------------------
+# A B&W negative has a NEUTRAL grey film base, not the strongly-orange colour-
+# negative mask. The DSLR always scans as RGB (the film is B&W, the sensor is
+# colour), so a B&W roll can NOT be told apart by channel count — it's identified
+# by its base being neutral. bw_mode is a runtime MODE, not a taste knob, so it is
+# threaded alongside cfg rather than living in the Tuning schema/presets:
+#   "auto" (default) — search for the orange base; if NO frame yields one (exactly
+#           the colour-path failure), re-search for a grey base and treat the roll
+#           as B&W. A real colour negative always has an orange base, so auto only
+#           ever flips to B&W when the orange search genuinely found nothing.
+#   "on"  — force B&W (skip the orange search, go straight to the grey base).
+#   "off" — force colour (never fall back to grey; a base-less roll errors as before).
+# For B&W the pixel math is unchanged (a grey negative just inverts monochromatically)
+# but the params get film_stock=0 (darktable's "black and white film" stock) and a
+# NEUTRAL wb (wb_low=wb_high=[1,1,1]) — the wb wheels are hidden for B&W in darktable
+# and there is no colour cast to correct. The crop's wide-rebate HUE path is disabled
+# (every pixel is near-neutral, so hue can't tell rebate from scene).
+BW_MODES = ("auto", "on", "off")
+BW_BASE_PCT = 99.0                 # B&W film base = the colour of the brightest
+                                   # this-percentile transmission (min density);
+                                   # its actual tint becomes Dmin so neutral wb
+                                   # divides the cast out to a neutral grey print
+
 # darktable lens-module params template (modversion 10, 356 bytes), taken
 # from the user's manually tuned roll: lensfun method, Nikon D750 + AF-S
 # Micro Nikkor 60mm f/2.8G ED. encode_lens_params() patches the manual
@@ -604,14 +627,14 @@ def _crop_fields(lin, dmin):
             "col_ref": col_ref, "row_ref": row_ref}
 
 
-def detect_content_crop(lin, dmin, cfg=DEFAULT_TUNING):
+def detect_content_crop(lin, dmin, cfg=DEFAULT_TUNING, bw=False):
     """Largest rectangular content area: trim each edge past the last scan
     line contaminated by holder-dark pixels or bright leak (lighter than the
     film base). Returns (left, top, right, bottom) margins in px."""
-    return _crop_decide(_crop_fields(lin, dmin), cfg)
+    return _crop_decide(_crop_fields(lin, dmin), cfg, bw=bw)
 
 
-def _crop_decide(F, cfg=DEFAULT_TUNING):
+def _crop_decide(F, cfg=DEFAULT_TUNING, bw=False):
     """The trial-VARIANT decision logic of detect_content_crop on precomputed
     _crop_fields `F`: applies the fittable CROP_* / HOLDER_LUMA_THR /
     BORDER_MAX_FRAC constants (from `cfg`, read at call time so calibration
@@ -649,6 +672,12 @@ def _crop_decide(F, cfg=DEFAULT_TUNING):
     rebate_hue = ((F["hue_dev"] < cfg.CROP_REBATE_HUE_TOL)
                   & (F["density_max"] < cfg.CROP_REBATE_WIDE_MAX_D)
                   & (luma > cfg.HOLDER_LUMA_THR))
+    if bw:
+        # B&W: the whole frame is near-neutral, so hue_dev ~0 EVERYWHERE and the
+        # wide-rebate path can no longer tell an unexposed rebate band from bright
+        # neutral scene (both hue-match the grey base). Disable it — the
+        # conservative density/luma path still trims the holder and thin rebate.
+        rebate_hue = np.zeros_like(rebate_hue)
 
     def line_flags(mask, axis, thr):
         return mask.mean(axis=axis) > thr
@@ -847,8 +876,58 @@ def _largest_true_rectangle(mask):
     return best
 
 
-def find_film_base_candidate(lin, enc_f, win, cfg=DEFAULT_TUNING):
+def find_bw_film_base(lin, enc_f, win, cfg=DEFAULT_TUNING):
+    """Film-base candidate for a BLACK & WHITE negative.
+
+    Unlike a colour negative — whose orange rebate is a distinct, brightly
+    coloured strip found by uniform-orange rectangle search — a B&W scan carries
+    a single uniform base tint (typically a cool bluish grey from the film base +
+    scan illuminant) shared by the WHOLE frame, and the clear film base is simply
+    its point of MINIMUM density = MAXIMUM transmission = the BRIGHTEST region.
+    (The thin edge rebate is vignette-darkened and unreliable.) So Dmin is the
+    colour of the frame's brightest pixels — crucially its ACTUAL tint, so that
+    dividing the negative by it (with neutral wb) removes the cast and prints a
+    neutral grey. Returns the same dict shape as find_film_base_candidate.
+    """
+    h, w = lin.shape[:2]
+    luma = lin.mean(axis=2)
+    clipped = (enc_f >= CLIP_SRGB_THR).any(axis=2) if enc_f.max() > 0 else None
+    # exclude the holder-dark border (nothing on film is that dark) and any
+    # sensor-clipped pixels; the base lives among the brightest of the rest.
+    valid = luma >= cfg.HOLDER_LUMA_THR
+    if clipped is not None:
+        valid &= ~clipped
+    if int(valid.sum()) < 100:
+        return None
+    lv = luma[valid]
+    thr = float(np.percentile(lv, BW_BASE_PCT))
+    sel = valid & (luma >= thr)
+    if not sel.any():
+        return None
+    rgb = [float(v) for v in lin[sel].mean(axis=0)]
+    # a representative rect for the debug-UI marker + patch-exclusion: the
+    # brightest uniformity window (box-mean argmax over the valid area).
+    mean_luma = _box_mean(luma.astype(np.float32), win)
+    mean_luma = np.where(valid, mean_luma, -np.inf)
+    cy, cx = np.unravel_index(int(np.argmax(mean_luma)), mean_luma.shape)
+    return {
+        "rect": _rect_from_center(int(cx), int(cy), win),
+        "rgb_linear": rgb,
+        "score": thr,
+        "clipped_r": False,
+        # the base is a diffuse brightness percentile, not a solid rectangle, so
+        # it always "qualifies" as the roll-base source (brightness still decides
+        # the winner in choose_global_base).
+        "area_frac": 1.0,
+    }
+
+
+def find_film_base_candidate(lin, enc_f, win, cfg=DEFAULT_TUNING, bw=False):
     """Find the LARGEST uniform-orange RECTANGLE = local film-base candidate.
+
+    For B&W film (bw=True) the orange-rectangle search does not apply — the base
+    is the brightest (least-dense) region of a uniformly-tinted scan — so this
+    delegates to find_bw_film_base.
 
     lin: (H,W,3) float32 linear RGB; enc_f: (H,W,3) float32 stored-encoding
     values in [0,1] (sRGB for JPEG, linear for TIFF — used for clipping
@@ -869,6 +948,8 @@ def find_film_base_candidate(lin, enc_f, win, cfg=DEFAULT_TUNING):
     Returns dict {rect:[x,y,w,h], rgb_linear:[r,g,b], score, clipped_r,
     area_frac} or None.
     """
+    if bw:
+        return find_bw_film_base(lin, enc_f, win, cfg)
     h, w = lin.shape[:2]
 
     mean_rgb = _box_mean(lin, win)                       # (H,W,3) local average
@@ -1148,17 +1229,18 @@ def estimate_region_wb(lin, border, preview, dmin, d_max, offset, band_pct,
 
 
 def make_params(dmin, d_max, offset, wb_low, wb_high, picked_min, picked_max,
-                gamma=None, cfg=DEFAULT_TUNING):
+                gamma=None, cfg=DEFAULT_TUNING, bw=False):
     """Final black/exposure with the chosen wb, then the full param dict.
 
     gamma defaults to PRINT_GAMMA for final params; the patch-search preview
     renders pass it explicitly (the value barely matters there - patch
-    selection is percentile/chroma based)."""
+    selection is percentile/chroma based). bw=True stamps darktable's black-and-
+    white film stock (film_stock=0); the caller supplies a neutral wb."""
     black = nm.compute_black(dmin, picked_max, d_max, wb_high, wb_low, offset)
     exposure = nm.compute_exposure(dmin, picked_min, d_max, wb_high, wb_low,
                                    offset, black)
     return {
-        "film_stock": 1,
+        "film_stock": 0 if bw else 1,
         "Dmin": list(dmin),
         "wb_high": list(wb_high),
         "wb_low": list(wb_low),
@@ -1688,8 +1770,21 @@ def load_frame(path, vignette=None):
     return finish(enc_f, lin)
 
 
+def _base_search_frame(fr, cfg, bw):
+    """(re-)run the film-base search on an already-decoded stage-A frame under
+    the given colour/B&W mode, storing fr["base"]/fr["base_win"]. Reuses the
+    cached decode (_get_loaded), so the B&W retry never re-reads the TIFF."""
+    if fr["error"]:
+        return
+    enc_f, lin = _get_loaded(fr)
+    w = lin.shape[1]
+    win = max(int(round(w * cfg.BASE_WIN_FRAC)), 3)
+    fr["base_win"] = win
+    fr["base"] = find_film_base_candidate(lin, enc_f, win, cfg, bw=bw)
+
+
 def process_roll_prefix(image_paths, exif_by_stem, progress=None,
-                        cfg=DEFAULT_TUNING, _prog=None):
+                        cfg=DEFAULT_TUNING, _prog=None, bw_mode="auto"):
     """The trial-INVARIANT prefix of process_roll: stage 0 (roll-wide vignette)
     + stage A (per-frame film-base candidates, exif, dims, decoded buffers) +
     the GLOBAL film base. None of it depends on the wb / picker / patch / print
@@ -1699,12 +1794,21 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
     on the vignette (`VIG_*` / `BORDER_*`) and film-base (`BASE_*`) constants, so
     a fit that touches those must rebuild it per trial.
 
+    bw_mode ("auto"/"on"/"off", see the BW_MODES block): with "on" the film-base
+    search goes straight to the grey B&W base; with "auto" it searches the orange
+    base first and, only if NO frame yields one, RE-searches for a grey base and
+    marks the roll B&W (reusing the cached decodes); "off" never falls back. The
+    resolved decision is returned as `bw`.
+
     Returns a dict consumed by process_roll; `winner_stem` is None when no frame
     yielded a film-base candidate."""
     n = len(image_paths)
     paths = list(image_paths)
     workers = _proc_workers(n)
     prog = _prog if _prog is not None else _Progress(progress, _PROG_W_PREFIX * n)
+    if bw_mode not in BW_MODES:
+        bw_mode = "auto"
+    bw_active = (bw_mode == "on")
 
     # ---- Stage 0: roll-wide vignette estimation (uncorrected frames) ----
     # ticks per decoded frame (weighted) so the bar doesn't sit then jump
@@ -1767,7 +1871,8 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
             # valid; it never binds at real export widths.
             win = max(int(round(w * cfg.BASE_WIN_FRAC)), 3)
             fr["base_win"] = win
-            fr["base"] = find_film_base_candidate(lin, enc_f, win, cfg)
+            fr["base"] = find_film_base_candidate(lin, enc_f, win, cfg,
+                                                  bw=bw_active)
             # picker percentiles need the frame's Dmin (content masking) and
             # are computed in stage B1 once the global base is known
         except Exception as e:
@@ -1787,20 +1892,41 @@ def process_roll_prefix(image_paths, exif_by_stem, progress=None,
               f"Reload auto_negadoctor.lua in darktable so exports use "
               f"32-bit float TIFF.")
     winner_stem, winner_rgb, winner_factor = choose_global_base(good, cfg)
+
+    # AUTO B&W detection: a colour negative ALWAYS has an orange base, so if the
+    # orange search found NONE on any frame, the roll is black & white — re-run
+    # the base search for a NEUTRAL grey base (on the cached decodes) and mark the
+    # roll B&W. "off" keeps the old behaviour (errors with no base).
+    if winner_stem is None and bw_mode == "auto" and good:
+        print("No orange film base on any frame — treating the roll as "
+              "black & white (grey base search).")
+        _map_frames(lambda fr: _base_search_frame(fr, cfg, True), good,
+                    _proc_workers(len(good)))
+        winner_stem, winner_rgb, winner_factor = choose_global_base(good, cfg)
+        if winner_stem is not None:
+            bw_active = True
+
     winner_rect = (next(f["base"]["rect"] for f in good if f["stem"] == winner_stem)
                    if winner_stem is not None else None)
     if winner_stem is not None:
-        print(f"Global film base: {winner_stem} rect={winner_rect} "
+        print(f"Global film base ({'B&W grey' if bw_active else 'colour orange'}): "
+              f"{winner_stem} rect={winner_rect} "
               f"rgb={['%.4f' % v for v in winner_rgb]} factor={winner_factor:.5g}")
     return {"vig": vig, "vig_info": vig_info, "frames": frames,
             "winner_stem": winner_stem, "winner_rgb": winner_rgb,
-            "winner_factor": winner_factor, "winner_rect": winner_rect}
+            "winner_factor": winner_factor, "winner_rect": winner_rect,
+            "bw": bw_active}
 
 
 def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
                  session_dir=None, cfg=DEFAULT_TUNING, prep=None,
-                 on_frame_done=None):
+                 on_frame_done=None, bw_mode="auto"):
     """Run the full analysis. Returns list of per-frame result dicts.
+
+    bw_mode ("auto"/"on"/"off", see the BW_MODES block): selects colour vs black-
+    and-white handling. Resolved in the prefix (auto = orange base else grey); for
+    a B&W roll the wb is forced NEUTRAL, the crop wide-rebate hue path is off, and
+    the params carry film_stock=0. `roll["bw"]` records the decision.
 
     on_frame_done(fr, roll): optional, fired (on the caller's thread) as each
     frame's params finalize in stage B2 — for streaming the result to a
@@ -1835,8 +1961,10 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
     total_w = (_PROG_W_B1 + _PROG_W_B2) if reuse else _PROG_W_TOTAL
     prog = _Progress(progress, total_w * n)
     if not reuse:
-        prep = process_roll_prefix(image_paths, exif_by_stem, cfg=cfg, _prog=prog)
+        prep = process_roll_prefix(image_paths, exif_by_stem, cfg=cfg, _prog=prog,
+                                   bw_mode=bw_mode)
 
+    bw = bool(prep.get("bw", False))
     vig, vig_info = prep["vig"], prep["vig_info"]
     winner_stem = prep["winner_stem"]
     winner_rgb, winner_factor = prep["winner_rgb"], prep["winner_factor"]
@@ -1872,7 +2000,7 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
             # correction the edge rebate is restored to its true base brightness
             # and is detected. (Was uncorrected historically — that trimmed
             # 1-3px less on some edges; re-tune CROP_PAD_FRAC if needed.)
-            fr["border"] = detect_content_crop(lin, dmin, cfg)
+            fr["border"] = detect_content_crop(lin, dmin, cfg, bw=bw)
             fr["picked_min"], fr["picked_max"] = frame_percentiles(
                 lin, enc_f, fr["border"], dmin, cfg)
             # D_max is FIXED at darktable's default (the user never picks it);
@@ -1881,11 +2009,22 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
             d_max = cfg.DMAX_DEFAULT
             offset = cfg.OFFSET_DEFAULT
             fr["dmin"], fr["d_max"], fr["offset"] = dmin, d_max, offset
+            neutral = [1.0, 1.0, 1.0]
+
+            if bw:
+                # B&W: a monochrome negative has NO colour cast to correct, and
+                # darktable hides the wb wheels for film_stock=0 — so force neutral
+                # wb and skip the (colour-only) region/patch searches entirely.
+                fr["highlight_patch"] = None
+                fr["wb_high_boot"] = list(neutral)
+                fr["wb_low"] = list(neutral)
+                fr["wb_high"] = list(neutral)
+                fr["time_b"] = time.perf_counter() - t0
+                return fr
 
             win = max(int(lin.shape[1] * cfg.PATCH_WIN_FRAC),
                       int(round(lin.shape[1] * cfg.MIN_WIN_FRAC)))
             base_rect = fr["base"]["rect"] if fr["base"] else None
-            neutral = [1.0, 1.0, 1.0]
 
             # percentile bootstrap, kept as the wb_high fallback of last resort
             wb_high_boot = nm.compute_wb_high(dmin, fr["picked_min"], d_max,
@@ -1972,7 +2111,8 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
         fr["wb_high"] = _normalize_wb(fr["wb_high"], "highlights")
         fr["params"] = make_params(fr["dmin"], fr["d_max"], fr["offset"],
                                    fr["wb_low"], fr["wb_high"],
-                                   fr["picked_min"], fr["picked_max"], cfg=cfg)
+                                   fr["picked_min"], fr["picked_max"], cfg=cfg,
+                                   bw=bw)
         try:
             _enc_f, lin = _get_loaded(fr)
             fr["params"], fr["print_tuning"] = tune_print_params(
@@ -1993,6 +2133,7 @@ def process_roll(image_paths, exif_by_stem, progress=None, ai_tune=False,
         "median_wb_high": median_high,
         "vignette": vig,
         "vignette_info": vig_info,
+        "bw": bw,
     }
     stream = ((lambda fr: on_frame_done(fr, roll)) if on_frame_done else None)
     # tick progress for B2 too (so the bar tracks the frames that finalize +
@@ -2104,6 +2245,7 @@ def frame_session_dict(fr, roll, wall_time_s=None):
     data = {
         "stem": fr["stem"],
         "negative_path": fr["path"],
+        "bw": bool(roll and roll.get("bw")),
         "width": fr["width"],
         "height": fr["height"],
         "exif": fr["exif"],
@@ -2257,19 +2399,31 @@ def main():
 
     # --preset NAME|PATH (or --preset=...) overrides $NEGA_PRESET / the default.
     # Its value is consumed here so it isn't mistaken for an image path.
+    # --bw-mode auto|on|off (or --bw-mode=...): colour vs black-and-white film.
+    # Default "auto" — the pipeline detects B&W (no orange base -> grey base).
     preset = None
+    bw_mode = "auto"
     args, skip = [], False
-    for i, a in enumerate(sys.argv[1:]):
+    argv1 = sys.argv[1:]
+    for i, a in enumerate(argv1):
         if skip:
             skip = False
             continue
         if a == "--preset":
-            preset = sys.argv[1:][i + 1] if i + 1 < len(sys.argv[1:]) else None
+            preset = argv1[i + 1] if i + 1 < len(argv1) else None
             skip = True
         elif a.startswith("--preset="):
             preset = a.split("=", 1)[1]
+        elif a == "--bw-mode":
+            bw_mode = argv1[i + 1] if i + 1 < len(argv1) else "auto"
+            skip = True
+        elif a.startswith("--bw-mode="):
+            bw_mode = a.split("=", 1)[1]
         else:
             args.append(a)
+    if bw_mode not in BW_MODES:
+        print(f"Error: bad --bw-mode {bw_mode!r} (expected one of {BW_MODES})")
+        sys.exit(1)
     global DEFAULT_TUNING
     if preset:
         try:
@@ -2307,6 +2461,8 @@ def main():
             ui_cmd.append("--ai-tune")
         if preset:
             ui_cmd += ["--preset", preset]
+        if bw_mode != "auto":
+            ui_cmd += ["--bw-mode", bw_mode]
         if annotate_apply:
             ui_cmd.append("--apply")
             # Continuous edit: seed the session so a re-edit continues from the
@@ -2337,7 +2493,7 @@ def main():
     wall_t0 = time.perf_counter()
     frames, roll = process_roll(image_paths, exif_by_stem, progress,
                                 ai_tune=ai_tune, session_dir=output_dir,
-                                cfg=DEFAULT_TUNING)
+                                cfg=DEFAULT_TUNING, bw_mode=bw_mode)
     wall_time = time.perf_counter() - wall_t0
 
     ok = sum(1 for f in frames if not f["error"])

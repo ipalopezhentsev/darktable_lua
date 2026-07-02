@@ -343,6 +343,51 @@ transcriptions from darktable `src/iop/negadoctor.c`; the forward model uses
 `log10(pix/Dmin)` (sign matters — it makes apply_auto_black/exposure
 self-consistent: lightest area prints at 0.1 pre-gamma, densest at 0.96).
 
+### Black & white film (2026-07-02)
+
+B&W negatives are supported via a runtime **mode** `bw_mode` ∈ `auto`/`on`/`off`
+(NOT a Tuning/preset field — it's a structural mode, so it's threaded alongside
+`cfg`: `process_roll(..., bw_mode=)` → `process_roll_prefix` → the stage closures;
+the presets + calibration registry are untouched). **The DSLR always exports
+3-channel RGB (the film is B&W, the sensor is colour), so channel count can NOT
+tell B&W from colour** — a colour negative is identified by its strongly-ORANGE
+film base, a B&W one never has one. So `auto` (default) searches the orange base
+first and, only if **no frame yields one** (exactly the colour-path failure that
+used to leave every frame `ERR|…|no film-base candidate`), RE-searches for a B&W
+base (reusing the cached decodes) and marks the roll B&W. `on` forces B&W, `off`
+never falls back. CLI `--bw-mode auto|on|off` (auto_negadoctor.py + forwarded to
+debug_ui.py); the debug UI's **Adjust → Film type** submenu (run mode only)
+re-runs the analysis under a forced mode (clears the per-preset cache, reuses the
+preset re-analysis plumbing). `roll["bw"]` + each session's `"bw"` record the
+decision.
+
+What differs for B&W (`bw=True`, resolved from `prep["bw"]`):
+- **Film base = `find_bw_film_base`, NOT the orange-rectangle search.** A B&W scan
+  carries ONE uniform base tint (typically a cool BLUISH grey — film base + scan
+  illuminant; measured chroma ~0.21 over the WHOLE frame, so a "neutral grey"
+  chroma guard is wrong), and the clear base is simply its point of MINIMUM
+  density = MAX transmission = the **brightest** region (`BW_BASE_PCT`=99th
+  percentile of the holder-masked luma; the thin edge rebate is vignette-darkened
+  and unreliable — verified on the real roll: rebate lip ~0.1 luma vs scene
+  highlight 0.37). Dmin is the **actual tinted** colour of those brightest pixels
+  (e.g. `[0.43,0.42,0.53]`), so dividing the negative by it removes the cast.
+- **wb forced neutral** `[1,1,1]` (the region/patch wb searches are skipped) and
+  **`film_stock=0`** (darktable's "black and white film"; hides the wb wheels).
+  Neutral wb ÷ tinted Dmin ⇒ a **neutral grey** print (verified: rendered mean
+  channel spread <1/255 on the real roll).
+- **crop wide-rebate HUE path disabled** (`_crop_decide(..., bw=True)` zeroes
+  `rebate_hue`): every pixel is near-neutral so hue can't tell rebate from bright
+  scene; the conservative density/luma trim still runs.
+- vignette / global-base / exposure-comp / percentiles / print tune are all
+  channel-agnostic and unchanged.
+
+No Lua change was needed: auto is the default, and `film_stock=0` rides in the
+existing hex blob the apply path writes verbatim. Guarded by `tests/test_bw.py`
+(fixture-free, generates tiny synthetic bluish-grey vs orange TIFF rolls end-to-
+end). Also fixed: the debug UI crashed (`IndexError` on `self.images[current_idx]`
+in `_crop_edge_at`/`handle_press_override`) when a click landed on the blank
+canvas of an all-errored (empty) session — now guarded.
+
 ### Registered Actions
 
 CONSOLIDATED (2026-07-02): the old Debug / InPlace / InPlace_KeepTemp / AI_Debug /
@@ -921,6 +966,12 @@ behavior (and self-test non-trivial checkers).
   absolute-pixel constants: runs the detectors on a synthetic frame at W and an
   exact 2x copy and asserts outputs scale ~2x (fixture-free, always runs).
   Checks scaling not absolute values, so threshold tuning is safe.
+- `tests/test_bw.py` — black-and-white support (fixture-free, end-to-end): writes
+  tiny synthetic bluish-grey (B&W) and orange (colour) TIFF rolls and asserts
+  `auto` flips the grey roll to B&W (film_stock 0 / neutral wb / tinted Dmin /
+  near-neutral render) but keeps the orange roll colour, that `off` refuses the
+  fallback and `on` forces it, and `make_params(bw=)` stamps film_stock. See the
+  "Black & white film" section.
 - `tests/test_calibration_runner.py` — self-tests for the spec-05 calibration
   runner: the optimizers find a synthetic minimum, the crop over-trim metric is
   correct (delegates to `run_quality_tests.selftest_crop_overtrim`), the

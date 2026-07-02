@@ -416,6 +416,10 @@ class NegadoctorDebugUI(DebugUIBase):
     run_mode = False
     ai_tune = False
     start_preset = None
+    # colour vs black-and-white film: "auto" (detect — no orange base => B&W),
+    # "on" (force B&W), "off" (force colour). From argv (--bw-mode); the Film-type
+    # menu re-runs the analysis when the user overrides it.
+    bw_mode = "auto"
     EMPTY_SESSION_MESSAGE = "No *_debug_nega.json files found in:"
     ITEM_PANEL_TITLE = "Patches:"
     CENTER_BUTTON_TEXT = "Center on patch"
@@ -752,7 +756,8 @@ class NegadoctorDebugUI(DebugUIBase):
         exif = an.parse_exif_params(self._find_exif_params(image_paths))
         return an.process_roll(image_paths, exif, progress_cb, ai_tune=ai_tune,
                                session_dir=str(self.session_dir), cfg=cfg,
-                               on_frame_done=on_frame_done)
+                               on_frame_done=on_frame_done,
+                               bw_mode=getattr(self, "bw_mode", "auto"))
 
     def new_annotation_state(self, img_dict):
         return {
@@ -1693,6 +1698,19 @@ class NegadoctorDebugUI(DebugUIBase):
         adj.add_command(label="Clear global film-base override",
                         command=self._clear_global_base_override)
         adj.add_separator()
+        # Film type override (colour vs black & white). Only meaningful when the
+        # UI runs the analysis itself (run mode) — a change re-runs it. Auto = "no
+        # orange film base found => black & white".
+        if self.run_mode:
+            self._bw_mode_var = tk.StringVar(value=getattr(self, "bw_mode", "auto"))
+            film = tk.Menu(adj, tearoff=0)
+            for label, mode in (("Auto (detect)", "auto"),
+                                ("Black & white", "on"), ("Colour", "off")):
+                film.add_radiobutton(label=label, value=mode,
+                                     variable=self._bw_mode_var,
+                                     command=lambda m=mode: self._set_bw_mode(m))
+            adj.add_cascade(label="Film type  (re-analyzes)", menu=film)
+            adj.add_separator()
         adj.add_command(label="Copy params from this frame", accelerator="Ctrl+C",
                         command=self._copy_params)
         adj.add_command(label="Paste params onto this frame", accelerator="Ctrl+V",
@@ -2270,6 +2288,20 @@ class NegadoctorDebugUI(DebugUIBase):
             (self.images[0].get("preset") if getattr(self, "images", None)
              else None)
             or getattr(self, "start_preset", None))
+
+    def _set_bw_mode(self, mode):
+        """Film-type override: re-run the analysis as colour/B&W/auto. The result
+        depends on bw_mode, so drop the by-preset cache and re-analyze under the
+        current preset (reuses the preset re-analysis plumbing — _call_process_roll
+        reads self.bw_mode)."""
+        if getattr(self, "_reanalyzing", False) or getattr(self, "_analyzing", False):
+            self._bw_mode_var.set(self.bw_mode)   # busy: revert the radio
+            return
+        if mode == getattr(self, "bw_mode", "auto"):
+            return
+        self.bw_mode = mode
+        self._preset_cache = {}                    # cached results are per bw_mode
+        self._start_reanalysis(self._current_preset_label)
 
     def _start_reanalysis(self, preset_name):
         """Kick off process_roll under `preset_name` on a background thread; the
@@ -4208,6 +4240,10 @@ class NegadoctorDebugUI(DebugUIBase):
 
     def _crop_edge_at(self, canvas_x, canvas_y):
         """Edge name of the effective crop rect near the cursor, or None."""
+        # No frame on screen (e.g. every frame errored, so the session is empty)
+        # — nothing to grab. Guards a click on the blank canvas from an IndexError.
+        if not self.images or not (0 <= self.current_idx < len(self.images)):
+            return None
         img_dict = self.images[self.current_idx]
         rect = self._crop_rect(img_dict) or self._auto_content_rect(img_dict)
         x, y, cw, ch = rect
@@ -4238,6 +4274,8 @@ class NegadoctorDebugUI(DebugUIBase):
         stays reserved for Ctrl+Click place / Ctrl+drag zoom-to-rect). Dragging
         a detected patch records a correction at the moved spot; a press with no
         movement is treated as a plain select (on release)."""
+        if not self.images or not (0 <= self.current_idx < len(self.images)):
+            return False   # empty session (all frames errored): nothing to grab
         edge = self._crop_edge_at(event.x, event.y)
         if edge is not None:
             img_dict = self.images[self.current_idx]
@@ -4892,6 +4930,12 @@ def main():
             skip = True
         elif a.startswith("--preset="):
             NegadoctorDebugUI.start_preset = a.split("=", 1)[1]
+        elif a == "--bw-mode":
+            NegadoctorDebugUI.bw_mode = (sys.argv[i + 1]
+                                         if i + 1 < len(sys.argv) else "auto")
+            skip = True
+        elif a.startswith("--bw-mode="):
+            NegadoctorDebugUI.bw_mode = a.split("=", 1)[1]
         elif a in ("--apply", "--run", "--ai-tune", "--choose-dir"):
             continue
         else:
@@ -4899,7 +4943,8 @@ def main():
     sys.argv = argv
     NegadoctorDebugUI.run_main(
         usage="Usage: debug_ui.py <session_dir> "
-              "[--run] [--apply] [--ai-tune] [--choose-dir] [--preset NAME]")
+              "[--run] [--apply] [--ai-tune] [--choose-dir] "
+              "[--preset NAME] [--bw-mode auto|on|off]")
 
 
 if __name__ == "__main__":
