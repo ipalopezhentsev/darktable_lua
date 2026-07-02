@@ -40,6 +40,60 @@ from common.debug_ui_base import (
 DEFAULT_MISSED_STROKE_WIDTH = 8.0
 
 
+# Region "sensitivity boost" (Boost-region tool): the detection constants relaxed
+# toward MORE detections when the user drags a rectangle over dust the detector
+# missed. LOWER-is-more-sensitive gates are DIVIDED by the boost factor; caps that
+# gate on a MAXIMUM are MULTIPLIED. Applied to a COPY of the effective cfg for ONE
+# region re-detect only — never persisted to the frame's params.
+#
+# DELIBERATELY NOT relaxed: the detection THRESHOLD (NOISE_THRESHOLD_MULTIPLIER /
+# MIN_ABSOLUTE_THRESHOLD) that decides the binary seeding both dots and strokes.
+# Lowering it floods the binary — components merge into noise, so a thread STOPS
+# being an elongated component and dots fragment; ×10 then found FEWER than ×3
+# (non-monotonic, confusing). Dust a human can see almost always CROSSES the
+# threshold already and was dropped by a precision GATE, so relaxing the gates
+# (below) is the right lever: it makes the yield rise MONOTONICALLY with × for both
+# dots and strokes. (Genuinely sub-threshold dust stays hand-add via Ctrl+click.)
+#
+# Dust-DOT acceptance gates (min-gates divided by ×).
+BOOST_RELAX_DIV = (
+    "MIN_SPOT_AREA_FRAC", "MIN_CONTRAST_TEXTURE_RATIO",
+    "LARGE_SPOT_MIN_CONTRAST", "MIN_BRIGHTNESS_FRAC_SMALL",
+    "MIN_BRIGHTNESS_FRAC_LARGE", "ML_POSTFILTER_THRESHOLD",
+)
+BOOST_RELAX_MUL = (
+    "MAX_LOCAL_TEXTURE_SMALL", "MAX_LOCAL_TEXTURE_LARGE",
+    "MAX_NEARBY_ACCEPTED", "MAX_SPOTS",
+)
+# Thread / scratch (stroke) detection has its OWN gates, independent of the dust-dot
+# ones — so a boost must relax them too or a missed thread can never surface no
+# matter the ×. Same convention: min-gates divided, max-caps multiplied.
+BOOST_STROKE_DIV = (
+    "STROKE_MIN_LENGTH_FRAC", "STROKE_MIN_ELONGATION", "STROKE_MIN_WIDTH_FRAC",
+    "STROKE_MIN_BRIGHTNESS_FRAC", "STROKE_RIDGE_MIN_CONTRAST",
+    "STROKE_MIN_RIDGE_DROP", "STROKE_MIN_CRISPNESS",
+)
+BOOST_STROKE_MUL = (
+    "STROKE_MAX_WIDTH_FRAC", "STROKE_MAX_FILL_RATIO", "STROKE_MAX_BAND_TEXTURE",
+    "STROKE_MAX_CONTEXT_TEXTURE", "STROKE_MAX_EXCESS_SAT", "STROKE_MAX_SIDE_ASYMMETRY",
+)
+# Ceilings after multiplying: MAX_SPOTS ≤ darktable's 300 mask forms; a fill ratio
+# is a fraction of a bbox, so keep it below 1 (×boost would otherwise pass 1.0 and
+# make every blob a "stroke"). Floors after dividing: keep the elongation gate a
+# real LINE test (a near-round blob is not a thread) even at a high ×.
+BOOST_CAP = {"MAX_SPOTS": 300, "STROKE_MAX_FILL_RATIO": 0.95}
+BOOST_FLOOR = {"STROKE_MIN_ELONGATION": 1.8}
+
+# Auto-boost: when the × field is empty / "auto", the region is re-detected at
+# these ESCALATING levels and the search stops at the FIRST level that yields a new
+# spot — the minimal boost that reveals something (fewest false positives). The user
+# drew the rectangle because they can SEE dust there, so "find *something*" is the
+# right contract. Geometric so a handful of ~1s region detects spans a wide range
+# (up to ×256 for very faint dust — the sweep stops as soon as anything appears).
+BOOST_AUTO_LEVELS = (2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0,
+                     48.0, 64.0, 96.0, 128.0, 192.0, 256.0)
+
+
 def _coerce_param(name, value):
     """Coerce a param-override value to its tuning type (mirrors schema._coerce):
     bool / int / tuple-of-floats / float, keyed by the tuning field-type sets."""
@@ -453,6 +507,17 @@ class DustDebugUI(DebugUIBase):
         self.thread_draw_mode = False
         self.thread_draw_points = []     # list of [x,y] image coords (in-progress)
 
+        # Boost-region mode: drag a rectangle over dust the detector missed and
+        # re-detect THERE with raised sensitivity (see _boost_detect_region).
+        # `_boost_drag_active` marks the in-progress rectangle drag WE own, so a
+        # Ctrl+drag zoom (which stays with the base) isn't mistaken for it.
+        self.boost_region_mode = False
+        self._boost_drag_active = False
+        # Which flavour of the armed tool: False = manual (× field), True = AUTO
+        # (escalate until the region yields something). Set by whichever button /
+        # menu item armed it, so auto is one click — no need to type "auto".
+        self._boost_auto = False
+
         # Calibration review (run_calibration.py --review): each frame carries a
         # review={"fitted":{detected,rejected}, "gt"?:{…}, "live":{…}} payload + a
         # review_kind. R CYCLES the active source in place — instant, all were
@@ -542,6 +607,11 @@ class DustDebugUI(DebugUIBase):
     def reset_for_new_image(self):
         self.thread_draw_mode = False
         self.thread_draw_points = []
+        self.boost_region_mode = False
+        self._boost_drag_active = False
+        self._boost_auto = False
+        if hasattr(self, "boost_region_btn"):
+            self._update_boost_btn()
         self.reset_selection()
         # A pending frame only exists in run mode (set by _images_from_dir); the
         # background pass — already running, or scheduled right after __init__ —
@@ -606,12 +676,13 @@ class DustDebugUI(DebugUIBase):
             def one(it):
                 i, p = it
                 if not p:
-                    return (i, None, "no image path")
+                    return (i, None, None, "no image path")
                 try:
-                    spots, _r, err, _l = detect_dust.detect(p, ml_model_path=ml, cfg=cfg)
-                    return (i, spots or [], err)
+                    spots, rej, err, _l = detect_dust.detect(
+                        p, collect_rejects=True, ml_model_path=ml, cfg=cfg)
+                    return (i, spots or [], rej or [], err)
                 except Exception as ex:   # noqa: BLE001
-                    return (i, None, str(ex))
+                    return (i, None, None, str(ex))
 
             with ThreadPoolExecutor(max_workers=n) as ex:
                 for fut in as_completed([ex.submit(one, it) for it in items]):
@@ -635,10 +706,11 @@ class DustDebugUI(DebugUIBase):
                     if not self.images[self.current_idx].get("_detect_pending"):
                         self._clear_canvas_message()
                     return
-                i, spots, err = item
+                i, spots, rej, err = item
                 if spots is not None and 0 <= i < len(self.images):
                     img = self.images[i]
                     img["detected"] = spots
+                    img["rejected"] = rej or []
                     img["_detect_pending"] = False
                     # Re-seed this frame's annotations now that its detected spots
                     # exist: a clean state, then re-load any saved
@@ -739,11 +811,45 @@ class DustDebugUI(DebugUIBase):
             row, "", self._toggle_show_missed)
         self.attach_tooltip(self.missed_toggle_btn,
                             "Show/hide spots loaded from an existing edit (imported / missed)")
+        self.rejected_toggle_btn = self.toolbar_button(
+            row, "", self._toggle_show_rejected)
+        self.attach_tooltip(self.rejected_toggle_btn,
+                            "Show/hide rejected candidates (select one to see why the "
+                            "detector dropped it)")
         self._update_group_toggle_btns()
         self.toolbar_separator(row)
         # Annotation counts (was the label atop the old bottom button column).
         self.count_label = ttk.Label(row, text="FP: 0 | Missed: 0")
         self.count_label.pack(side="left", padx=8)
+        self.toolbar_separator(row)
+        # Boost-region tool: drag a rectangle over dust the detector missed and
+        # re-detect it there with raised sensitivity (× the boost entry). Ctrl+drag
+        # still zooms — this is a separate modal tool (toggle it on first).
+        self.boost_region_btn = self.toolbar_button(
+            row, "⊕ Boost region", lambda: self._toggle_boost_region(auto=False))
+        self.attach_tooltip(
+            self.boost_region_btn,
+            "Drag a rectangle over dust the detector missed; re-detect THERE at the "
+            "× sensitivity and add the new spots (G). Ctrl+drag still zooms.")
+        self.boost_auto_btn = self.toolbar_button(
+            row, "⚡ Auto", lambda: self._toggle_boost_region(auto=True))
+        self.attach_tooltip(
+            self.boost_auto_btn,
+            "Auto-boost: drag a rectangle where you SEE dust; it escalates the "
+            "sensitivity until the region yields something (minimal boost). "
+            "Ignores the × field.")
+        ttk.Label(row, text="×").pack(side="left", padx=(6, 0))
+        self._boost_var = tk.StringVar(value="2.0")
+        boost_entry = tk.Entry(row, textvariable=self._boost_var, width=4,
+                               bg="#363636", fg="#dddddd",
+                               insertbackground="#dddddd", relief="flat")
+        boost_entry.pack(side="left", padx=(1, 6), pady=2)
+        self.attach_tooltip(
+            boost_entry,
+            "Sensitivity multiplier for ⊕ Boost region (≥1, any value). Higher finds "
+            "more missed dust but risks more false positives. To let it pick the "
+            "strength for you, use the ⚡ Auto button instead.")
+        self._update_boost_btn()
 
         # Right-aligned: review toggle + preset combo (matches negadoctor).
         self._review_preset = self._load_review_preset_env()
@@ -797,6 +903,12 @@ class DustDebugUI(DebugUIBase):
             self.missed_toggle_btn.config(
                 text=("✓ Loaded" if on else "✗ Loaded"),
                 fg=("white" if on else "#9a9a9a"))
+        if hasattr(self, "rejected_toggle_btn"):
+            on = self.show_rejected_var.get()
+            # orange when on, matching the rejected-candidate marker colour.
+            self.rejected_toggle_btn.config(
+                text=("✓ Rejected" if on else "✗ Rejected"),
+                fg=("#ff8800" if on else "#9a9a9a"))
 
     def _on_group_toggle(self):
         """A group visibility var changed (menu checkbutton): sync buttons + redraw."""
@@ -810,6 +922,16 @@ class DustDebugUI(DebugUIBase):
     def _toggle_show_missed(self):
         self.show_missed_var.set(not self.show_missed_var.get())
         self._on_group_toggle()
+
+    def _toggle_show_rejected(self):
+        self.show_rejected_var.set(not self.show_rejected_var.get())
+        self._on_rejected_toggle()
+
+    def _on_rejected_toggle(self):
+        """Rejected visibility changed (toolbar button or View-menu checkbutton):
+        sync the toolbar button label + redraw the markers."""
+        self._update_group_toggle_btns()
+        self._redraw_markers()
 
     # ------------------------------------------------------------------
     # Detection-params table (per-frame overrides + on-demand re-detect)
@@ -1323,7 +1445,7 @@ class DustDebugUI(DebugUIBase):
         view.add_separator()
         view.add_checkbutton(label="Rejected candidates",
                              variable=self.show_rejected_var,
-                             command=self._redraw_markers)
+                             command=self._on_rejected_toggle)
         # The calibration-review source switcher is a RADIOBUTTON submenu (the
         # bullet shows the current source) and is present ONLY in a --review
         # session (run_calibration.py --review).
@@ -1362,6 +1484,9 @@ class DustDebugUI(DebugUIBase):
         "  R           rejected → missed\n"
         "              (review session: cycle fitted / GT / live)\n"
         "  T           draw missed thread (click pts, Enter=done, Esc=cancel)\n"
+        "  G           boost region: drag a rect over missed dust, re-detect it\n"
+        "              there at raised sensitivity (× in toolbar); Esc=exit\n"
+        "              (⚡ Auto button = escalate × until it finds something)\n"
         "  M           mark false positive\n"
         "  C           clear FP mark\n"
         "  Del         remove missed marker\n"
@@ -1593,7 +1718,8 @@ class DustDebugUI(DebugUIBase):
         def work():
             import detect_dust
             try:
-                spots, rej, err, _ls = detect_dust.detect(path, ml_model_path=ml, cfg=cfg)
+                spots, rej, err, _ls = detect_dust.detect(
+                    path, collect_rejects=True, ml_model_path=ml, cfg=cfg)
                 self._detect_q.put((idx, spots or [], rej or [], err))
             except Exception as ex:   # noqa: BLE001
                 self._detect_q.put((idx, None, None, str(ex)))
@@ -1635,6 +1761,7 @@ class DustDebugUI(DebugUIBase):
                         self.update_counts()
             else:
                 img["detected"] = spots
+                img["rejected"] = rej or []
                 img["_detect_pending"] = False
                 if idx == self.current_idx:
                     # Reset annotation state (detected indices changed) then RELOAD
@@ -1654,6 +1781,387 @@ class DustDebugUI(DebugUIBase):
             self._detect_status.config(text=("" if not err else f"error: {err}"))
 
     # ------------------------------------------------------------------
+    # Boost region: re-detect a user-drawn rectangle at raised sensitivity
+    # (find genuine dust the precision-tuned params missed, just there)
+    # ------------------------------------------------------------------
+
+    def _boost_factor(self):
+        """The current boost multiplier from the toolbar entry (1 = no boost, higher
+        = more sensitive). Floored at 1 (a value < 1 would only TIGHTEN); no upper
+        cap — the user can type any strength."""
+        try:
+            v = float(self._boost_var.get())
+        except (ValueError, AttributeError):
+            v = 2.0
+        return max(1.0, v)
+
+    def _boost_is_auto(self):
+        """True when the × field asks for AUTO escalation: empty, the word 'auto',
+        or anything not parseable as a number (so 'anything not a number = figure it
+        out')."""
+        v = ((self._boost_var.get() if hasattr(self, "_boost_var") else "")
+             or "").strip().lower()
+        if v in ("", "auto"):
+            return True
+        try:
+            float(v)
+            return False
+        except ValueError:
+            return True
+
+    @staticmethod
+    def _spot_rep_point(spot):
+        """Representative (x, y) of a spot for region-membership / dedup: the dot
+        centre, or a stroke's mid path point. None when unavailable."""
+        if spot.get("kind") == "stroke":
+            path = spot.get("path") or []
+            if not path:
+                return None
+            mid = path[len(path) // 2]
+            return float(mid[0]), float(mid[1])
+        cx, cy = spot.get("cx"), spot.get("cy")
+        if cx is None or cy is None:
+            return None
+        return float(cx), float(cy)
+
+    def _boost_note_for(self, spot, img_dict):
+        """The multi-line '⚡ BOOSTED ×N …' info block for a boosted spot (dot OR
+        stroke), including the relaxed-gate attribution. '' when not boosted. Shared
+        by the detailed-selection info and the stroke-node click message so a boosted
+        thread shows its boost info too."""
+        if not spot.get("boosted"):
+            return ""
+        note = (f"\n  ⚡ BOOSTED ×{spot.get('boost_factor', 0):.1f} — region "
+                f"re-detect (not vanilla params)")
+        base_cfg = self._effective_cfg()
+        min_dim = min(img_dict.get("width") or 0, img_dict.get("height") or 0)
+        helped = self._boost_responsible_params(spot, base_cfg, min_dim)
+        if helped:
+            note += "\n     relaxed gates that let it in: " + "; ".join(helped)
+        elif spot.get("kind") == "stroke":
+            note += ("\n     (deciding relaxation not individually recorded — likely "
+                     "STROKE_MIN_BRIGHTNESS_FRAC / STROKE_MIN_RIDGE_DROP)")
+        else:
+            note += ("\n     (deciding relaxation not individually recorded — likely "
+                     "ML_POSTFILTER_THRESHOLD / MIN_BRIGHTNESS_FRAC_SMALL·LARGE / "
+                     "isolation MAX_NEARBY_ACCEPTED)")
+        return note
+
+    def _boost_responsible_params(self, spot, base_cfg, min_dim):
+        """Best-effort list of the relaxed gates a BOOSTED spot clears ONLY because
+        of the boost — i.e. gates it would FAIL at the base (un-boosted) cfg, judged
+        from the spot's stored features. Empty when the deciding relaxation isn't one
+        whose feature is recorded on the spot (e.g. the ML filter / brightness floor /
+        isolation), so the caller says so rather than implying nothing helped."""
+        out = []
+        area = float(spot.get("area") or 0)
+        contrast = float(spot.get("contrast") or 0)
+        texture = float(spot.get("texture") or 0)
+        m2 = float(min_dim) * float(min_dim)
+        # Each entry names the tuning.py constant that was relaxed, so it maps
+        # straight onto the right-panel "Detection params" table.
+        if spot.get("kind") == "stroke":
+            length = float(spot.get("length_px") or 0)
+            width = float(spot.get("stroke_width_px")
+                          or (float(spot.get("radius_px") or 0) * 2))
+            elong = length / width if width > 1e-6 else 0.0
+            crisp = spot.get("crispness")
+            ctx = float(spot.get("context_texture") or 0)
+            exsat = float(spot.get("excess_sat") or 0)
+            if width > 0 and elong < base_cfg.STROKE_MIN_ELONGATION:
+                out.append(f"elongation {elong:.1f} "
+                           f"(STROKE_MIN_ELONGATION, base ≥{base_cfg.STROKE_MIN_ELONGATION:g})")
+            # *_FRAC gates: report in the panel's FRACTION unit (of min_dim), with px
+            # in [brackets] for intuition, so the base value matches the params table.
+            len_frac = length / min_dim if min_dim else 0.0
+            if length and len_frac < base_cfg.STROKE_MIN_LENGTH_FRAC:
+                out.append(f"length {len_frac:.4g} [{length:.0f}px] "
+                           f"(STROKE_MIN_LENGTH_FRAC, base ≥{base_cfg.STROKE_MIN_LENGTH_FRAC:g})")
+            w_frac = width / min_dim if min_dim else 0.0
+            if w_frac > base_cfg.STROKE_MAX_WIDTH_FRAC:
+                out.append(f"width {w_frac:.4g} [{width:.0f}px] "
+                           f"(STROKE_MAX_WIDTH_FRAC, base ≤{base_cfg.STROKE_MAX_WIDTH_FRAC:g})")
+            if crisp is not None and float(crisp) < base_cfg.STROKE_MIN_CRISPNESS:
+                out.append(f"crispness {float(crisp):.2f} "
+                           f"(STROKE_MIN_CRISPNESS, base ≥{base_cfg.STROKE_MIN_CRISPNESS:g})")
+            if texture > base_cfg.STROKE_MAX_BAND_TEXTURE:
+                out.append(f"band texture {texture:.1f} "
+                           f"(STROKE_MAX_BAND_TEXTURE, base ≤{base_cfg.STROKE_MAX_BAND_TEXTURE:g})")
+            if ctx > base_cfg.STROKE_MAX_CONTEXT_TEXTURE:
+                out.append(f"context texture {ctx:.1f} "
+                           f"(STROKE_MAX_CONTEXT_TEXTURE, base ≤{base_cfg.STROKE_MAX_CONTEXT_TEXTURE:g})")
+            if exsat > base_cfg.STROKE_MAX_EXCESS_SAT:
+                out.append(f"excess sat {exsat:.1f} "
+                           f"(STROKE_MAX_EXCESS_SAT, base ≤{base_cfg.STROKE_MAX_EXCESS_SAT:g})")
+        else:
+            ratio = contrast / max(texture, 0.1)
+            if ratio < base_cfg.MIN_CONTRAST_TEXTURE_RATIO:
+                out.append(f"contrast/texture {ratio:.1f} "
+                           f"(MIN_CONTRAST_TEXTURE_RATIO, base ≥{base_cfg.MIN_CONTRAST_TEXTURE_RATIO:g})")
+            area_frac = area / m2 if m2 else 0.0
+            if area and area_frac < base_cfg.MIN_SPOT_AREA_FRAC:
+                out.append(f"area {area_frac:.3g} [{int(area)}px²] "
+                           f"(MIN_SPOT_AREA_FRAC, base ≥{base_cfg.MIN_SPOT_AREA_FRAC:g})")
+            large_thr = base_cfg.LARGE_SPOT_AREA_THRESHOLD_FRAC * m2
+            if area > large_thr and contrast < base_cfg.LARGE_SPOT_MIN_CONTRAST:
+                out.append(f"large-spot contrast {contrast:.0f} "
+                           f"(LARGE_SPOT_MIN_CONTRAST, base ≥{base_cfg.LARGE_SPOT_MIN_CONTRAST:g})")
+            tier_area = base_cfg.TEXTURE_TIER_AREA_FRAC * m2
+            small = area <= tier_area
+            cap = (base_cfg.MAX_LOCAL_TEXTURE_SMALL if small
+                   else base_cfg.MAX_LOCAL_TEXTURE_LARGE)
+            if texture > cap:
+                name = "MAX_LOCAL_TEXTURE_SMALL" if small else "MAX_LOCAL_TEXTURE_LARGE"
+                out.append(f"texture {texture:.1f} ({name}, base ≤{cap:g})")
+        return out
+
+    def _boosted_cfg(self, base, boost):
+        """A COPY of `base` (a tuning.Tuning) with the dust-sensitivity constants
+        relaxed by `boost` (see BOOST_RELAX_* module constants). Values are coerced
+        back to their tuning types. boost <= 1 returns `base` unchanged."""
+        if boost <= 1.0:
+            return base
+        changes = {}
+        # NB: the detection threshold is deliberately left at base (see the
+        # BOOST_* header) — only acceptance gates are relaxed, so yield rises
+        # monotonically with × instead of flooding.
+        for name in BOOST_RELAX_DIV + BOOST_STROKE_DIV:
+            if hasattr(base, name):
+                val = getattr(base, name) / boost
+                floor = BOOST_FLOOR.get(name)
+                if floor is not None:
+                    val = max(val, floor)
+                changes[name] = _coerce_param(name, val)
+        for name in BOOST_RELAX_MUL + BOOST_STROKE_MUL:
+            if hasattr(base, name):
+                val = getattr(base, name) * boost
+                cap = BOOST_CAP.get(name)
+                if cap is not None:
+                    val = min(val, cap)
+                changes[name] = _coerce_param(name, val)
+        try:
+            return base._replace(**changes)
+        except (ValueError, TypeError):
+            return base
+
+    def _toggle_boost_region(self, auto=False):
+        """Arm / disarm the boost-region tool. `auto` picks the flavour: manual
+        (⊕ button / G key — uses the × field) or AUTO (⚡ button — escalates until
+        the region yields something). Clicking the SAME flavour again disarms;
+        clicking the OTHER flavour switches while staying armed."""
+        if self.boost_region_mode and self._boost_auto == auto:
+            self.boost_region_mode = False      # same button again -> off
+        else:
+            self.boost_region_mode = True
+            self._boost_auto = auto
+        self._boost_drag_active = False
+        self.canvas.delete("rubberband")
+        if self.boost_region_mode:
+            # Mutually exclusive with thread-draw.
+            self.thread_draw_mode = False
+            self.thread_draw_points = []
+            self._clear_selection()
+            strength = ("AUTO (escalates until it finds something)"
+                        if self._boost_auto or self._boost_is_auto()
+                        else f"×{self._boost_factor():g}")
+            self._set_info_text(
+                f"BOOST REGION MODE ON  [{strength}]\n"
+                "  Drag a rectangle over dust the detector missed — it re-detects\n"
+                "  THERE with raised sensitivity and adds the new spots (teal).\n"
+                "  ⚡ Auto escalates automatically; ⊕ uses the × field.\n"
+                "  Ctrl+drag still zooms.  G / Esc = exit.")
+        else:
+            self._set_info_text("Boost region mode off.")
+        self._update_boost_btn()
+        self._redraw_markers()
+
+    def _update_boost_btn(self):
+        """Reflect the armed/disarmed state on the two toolbar buttons (only the
+        active flavour lights up)."""
+        man_on = self.boost_region_mode and not self._boost_auto
+        auto_on = self.boost_region_mode and self._boost_auto
+        if hasattr(self, "boost_region_btn"):
+            self.boost_region_btn.config(
+                text=("◉ Boosting…" if man_on else "⊕ Boost region"),
+                fg=("#ffd24a" if man_on else "white"))
+        if hasattr(self, "boost_auto_btn"):
+            self.boost_auto_btn.config(
+                text=("◉ Auto…" if auto_on else "⚡ Auto"),
+                fg=("#ffd24a" if auto_on else "white"))
+
+    def _boost_detect_region(self, ix1, iy1, ix2, iy2):
+        """Re-detect ONLY the [ix1,iy1]-[ix2,iy2] rectangle at raised sensitivity on
+        a background thread, then merge the NEW spots into the frame. Detection runs
+        on a CROP (rectangle + context margin) via detect_dust.detect_region, so the
+        cost scales with the rectangle — not the whole frame — which is what makes a
+        boosted (reject-heavy) pass affordable. The crop stays faithful to a full
+        detect: frame-fraction thresholds anchor to the FULL min_dim and the noise /
+        brightness references are measured on the FULL frame (the detector still
+        knows the region is a sub-part of the image, not 100% of it)."""
+        if not self.images:
+            return
+        if getattr(self, "_bg_active", False) or getattr(self, "_detecting", False):
+            self._set_info_text("Detection is busy — try the region again in a moment.")
+            return
+        img = self.images[self.current_idx]
+        path = img.get("image_path")
+        if not path or not os.path.isfile(path):
+            self._set_info_text("No source image available for this frame.")
+            return
+        iw = float(img.get("width") or 0)
+        ih = float(img.get("height") or 0)
+        rx1 = max(0.0, min(iw, min(ix1, ix2)))
+        rx2 = max(0.0, min(iw, max(ix1, ix2)))
+        ry1 = max(0.0, min(ih, min(iy1, iy2)))
+        ry2 = max(0.0, min(ih, max(iy1, iy2)))
+        if (rx2 - rx1) < 2 or (ry2 - ry1) < 2:
+            return
+        # AUTO when the ⚡ tool armed it, or the × field asks for it (blank / "auto").
+        auto = getattr(self, "_boost_auto", False) or self._boost_is_auto()
+        base_eff = self._effective_cfg()
+        ml = self._ml_model_path()
+        idx = self.current_idx
+        roi = (rx1, ry1, rx2, ry2)
+        levels = list(BOOST_AUTO_LEVELS) if auto else [self._boost_factor()]
+
+        # Snapshot the spots already on screen so the AUTO sweep can tell whether a
+        # level produced anything NEW in the rectangle (dedup vs existing).
+        existing_pts = []
+        for e in (img.get("detected") or []):
+            p = self._spot_rep_point(e)
+            if p is not None:
+                existing_pts.append((p[0], p[1], float(e.get("brush_radius_px") or 0)))
+
+        def has_new(spots):
+            for s in spots:
+                p = self._spot_rep_point(s)
+                if p is None:
+                    continue
+                px, py = p
+                if not (rx1 <= px <= rx2 and ry1 <= py <= ry2):
+                    continue
+                r = float(s.get("brush_radius_px") or 0)
+                if not any(math.hypot(px - ex, py - ey) <= max(3.0, 0.6 * (r + er))
+                           for ex, ey, er in existing_pts):
+                    return True
+            return False
+
+        self._detecting = True
+        if not hasattr(self, "_boost_q"):
+            self._boost_q = queue.Queue()
+        self._boost_pending = (idx, roi, auto)
+        if auto:
+            self._show_canvas_message("Auto-boost: searching region …")
+            status = "auto-boost…"
+        else:
+            self._show_canvas_message(f"Boost-detecting region (×{levels[0]:g}) …")
+            status = f"boost ×{levels[0]:g}…"
+        if hasattr(self, "_detect_status"):
+            self._detect_status.config(text=status)
+
+        def work():
+            import detect_dust
+            try:
+                last, used = [], levels[0]
+                for lvl in levels:
+                    cfg_l = self._boosted_cfg(base_eff, lvl)
+                    spots, _rej, err, _ls = detect_dust.detect_region(
+                        path, roi, ml_model_path=ml, cfg=cfg_l)
+                    if err:
+                        self._boost_q.put((idx, None, err, lvl))
+                        return
+                    spots = spots or []
+                    last, used = spots, lvl
+                    # AUTO: stop at the FIRST level that reveals something new (the
+                    # minimal boost → fewest FPs). Single level: just take it.
+                    if not auto or has_new(spots):
+                        self._boost_q.put((idx, spots, None, lvl))
+                        return
+                self._boost_q.put((idx, last, None, used))   # auto: nothing new
+            except Exception as ex:   # noqa: BLE001
+                self._boost_q.put((idx, None, str(ex), None))
+
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(150, self._poll_boost_detect)
+
+    def _poll_boost_detect(self):
+        try:
+            idx, spots, err, level = self._boost_q.get_nowait()
+        except queue.Empty:
+            self._set_analyzing_pct(min(85.0, getattr(self, "_prog_target", 0.0) + 1.0))
+            self.root.after(150, self._poll_boost_detect)
+            return
+        self._detecting = False
+        self._set_analyzing_pct(100.0)
+        self._clear_canvas_message()
+        if hasattr(self, "_detect_status"):
+            self._detect_status.config(text=("" if not err else f"error: {err}"))
+        pend = getattr(self, "_boost_pending", None)
+        self._boost_pending = None
+        if spots is None or pend is None or idx != pend[0] or idx >= len(self.images):
+            return
+        _i, (rx1, ry1, rx2, ry2), auto = pend
+        boost = float(level) if level else 1.0
+        added = self._merge_boost_spots(idx, spots, rx1, ry1, rx2, ry2, boost)
+        if idx == self.current_idx:
+            self.reset_selection()
+            self._populate_items_list()
+            self._redraw()
+            self.update_counts()
+        lead = f"Auto-boost stopped at ×{boost:g}" if auto else f"Boost ×{boost:g}"
+        if added:
+            self._set_info_text(
+                f"{lead}: added {added} new spot(s) in the region.\n"
+                f"  Marked BOOSTED (teal). Mark any wrong one FP (M); scroll a\n"
+                f"  selected spot to fix its radius.")
+        elif auto:
+            top = f"{BOOST_AUTO_LEVELS[-1]:g}"
+            self._set_info_text(
+                f"Auto-boost: nothing new up to ×{top} in that region.\n"
+                f"  It may not be bright dust the detector can seed — add it by\n"
+                f"  hand (Ctrl+click for a dot, T to draw a thread).")
+        else:
+            self._set_info_text(
+                f"{lead}: no new dust found in that region.\n"
+                f"  Raise × (or leave it blank / 'auto' to auto-escalate), then drag.")
+
+    def _merge_boost_spots(self, idx, spots, rx1, ry1, rx2, ry2, boost):
+        """Append the boosted detection's NEW in-region spots to img['detected'],
+        tagged boosted (so they render distinctly and carry a note in the info
+        panel). Skips any spot that coincides with one already present. Returns the
+        number added."""
+        img = self.images[idx]
+        existing = list(img.get("detected") or [])
+
+        placed = []   # (x, y, brush_radius_px) of everything already on screen
+        for e in existing:
+            p = self._spot_rep_point(e)
+            if p is not None:
+                placed.append((p[0], p[1], float(e.get("brush_radius_px") or 0)))
+
+        added = 0
+        for s in spots:
+            p = self._spot_rep_point(s)
+            if p is None:
+                continue
+            px, py = p
+            if not (rx1 <= px <= rx2 and ry1 <= py <= ry2):
+                continue
+            r = float(s.get("brush_radius_px") or 0)
+            if any(math.hypot(px - ex, py - ey) <= max(3.0, 0.6 * (r + er))
+                   for ex, ey, er in placed):
+                continue
+            sp = dict(s)
+            sp["boosted"] = True
+            sp["boost_factor"] = float(boost)
+            existing.append(sp)
+            placed.append((px, py, r))
+            added += 1
+        if added:
+            img["detected"] = existing
+        return added
+
+    # ------------------------------------------------------------------
     # Layout / text hooks
     # ------------------------------------------------------------------
 
@@ -1668,6 +2176,7 @@ class DustDebugUI(DebugUIBase):
     # NOT in the left panel — same as auto_negadoctor.
     _LEGEND_ENTRIES = [
         ("●", "#00cc44", "Detected spot"),
+        ("●", "#20d0ff", "Detected spot (boosted region re-detect)"),
         ("●", "#ff44cc", "Radius mismatch vs baseline"),
         ("✕", "#ff3333", "False positive"),
         ("●", "#ff8800", "Rejected candidate"),
@@ -1699,6 +2208,10 @@ class DustDebugUI(DebugUIBase):
         ann.add_separator()
         ann.add_command(label="Draw missed thread", accelerator="T",
                         command=self._toggle_thread_draw)
+        ann.add_command(label="Boost region (find missed dust)", accelerator="G",
+                        command=lambda: self._toggle_boost_region(auto=False))
+        ann.add_command(label="Auto-boost region (escalate to find something)",
+                        command=lambda: self._toggle_boost_region(auto=True))
         ann.add_separator()
         ann.add_command(label="Clear selection", command=self._clear_selection)
         menubar.add_cascade(label="Annotate", menu=ann)
@@ -1716,8 +2229,10 @@ class DustDebugUI(DebugUIBase):
         self.bind_key("<R>", lambda e: self._on_r_key())
         self.bind_key("<t>", lambda e: self._toggle_thread_draw())
         self.bind_key("<T>", lambda e: self._toggle_thread_draw())
+        self.bind_key("<g>", lambda e: self._toggle_boost_region())
+        self.bind_key("<G>", lambda e: self._toggle_boost_region())
         self.bind_key("<Return>", lambda e: self._finish_thread())
-        self.bind_key("<Escape>", lambda e: self._cancel_thread())
+        self.bind_key("<Escape>", lambda e: self._on_escape())
 
     def image_status_text(self, img_dict):
         detected = img_dict.get("detected") or []
@@ -1994,11 +2509,17 @@ class DustDebugUI(DebugUIBase):
         radius_mismatch_by_idx = {m["spot_idx"]: m for m in ann.get("radius_mismatches", [])}
         radius_overrides = ann.get("radius_overrides", {})
 
-        # Rejected candidates (orange, shown only when toggled)
+        # Rejected candidates (orange, shown only when toggled). A grainy frame can
+        # produce thousands of rejects, so cull to the visible canvas — otherwise
+        # every pan/zoom would redraw all of them.
         if self.show_rejected_var.get():
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
             for i, r in enumerate(img_dict.get("rejected") or []):
                 cx, cy = image_to_canvas(r["cx"], r["cy"],
                                          self.offset_x, self.offset_y, self.zoom)
+                if cx < -10 or cy < -10 or cx > cw + 10 or cy > ch + 10:
+                    continue
                 rad = max(4, 3 * self.zoom)
                 color = "#ff8800" if i not in self.selected_rejected else "#ffcc44"
                 width = 1 if i not in self.selected_rejected else 2
@@ -2021,7 +2542,10 @@ class DustDebugUI(DebugUIBase):
             is_sel = i in self.selected_detected
             is_src_sel = (self.selected_source == i)
             rm = radius_mismatch_by_idx.get(i)
-            color = "#00cc44"
+            # Boosted spots (found by a raised-sensitivity region re-detect) are
+            # teal, so they read as detections but visibly not from vanilla params.
+            default_color = "#20d0ff" if spot.get("boosted") else "#00cc44"
+            color = default_color
             lw = 2
             if is_sel:
                 color = "#ffff00"
@@ -2060,7 +2584,7 @@ class DustDebugUI(DebugUIBase):
                 src_cx, src_cy = src
                 sx, sy = image_to_canvas(src_cx, src_cy,
                                          self.offset_x, self.offset_y, self.zoom)
-                src_color = "#ffff00" if (is_sel or is_src_sel) else "#00cc44"
+                src_color = "#ffff00" if (is_sel or is_src_sel) else default_color
                 sq = max(3, int(2 * self.zoom))
                 self.canvas.create_line(cx, cy, sx, sy,
                                         fill=src_color, width=1, dash=(4, 3),
@@ -2372,6 +2896,14 @@ class DustDebugUI(DebugUIBase):
         return best
 
     def handle_press_override(self, event):
+        # Boost-region mode: a PLAIN drag defines the rectangle. A Ctrl+drag is
+        # NOT claimed, so it falls through to the base's zoom-to-rectangle — the
+        # zoom gesture keeps working even while this tool is armed.
+        if self.boost_region_mode and not (event.state & 0x4):
+            self._boost_drag_active = True
+            self.drag_start = (event.x, event.y)
+            self.is_dragging = False
+            return True
         # Thread-draw mode: every mouse-down drops a centerline point (immune to
         # accidental drag). Hold and drag to draw freehand (see handle_drag_override).
         if self.thread_draw_mode:
@@ -2414,6 +2946,18 @@ class DustDebugUI(DebugUIBase):
         return False
 
     def handle_drag_override(self, event):
+        # Boost-region rectangle: draw the rubber band (distinct amber dash).
+        if self._boost_drag_active and self.drag_start is not None:
+            dx = event.x - self.drag_start[0]
+            dy = event.y - self.drag_start[1]
+            if abs(dx) > 5 or abs(dy) > 5:
+                self.is_dragging = True
+            self.canvas.delete("rubberband")
+            x0, y0 = self.drag_start
+            self.canvas.create_rectangle(x0, y0, event.x, event.y,
+                                         outline="#ffd24a", width=2, dash=(3, 3),
+                                         tags="rubberband")
+            return True
         # Thread-draw mode: freehand — sample a new point when moved enough.
         if self.thread_draw_mode:
             if self.drag_start is None:
@@ -2459,6 +3003,23 @@ class DustDebugUI(DebugUIBase):
         return False
 
     def handle_release_override(self, event):
+        # Boost-region rectangle released: kick a region re-detect (if it was an
+        # actual drag, not a stray click). Mode stays ARMED so several regions can
+        # be boosted in a row; G / Esc exits.
+        if self._boost_drag_active:
+            self._boost_drag_active = False
+            self.canvas.delete("rubberband")
+            start = self.drag_start
+            dragged = self.is_dragging
+            self.drag_start = None
+            self.is_dragging = False
+            if start is not None and dragged:
+                ix1, iy1 = canvas_to_image(start[0], start[1],
+                                           self.offset_x, self.offset_y, self.zoom)
+                ix2, iy2 = canvas_to_image(event.x, event.y,
+                                           self.offset_x, self.offset_y, self.zoom)
+                self._boost_detect_region(ix1, iy1, ix2, iy2)
+            return True
         # Thread-draw mode: points were already placed on press/drag; nothing to do.
         if self.thread_draw_mode:
             self.drag_start = None
@@ -2644,10 +3205,14 @@ class DustDebugUI(DebugUIBase):
             self.selected_keypoint = kp
             self.remove_missed_btn.config(state=tk.DISABLED)
             self._update_info_from_selection()
+            img_dict = self.images[self.current_idx]
+            spots = img_dict.get("detected") or []
+            spot = spots[kp[0]] if kp[0] < len(spots) else {}
             self._set_info_text(
                 f"Stroke #{kp[0]} node {kp[1]} selected.\n"
                 f"Ctrl+Click to move this node. Click the source square then Ctrl+Click "
-                f"to move the healing source.")
+                f"to move the healing source."
+                + self._boost_note_for(spot, img_dict))
             self._redraw_markers()
             return
 
@@ -2849,6 +3414,21 @@ class DustDebugUI(DebugUIBase):
             self._set_info_text("Thread draw cancelled.")
             self._redraw_markers()
 
+    def _on_escape(self):
+        """Esc dispatcher: exit whichever modal tool is armed (boost region first,
+        then cancel an in-progress thread draw)."""
+        if self.boost_region_mode:
+            # Force-disarm regardless of flavour (don't route through the toggle,
+            # which would switch manual<->auto instead of turning off).
+            self.boost_region_mode = False
+            self._boost_drag_active = False
+            self.canvas.delete("rubberband")
+            self._set_info_text("Boost region mode off.")
+            self._update_boost_btn()
+            self._redraw_markers()
+            return
+        self._cancel_thread()
+
     # ------------------------------------------------------------------
     # Info panel
     # ------------------------------------------------------------------
@@ -2873,7 +3453,8 @@ class DustDebugUI(DebugUIBase):
                     f"Source for Spot #{i}: {src_kind}  src={src_str}\n"
                     f"  Spot at: ({s['cx']:.0f}, {s['cy']:.0f})\n"
                     f"  Ctrl+Click anywhere to reposition.\n"
-                    f"  Click elsewhere to deselect.")
+                    f"  Click elsewhere to deselect."
+                    + self._boost_note_for(s, img_dict))
         elif self.selected_detected:
             for i in sorted(self.selected_detected):
                 spots = img_dict.get("detected") or []
@@ -2901,12 +3482,13 @@ class DustDebugUI(DebugUIBase):
                     bn_str = f"  radius_norm={rn:.5f}" if rn is not None else ""
                     nf = s.get("n_frames")
                     bn_str += f"  n_frames={nf}" if nf is not None else ""
+                    boost_str = self._boost_note_for(s, img_dict)
                     lines.append(
                         f"Detected #{i}: cx={s['cx']:.0f} cy={s['cy']:.0f}  "
                         f"enc_r={s['radius_px']:.1f}px{bn_str}  area={s['area']}\n"
                         f"  contrast={s['contrast']:.1f}  texture={s['texture']:.1f}  "
                         f"excess_sat={s['excess_sat']:.1f}  status={status}"
-                        f"{src_str}{rm_str}{rc_str}")
+                        f"{src_str}{rm_str}{rc_str}{boost_str}")
             if len(self.selected_detected) > 1:
                 lines = [f"{len(self.selected_detected)} spots selected"] + lines[:3]
         elif self.selected_rejected:
@@ -3026,9 +3608,10 @@ class DustDebugUI(DebugUIBase):
     # ------------------------------------------------------------------
 
     def configure_item_tags(self, tree):
-        tree.tag_configure("det",    foreground="#cccccc")
-        tree.tag_configure("fp",     foreground="#ff8888")
-        tree.tag_configure("missed", foreground="#00ddcc")
+        tree.tag_configure("det",     foreground="#cccccc")
+        tree.tag_configure("fp",      foreground="#ff8888")
+        tree.tag_configure("missed",  foreground="#00ddcc")
+        tree.tag_configure("boosted", foreground="#20d0ff")
 
     def item_panel_header_text(self):
         img_dict = self.images[self.current_idx]
@@ -3062,7 +3645,8 @@ class DustDebugUI(DebugUIBase):
                            f"{spot['texture']:.1f}",
                            "●" if is_fp else "",
                            "✎" if has_note else ""),
-                "tag": "fp" if is_fp else "det",
+                "tag": ("fp" if is_fp
+                        else "boosted" if spot.get("boosted") else "det"),
                 "kind": "detected", "idx": i,
                 "sort": {"idx": i,
                          "cx":  spot["cx"],            "cy":  spot["cy"],

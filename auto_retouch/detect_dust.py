@@ -123,13 +123,28 @@ BLENDOP_TEMPLATE_ENCODED = "gz08eJxjYGBgYAFiCQYYOOEEIjd6dmXCRFgZMAEjFjEGhgZ7CB6p
 # Dust detection
 # ===================================================================
 
-def detect_dust_spots(image_path, collect_rejects=False, cfg=None):
+def detect_dust_spots(image_path, collect_rejects=False, cfg=None,
+                      image=None, frac_min_dim=None, global_stats=None):
     """Detect bright dust spots in an image.
 
     Returns (spots, rejected_candidates, error_msg).
     spots: list of dicts with keys: cx, cy (pixel coords), radius_px, area, contrast, texture, excess_sat, spot_sat.
     rejected_candidates: list of structured reject dicts (only populated when collect_rejects=True).
     error_msg: string on failure, None on success.
+
+    Region-detection injection (used by `detect_region`, which analyses only a
+    cropped rectangle for speed while staying faithful to the full frame):
+      image        - a pre-loaded BGR ndarray (a CROP) to analyse instead of
+                     loading image_path.
+      frac_min_dim - the FULL frame's min(width, height); every resolution-
+                     independent `*_FRAC` threshold resolves against THIS, not the
+                     crop's own (smaller) min_dim — so a spot's expected size /
+                     kernels / isolation radius are identical to a full detect.
+      global_stats - (noise_std, bright_ref) measured on the FULL frame, so the
+                     detection threshold and brightness floors reflect the whole
+                     image (the crop is "not 100% of the image"), not the locally
+                     brighter/quieter rectangle. Coords are still crop-local; the
+                     caller offsets them back to full-frame.
     """
     cfg = DEFAULT_TUNING if cfg is None else cfg
     LOCAL_BG_KERNEL_FRAC = cfg.LOCAL_BG_KERNEL_FRAC
@@ -189,7 +204,7 @@ def detect_dust_spots(image_path, collect_rejects=False, cfg=None):
     STROKE_FIELD_MAX_NEIGHBORS = cfg.STROKE_FIELD_MAX_NEIGHBORS
     STREAK_DETECT = cfg.STREAK_DETECT
     STREAK_RADON_DETECT = cfg.STREAK_RADON_DETECT
-    img = cv2.imread(str(image_path))
+    img = image if image is not None else cv2.imread(str(image_path))
     if img is None:
         return None, [], f"Failed to load image: {image_path}", None
 
@@ -198,10 +213,11 @@ def detect_dust_spots(image_path, collect_rejects=False, cfg=None):
     saturation = hsv[:, :, 1]  # 0-255, used to reject colored features
     height, width = gray.shape
 
-    # Resolve resolution-independent fractions to pixels for THIS frame. Lengths/radii
-    # scale with min_dim; areas with min_dim**2. Kernels are odd-ified. Downstream code
-    # uses the plain px names below.
-    min_dim = min(width, height)
+    # Resolve resolution-independent fractions to pixels. Lengths/radii scale with
+    # min_dim; areas with min_dim**2. Kernels are odd-ified. In a REGION detect the
+    # anchor is the FULL frame's min_dim (frac_min_dim), NOT the crop's — so every
+    # size threshold matches a full-frame detect. Downstream uses the plain px names.
+    min_dim = int(frac_min_dim) if frac_min_dim else min(width, height)
     _area = float(min_dim) * float(min_dim)
     LOCAL_BG_KERNEL = int(round(min_dim * LOCAL_BG_KERNEL_FRAC)) | 1
     TEXTURE_KERNEL = int(round(min_dim * TEXTURE_KERNEL_FRAC)) | 1
@@ -239,8 +255,13 @@ def detect_dust_spots(image_path, collect_rejects=False, cfg=None):
     local_sq_mean = cv2.blur(gray_f ** 2, (k, k))
     local_std = np.sqrt(np.maximum(local_sq_mean - local_mean ** 2, 0))
 
-    # Threshold based on image noise level (MAD = robust estimator, ignores dust outliers)
-    noise_std = float(np.median(np.abs(diff)) * 1.4826)
+    # Threshold based on image noise level (MAD = robust estimator, ignores dust
+    # outliers). In a region detect this comes from the FULL frame (global_stats)
+    # so a locally-quiet crop doesn't lower the bar and flood the rectangle.
+    if global_stats is not None:
+        noise_std = float(global_stats[0])
+    else:
+        noise_std = float(np.median(np.abs(diff)) * 1.4826)
     threshold = max(MIN_ABSOLUTE_THRESHOLD, noise_std * NOISE_THRESHOLD_MULTIPLIER)
     print(f"  Noise std: {noise_std:.1f}, threshold: {threshold:.1f} "
           f"(min_abs={MIN_ABSOLUTE_THRESHOLD}, mult={NOISE_THRESHOLD_MULTIPLIER})")
@@ -250,7 +271,12 @@ def detect_dust_spots(image_path, collect_rejects=False, cfg=None):
     # Minimum brightness: dust is near film-base brightness (very bright on inverted negatives).
     # Larger dust must be whiter — small spots can appear gray due to subpixel mixing,
     # but any sizable dust particle is always near film-base brightness.
-    bright_ref = float(np.percentile(gray, 95))
+    # Brightness reference (95th pct). Full-frame in a region detect (global_stats)
+    # so the floor tracks the film base across the whole scan, not the crop.
+    if global_stats is not None:
+        bright_ref = float(global_stats[1])
+    else:
+        bright_ref = float(np.percentile(gray, 95))
     min_local_bg = bright_ref * MIN_LOCAL_BG_FRACTION
     print(f"  Brightness ref (95th pct): {bright_ref:.0f}, "
           f"min brightness: {bright_ref * MIN_BRIGHTNESS_FRAC_SMALL:.0f} (small) / "
@@ -2383,7 +2409,8 @@ def _spot_to_features(spot):
     ]
 
 
-def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False, cfg=None):
+def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False, cfg=None,
+                         image=None, frac_min_dim=None, global_stats=None):
     """ML-assisted dust detection (post-filter mode).
 
     Strategy:
@@ -2400,7 +2427,9 @@ def detect_dust_spots_ml(image_path, ml_model, scaler, collect_rejects=False, cf
     cfg = DEFAULT_TUNING if cfg is None else cfg
     ML_POSTFILTER_THRESHOLD = cfg.ML_POSTFILTER_THRESHOLD
     # --- Phase 1: standard rule-based detection ---
-    std_spots, std_rejects, error, local_std = detect_dust_spots(image_path, collect_rejects, cfg=cfg)
+    std_spots, std_rejects, error, local_std = detect_dust_spots(
+        image_path, collect_rejects, cfg=cfg, image=image,
+        frac_min_dim=frac_min_dim, global_stats=global_stats)
     if error:
         return None, std_rejects, error, local_std
     if std_spots is None:
@@ -2445,7 +2474,8 @@ def load_ml_model(path=None):
     return bundle["model"], bundle["scaler"]
 
 
-def detect(image_path, collect_rejects=False, ml_model_path=None, cfg=None):
+def detect(image_path, collect_rejects=False, ml_model_path=None, cfg=None,
+           image=None, frac_min_dim=None, global_stats=None):
     """Unified detection entry point — uses ML post-filter by default.
 
     If ml_model_path is given, loads that model.  Otherwise loads the default
@@ -2453,13 +2483,115 @@ def detect(image_path, collect_rejects=False, ml_model_path=None, cfg=None):
     detection when no model file exists. `cfg` (a tuning.Tuning) overrides the
     detection constants for a calibration trial (default = DEFAULT_TUNING).
 
+    `image` / `frac_min_dim` / `global_stats` are the region-detection injection
+    (see detect_dust_spots + detect_region); they are plumbed straight through.
+
     Returns (spots, rejected_candidates, error_msg, local_std).
     """
     model, scaler = load_ml_model(ml_model_path)
     if model is not None:
-        return detect_dust_spots_ml(image_path, model, scaler,
-                                    collect_rejects=collect_rejects, cfg=cfg)
-    return detect_dust_spots(image_path, collect_rejects=collect_rejects, cfg=cfg)
+        return detect_dust_spots_ml(
+            image_path, model, scaler, collect_rejects=collect_rejects, cfg=cfg,
+            image=image, frac_min_dim=frac_min_dim, global_stats=global_stats)
+    return detect_dust_spots(
+        image_path, collect_rejects=collect_rejects, cfg=cfg, image=image,
+        frac_min_dim=frac_min_dim, global_stats=global_stats)
+
+
+def _offset_spot_coords(spot, dx, dy):
+    """Shift a spot dict's pixel coordinates by (dx, dy) IN PLACE (crop-local ->
+    full-frame). Covers dot centre, healing source, and a stroke centerline."""
+    for k in ("cx", "cy", "src_cx", "src_cy"):
+        if spot.get(k) is not None:
+            spot[k] = float(spot[k]) + (dx if k.endswith("cx") else dy)
+    path = spot.get("path")
+    if path:
+        spot["path"] = [[float(p[0]) + dx, float(p[1]) + dy] for p in path]
+
+
+def detect_region(image_path, roi, collect_rejects=False, ml_model_path=None, cfg=None):
+    """Detect dust WITHIN a rectangle only, fast, while staying faithful to a
+    full-frame detect.
+
+    `roi` = (x0, y0, x1, y1) in FULL-frame pixels. Only a crop of the image (the
+    rectangle plus a context margin) is analysed — so the per-candidate work
+    scales with the rectangle, not the whole frame (which is what makes a
+    raised-sensitivity pass affordable). Faithfulness is preserved by:
+      * anchoring every resolution-independent threshold to the FULL frame's
+        min_dim (not the crop's smaller one), and
+      * measuring the noise floor + brightness reference on the FULL frame
+        (global_stats), so a locally bright/quiet rectangle can't move the bar —
+        the detector still "knows" the region is a sub-part of the image.
+    The margin (>= the background-blur / context / isolation radii) gives every
+    in-rectangle candidate the same neighbourhood a full detect would see.
+
+    Returns (spots, [], error, None) with spot coords in FULL-frame pixels, keeping
+    only spots whose representative point falls inside `roi`.
+    """
+    cfg = DEFAULT_TUNING if cfg is None else cfg
+    full = cv2.imread(str(image_path))
+    if full is None:
+        return None, [], f"Failed to load image: {image_path}", None
+    H, W = full.shape[:2]
+    x0, y0, x1, y1 = roi
+    x0, x1 = sorted((int(round(x0)), int(round(x1))))
+    y0, y1 = sorted((int(round(y0)), int(round(y1))))
+    x0 = max(0, min(W, x0)); x1 = max(0, min(W, x1))
+    y0 = max(0, min(H, y0)); y1 = max(0, min(H, y1))
+    if (x1 - x0) < 2 or (y1 - y0) < 2:
+        return [], [], None, None
+
+    min_dim = min(W, H)
+    gray_full = cv2.cvtColor(full, cv2.COLOR_BGR2GRAY)
+
+    # Global (full-frame) stats: noise floor + brightness reference.
+    local_bg_kernel = int(round(min_dim * cfg.LOCAL_BG_KERNEL_FRAC)) | 1
+    local_bg_full = cv2.GaussianBlur(gray_full, (local_bg_kernel, local_bg_kernel), 0)
+    diff_full = gray_full.astype(np.float32) - local_bg_full.astype(np.float32)
+    noise_std = float(np.median(np.abs(diff_full)) * 1.4826)
+    bright_ref = float(np.percentile(gray_full, 95))
+
+    # Context margin: the largest neighbourhood any in-rectangle filter samples, so
+    # a crop edge never truncates a candidate's background / texture / isolation.
+    context_radius = int(round(min_dim * cfg.CONTEXT_TEXTURE_RADIUS_FRAC))
+    isolation_radius = int(round(min_dim * cfg.ISOLATION_RADIUS_FRAC))
+    texture_kernel = int(round(min_dim * cfg.TEXTURE_KERNEL_FRAC))
+    margin = max(local_bg_kernel, context_radius, isolation_radius, texture_kernel)
+    # The blur kernel needs a crop at least its own size; the margin guarantees it
+    # away from the image edges, but clamp-expand near an edge so it always holds.
+    need = local_bg_kernel + 1
+    cx0 = max(0, x0 - margin); cy0 = max(0, y0 - margin)
+    cx1 = min(W, x1 + margin); cy1 = min(H, y1 + margin)
+    if (cx1 - cx0) < need:
+        cx0 = max(0, min(cx0, W - need)); cx1 = min(W, max(cx1, cx0 + need))
+    if (cy1 - cy0) < need:
+        cy0 = max(0, min(cy0, H - need)); cy1 = min(H, max(cy1, cy0 + need))
+    crop = full[cy0:cy1, cx0:cx1]
+    if crop.shape[0] < need or crop.shape[1] < need:
+        # Image smaller than one background kernel — just detect the whole thing.
+        crop, cx0, cy0 = full, 0, 0
+
+    spots, _rej, err, _ls = detect(
+        image_path, collect_rejects=False, ml_model_path=ml_model_path, cfg=cfg,
+        image=crop, frac_min_dim=min_dim, global_stats=(noise_std, bright_ref))
+    if spots is None:
+        return None, [], err, None
+
+    out = []
+    for s in spots:
+        _offset_spot_coords(s, cx0, cy0)
+        if s.get("kind") == "stroke":
+            path = s.get("path") or []
+            if not path:
+                continue
+            px, py = path[len(path) // 2]
+        else:
+            px, py = s.get("cx"), s.get("cy")
+        if px is None or py is None:
+            continue
+        if x0 <= px <= x1 and y0 <= py <= y1:
+            out.append(s)
+    return out, [], err, None
 
 
 # ===================================================================

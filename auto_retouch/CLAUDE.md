@@ -85,6 +85,83 @@ not line-searched) and its per-kind EVALUATORS + roll discovery
 - **Dust debug UI** (`DustDebugUI`) gained a `Detect with:` **preset combo** (toolbar):
   selecting a preset re-runs `detect()` on the CURRENT frame under that preset's
   `Tuning` on a background thread and swaps its spots.
+- **Boost-region tool (2026-07-02):** the params are tuned for precision (few FPs),
+  so they miss some genuine dust. The toolbar `⊕ Boost region` button (or **G**,
+  or the Annotate-menu item) arms a modal tool: **drag a rectangle** over dust the
+  detector missed and it re-detects THAT RECTANGLE at RAISED sensitivity, appending
+  the new spots to `img["detected"]` tagged `boosted=True` + `boost_factor`. The
+  **× entry** next to the button is the adjustable sensitivity multiplier (1–10,
+  default 2). Sensitivity = a COPY of the effective cfg with the acceptance GATES
+  relaxed — dust-dot (`BOOST_RELAX_DIV` divided, `BOOST_RELAX_MUL` caps multiplied)
+  AND thread/stroke (`BOOST_STROKE_DIV` / `BOOST_STROKE_MUL`; a boost must reach
+  stroke gates too or a missed thread can never surface), with caps/floors
+  (`BOOST_CAP` `MAX_SPOTS`≤300 / `STROKE_MAX_FILL_RATIO`<1; `BOOST_FLOOR`
+  `STROKE_MIN_ELONGATION`≥1.8 so a thread stays a LINE) — never persisted to the
+  frame's params. **The detection THRESHOLD is deliberately NOT relaxed**
+  (`NOISE_THRESHOLD_MULTIPLIER` / `MIN_ABSOLUTE_THRESHOLD` stay at base): lowering
+  it floods the binary → components merge into noise → a thread stops being an
+  elongated component and dots fragment, so ×10 found FEWER than ×3 (non-monotonic).
+  Dust a human can see almost always already crosses the threshold and was dropped
+  by a precision gate, so gate-only relaxation makes yield rise MONOTONICALLY with ×
+  for both dots and strokes (verified: a dusty region 1→2→3→4 dots over ×1→5,
+  recovering all 4 user-marked missed dots; a marked edge-thread t0 surfaces at
+  higher ×). Genuinely sub-threshold dust stays a hand Ctrl+click / Draw-thread (T).
+  - **AUTO-boost — a ONE-CLICK ⚡ Auto toolbar button** (also an Annotate-menu item;
+    `_toggle_boost_region(auto=True)` sets `_boost_auto`): the user draws the
+    rectangle because they can SEE dust there, so auto-mode ESCALATES through
+    `BOOST_AUTO_LEVELS` (2→3→…→32→…→256) and STOPS at the first level that
+    yields a new in-region spot — the minimal boost (fewest FPs). No need to type
+    anything (a blank / "auto" × field, `_boost_is_auto`, is a secondary trigger).
+    ⊕ Boost region (G) and ⚡ Auto are two flavours of the SAME armed tool: clicking
+    the same one again disarms, clicking the other switches while staying armed
+    (only the active one lights up; Esc force-disarms either). The whole sweep runs
+    on the boost worker thread (`_boost_detect_region` builds `levels`; `has_new`
+    dedups each level vs the on-screen spots via `_spot_rep_point`); the queue item
+    carries the level used so `_poll_boost_detect` tags + reports it ("Auto-boost
+    stopped at ×N" / "nothing new up to ×256 — add by hand"). The × field (for ⊕) is
+    UNCAPPED now (was clamped to 10; `_boost_factor` only floors at 1).
+  - **Gate attribution:** selecting a boosted spot lists WHICH relaxed gates let it
+    in, each NAMING the tuning.py constant (so it maps onto the right-panel params
+    table) — `_boost_responsible_params` compares the spot's stored features to the
+    base (un-boosted) cfg and reports the gates it would FAIL at base (dot:
+    MIN_CONTRAST_TEXTURE_RATIO, MIN_SPOT_AREA_FRAC, LARGE_SPOT_MIN_CONTRAST,
+    MAX_LOCAL_TEXTURE_*; stroke: STROKE_MIN_ELONGATION/_LENGTH_FRAC, STROKE_MAX_WIDTH_
+    FRAC, STROKE_MIN_CRISPNESS, STROKE_MAX_BAND/CONTEXT_TEXTURE, STROKE_MAX_EXCESS_SAT).
+    When the deciding relaxation isn't a recorded feature the panel names the likely
+    candidates instead (dot: ML_POSTFILTER_THRESHOLD / MIN_BRIGHTNESS_FRAC_* /
+    MAX_NEARBY_ACCEPTED; stroke: STROKE_MIN_BRIGHTNESS_FRAC / STROKE_MIN_RIDGE_DROP).
+    Shown on ALL selection paths (spot body, stroke node, healing source) via the
+    shared `_boost_note_for`. Guarded by `tests/test_boost_region.py`.
+  - **Region-only detection (`detect_dust.detect_region`) — the key to speed.** A
+    full-frame boosted detect was unusable (~25s; raised sensitivity explodes the
+    per-candidate reject loop across the whole frame). `detect_region(image_path,
+    roi, …)` instead analyses only a CROP = rectangle + context margin (~1s, **~25×
+    faster** on the 5726×3783 fixture) while staying FAITHFUL to a full detect:
+    `detect`/`detect_dust_spots[_ml]` gained injection params `image` (a pre-loaded
+    crop), `frac_min_dim` (the FULL frame's min_dim, so every `*_FRAC` threshold
+    resolves as if on the whole image — NOT the crop's smaller min_dim), and
+    `global_stats=(noise_std, bright_ref)` measured on the FULL frame (so a locally
+    bright/quiet rectangle can't move the detection threshold / brightness floor —
+    "the region is not 100% of the image"). The margin ≥ the background-blur /
+    context-texture / isolation radii, so every in-rect candidate sees the same
+    neighbourhood a full detect would; `detect_region` offsets crop-local coords
+    back to full-frame (`_offset_spot_coords`) and keeps only spots whose centre is
+    inside `roi`. The non-region path (all injection args None) is byte-identical.
+    Note the region detect MAY surface a few EXTRA spots vs full-frame (a tighter
+    crop sees fewer isolation neighbours) — desirable here; the user keeps or FPs
+    them. Guarded by `tests/test_region_detect.py` (fixture-gated, SLOW: one full
+    detect — asserts every full-detect dot inside the rect is reproduced by the
+    region detect + in-rect/full-frame coords + determinism).
+  - Boosted spots render **teal** (`#20d0ff`, vs green), get a `boosted` table tag +
+    legend entry, and a `⚡ BOOSTED …` note in the info panel; they are otherwise
+    normal detected spots (healable, Mark-FP, scroll-resize). The tool is modal via
+    `handle_press/drag/release_override` gated on `_boost_drag_active` and CLAIMS
+    only a PLAIN drag, so **Ctrl+drag still zooms** and plain rubber-band select is
+    unaffected (Esc/G exits). Background detect + merge = `_boost_detect_region` /
+    `_poll_boost_detect` / `_merge_boost_spots` (dedups against spots already
+    present). The `boosted` field flows through the canonical spot dict →
+    `debug_spots.json` + `_final_spots_for_apply` for free. UI-logic guarded by
+    `tests/test_boost_region.py` (image-free: cfg relaxation + merge).
 - **UI chrome (2026-06-24) — unified with auto_negadoctor:** the dust UI is now
   fully menu/toolbar-driven, no lower-left button column (`SHOW_BOTTOM_BUTTONS =
   False`). The edit actions (Rejected→Missed, Mark/Clear FP, Remove missed, Draw
